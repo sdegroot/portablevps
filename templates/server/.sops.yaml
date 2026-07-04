@@ -1,0 +1,7 @@
+# Configure which age recipients can decrypt each server's secrets file.
+# Generate a per-server key set and add the host + operator recipients here.
+# See portablevps' secrets documentation.
+creation_rules:
+  - path_regex: secrets/[^/]+\.yaml$
+    age: >-
+      age1REPLACE_WITH_OPERATOR_RECIPIENT

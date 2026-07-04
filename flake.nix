@@ -26,6 +26,14 @@
     {
       lib = pvlib;
 
+      templates = {
+        server = {
+          path = ./templates/server;
+          description = "A portablevps consumer repository defining one or more servers";
+        };
+        default = self.templates.server;
+      };
+
       # Reusable modules for consumers who compose hosts by hand instead of
       # through mkFlake.
       nixosModules = {

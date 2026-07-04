@@ -1,26 +1,59 @@
-# portablevps NixOS Infrastructure
+# portablevps
 
-This repository contains NixOS infrastructure for disposable single-instance
-portablevps servers. The local QEMU flow proves backup and restore. The cloud VPS
-flow installs the same server shape onto an existing provider machine.
+Create a single-instance application server (an app plus PostgreSQL) on any
+VPS with NixOS, and move it to another host or provider at any time.
+Reproducibility, online backups, tested restore, and monitoring are
+first-class. Licensed under the EUPL-1.2 (see `LICENSE`).
 
-## Host Profiles
+## What it is
 
-- `.#local-vm`: normal mode. `apps.target` is wanted by `multi-user.target`, so
-  PostgreSQL starts.
-- `.#local-vm-restore`: restore mode. System tooling is installed, but
-  `apps.target` is not started.
-- `.#test-vps`: Hetzner-backed logical test server using the
-  `single-instance-app` server profile.
-- `.#test-vps-restore`: restore-mode profile for the same server.
+portablevps is a flake library, a set of reusable NixOS modules, and a CLI.
+You describe *logical servers* in a small consumer repository; portablevps
+turns each into a reproducible NixOS system, provisions or installs it onto a
+provider VPS, backs PostgreSQL up online to S3-compatible storage, and restores
+it onto a fresh host as a tested workflow rather than an emergency.
 
-Provider install mechanics live in `providers/<provider>/provider.json`.
-Reusable server shapes live in `modules/profiles/*.nix`. Logical servers live
-in `servers/*.nix`; `servers/test-vps.nix` currently selects Hetzner as its
-active placement, sets hostname and NetBird identity to `test-vps`, declares
-the backup repository, and enables the
-persistent internal smoke route at `test.int.portablevps.io` with Let's Encrypt
-staging certificates.
+Key properties:
+
+- **Disposable hosts.** The flake recreates the machine; the restic repository
+  recreates the data. Moving hosts is a rehearsed restore, not a scramble.
+- **Restore mode** keeps application services stopped until data is restored.
+- **Mesh-VPN-first.** Application and admin traffic go over NetBird or
+  Tailscale, so a host move does not touch public DNS.
+- **Pluggable providers.** Provider metadata plus a lifecycle adapter; Hetzner
+  is implemented, others are metadata-only until an adapter is added.
+
+## Consuming portablevps
+
+Scaffold a consumer repository from the template:
+
+```sh
+nix flake init -t github:OWNER/portablevps?dir=portablevps#server
+```
+
+A consumer flake is small — it points at portablevps and its own `servers/`:
+
+```nix
+{
+  inputs.portablevps.url = "github:OWNER/portablevps?dir=portablevps";
+  outputs = { self, portablevps }:
+    portablevps.lib.mkFlake { inherit self; serverDir = ./servers; };
+}
+```
+
+Each `servers/<name>.nix` selects a provider placement, a reusable profile
+(e.g. `single-instance-app`), the mesh peer name, its backup repository, and
+any proxy routes. See `templates/server/servers/example.nix`.
+
+The first consumer, `epistola/`, lives beside this tool in the same repository
+and is the reference for a real deployment.
+
+## The tool's own test hosts
+
+portablevps ships its own disaster-recovery proof: the `.#local-vm` and
+`.#local-vm-restore` NixOS configurations plus a two-VM QEMU test that inserts
+data, backs it up, restores onto a second VM, and verifies the marker. Run
+`mise exec -- task validate:qemu`.
 
 ## Cloud VPS Setup
 
