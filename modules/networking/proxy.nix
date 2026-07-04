@@ -1,0 +1,565 @@
+# Provides a NetBird-first Traefik proxy for hostname and SNI based routing.
+{ config, lib, pkgs, ... }:
+
+let
+  cfg = config.my.proxy;
+  netbirdEnabled = config.my.netbird.enable or false;
+  netbirdName = config.my.netbird.name or config.networking.hostName;
+  netbirdInterface = config.my.netbird.interface or (config.my.cloud.netbirdInterface or "wt0");
+  stagingCaServer = "https://acme-staging-v02.api.letsencrypt.org/directory";
+  acmeResolverName =
+    if cfg.acme.resolverName != null
+    then cfg.acme.resolverName
+    else "dns01-${cfg.acme.environment}";
+  acmeCaServer =
+    if cfg.acme.caServer != null
+    then cfg.acme.caServer
+    else if cfg.acme.environment == "staging"
+    then stagingCaServer
+    else "";
+  # True when any meaningful proxy sub-option is set. Used to fail evaluation
+  # when a server configures the proxy but forgets my.proxy.enable = true,
+  # which would otherwise leave Traefik and ACME silently inert.
+  proxyConfigured =
+    cfg.testBackend.enable
+    || cfg.http.services != { }
+    || cfg.tcp.services != { }
+    || cfg.acme.email != ""
+    || cfg.acme.dnsProvider != ""
+    || cfg.dns.managedZones != [ ]
+    || cfg.dns.acmeDelegatedZone != null;
+  visibilityType = lib.types.enum [ "internal" "netbird-edge" "direct-public" "vpn" "public" ];
+  normalizeVisibility = visibility:
+    if visibility == "vpn" then "internal"
+    else if visibility == "public" then "netbird-edge"
+    else visibility;
+
+  httpServiceType = lib.types.submodule {
+    options = {
+      domain = lib.mkOption {
+        type = lib.types.str;
+        description = "Primary DNS name routed to this HTTP service.";
+      };
+
+      aliases = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Additional DNS names routed to this HTTP service.";
+      };
+
+      upstream = lib.mkOption {
+        type = lib.types.str;
+        description = "HTTP upstream URL, for example http://127.0.0.1:3000.";
+      };
+
+      visibility = lib.mkOption {
+        type = visibilityType;
+        default = "internal";
+        description = "Ingress path: internal, netbird-edge, or direct-public. Legacy aliases vpn and public map to internal and netbird-edge.";
+      };
+
+      extraRouterConfig = lib.mkOption {
+        type = lib.types.attrs;
+        default = { };
+        description = "Extra Traefik HTTP router configuration.";
+      };
+    };
+  };
+
+  tcpServiceType = lib.types.submodule {
+    options = {
+      domain = lib.mkOption {
+        type = lib.types.str;
+        description = "SNI name routed to this TCP service.";
+      };
+
+      targetHost = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        description = "TCP upstream host.";
+      };
+
+      targetPort = lib.mkOption {
+        type = lib.types.port;
+        description = "TCP upstream port.";
+      };
+
+      tlsPassthrough = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Pass TLS through to the upstream service.";
+      };
+
+      visibility = lib.mkOption {
+        type = visibilityType;
+        default = "internal";
+        description = "Ingress path: internal, netbird-edge, or direct-public. Legacy aliases vpn and public map to internal and netbird-edge.";
+      };
+    };
+  };
+
+  hostRule = names:
+    lib.concatStringsSep " || " (map (name: "Host(`${name}`)") names);
+
+  hostSniRule = domain: "HostSNI(`${domain}`)";
+
+  testHttpServices = lib.optionalAttrs cfg.testBackend.enable {
+    proxy-test = {
+      domain = cfg.testBackend.domain;
+      aliases = [ ];
+      upstream = "http://127.0.0.1:${toString cfg.testBackend.port}";
+      visibility = cfg.testBackend.visibility;
+      extraRouterConfig = { };
+    };
+  };
+
+  httpServicesConfig = cfg.http.services // testHttpServices;
+  normalizeDnsName = name:
+    if lib.hasSuffix "." name then name else "${name}.";
+  normalizeDomain = name:
+    lib.removeSuffix "." name;
+  normalizePublicTarget = target:
+    if cfg.dns.publicRecordType == "CNAME" then normalizeDnsName target else target;
+  acmeChallengeName = domain: "_acme-challenge.${domain}.";
+  domainIsInZone = domain: zone:
+    let
+      normalizedDomain = normalizeDomain domain;
+      normalizedZone = normalizeDomain zone;
+    in
+    normalizedDomain == normalizedZone || lib.hasSuffix ".${normalizedZone}" normalizedDomain;
+  managedAcmeZoneFor = domain:
+    lib.findFirst (zone: domainIsInZone domain zone) null cfg.dns.managedZones;
+  acmeChallengeTarget = domain:
+    if managedAcmeZoneFor domain != null
+    then null
+    else if cfg.dns.acmeDelegatedZone == null
+    then null
+    else "_acme-challenge.${domain}.${normalizeDnsName cfg.dns.acmeDelegatedZone}";
+  netbirdDnsTarget =
+    if cfg.dns.netbirdCnameTarget != null
+    then normalizeDnsName cfg.dns.netbirdCnameTarget
+    else normalizeDnsName netbirdName;
+  publicDnsTarget =
+    if cfg.dns.publicTarget != null
+    then normalizePublicTarget cfg.dns.publicTarget
+    else if cfg.dns.publicCnameTarget != null
+    then normalizePublicTarget cfg.dns.publicCnameTarget
+    else null;
+
+  httpRouters = lib.mapAttrs
+    (name: service:
+      {
+        rule = hostRule ([ service.domain ] ++ service.aliases);
+        entryPoints = [ cfg.entryPointName ];
+        service = name;
+        tls = {
+          options = "default";
+        } // lib.optionalAttrs cfg.acme.enable {
+          certResolver = acmeResolverName;
+        };
+      } // service.extraRouterConfig)
+    httpServicesConfig;
+
+  httpServices = lib.mapAttrs
+    (_name: service: {
+      loadBalancer.servers = [
+        { url = service.upstream; }
+      ];
+    })
+    httpServicesConfig;
+
+  tcpRouters = lib.mapAttrs
+    (name: service: {
+      rule = hostSniRule service.domain;
+      entryPoints = [ cfg.entryPointName ];
+      service = name;
+      tls.passthrough = service.tlsPassthrough;
+    })
+    cfg.tcp.services;
+
+  tcpServices = lib.mapAttrs
+    (_name: service: {
+      loadBalancer.servers = [
+        { address = "${service.targetHost}:${toString service.targetPort}"; }
+      ];
+    })
+    cfg.tcp.services;
+
+  hasRoutes = httpServicesConfig != { } || cfg.tcp.services != { };
+  httpDomainEntries = lib.flatten (lib.mapAttrsToList
+    (serviceName: service:
+      map
+        (domain: {
+          inherit domain serviceName;
+          routeType = "http";
+          visibility = normalizeVisibility service.visibility;
+          upstream = service.upstream;
+        })
+        ([ service.domain ] ++ service.aliases))
+    httpServicesConfig);
+  tcpDomainEntries = lib.mapAttrsToList
+    (serviceName: service: {
+      domain = service.domain;
+      inherit serviceName;
+      routeType = "tcp";
+      visibility = normalizeVisibility service.visibility;
+      upstream = "${service.targetHost}:${toString service.targetPort}";
+    })
+    cfg.tcp.services;
+  domainEntries = httpDomainEntries ++ tcpDomainEntries;
+  hasDirectPublicRoutes = lib.any (entry: entry.visibility == "direct-public") domainEntries;
+  hasNonDirectPublicRoutes = lib.any (entry: entry.visibility != "direct-public") domainEntries;
+  domainPlanEntries = map
+    (entry: entry // {
+      acme = lib.optionalAttrs cfg.acme.enable {
+        challenge = acmeChallengeName entry.domain;
+        mode =
+          if managedAcmeZoneFor entry.domain != null
+          then "managed-zone"
+          else "cname-delegation";
+        managedZone = managedAcmeZoneFor entry.domain;
+        target = acmeChallengeTarget entry.domain;
+        resolver = acmeResolverName;
+      };
+      dns = {
+        public = if (entry.visibility == "netbird-edge" || entry.visibility == "direct-public") && publicDnsTarget != null then {
+          type = cfg.dns.publicRecordType;
+          name = normalizeDnsName entry.domain;
+          target = publicDnsTarget;
+          purpose =
+            if entry.visibility == "netbird-edge"
+            then "Public clients enter through the NetBird reverse proxy edge."
+            else "Public clients connect directly to the VPS public ingress target.";
+        } else null;
+        netbird = if entry.visibility == "internal" then {
+          type = "CNAME";
+          name = normalizeDnsName entry.domain;
+          target = netbirdDnsTarget;
+          purpose = "Internal service DNS for connected NetBird clients.";
+        } else null;
+      };
+    })
+    domainEntries;
+  domainPlan = {
+    server = config.networking.hostName;
+    netbirdName = netbirdName;
+    publicCnameTarget = publicDnsTarget;
+    publicTarget = publicDnsTarget;
+    publicRecordType = cfg.dns.publicRecordType;
+    netbirdCnameTarget = netbirdDnsTarget;
+    acmeDelegatedZone = cfg.dns.acmeDelegatedZone;
+    managedZones = cfg.dns.managedZones;
+    domains = domainPlanEntries;
+  };
+  domainPlanFile = pkgs.writeText "epistola-proxy-domains.json" (builtins.toJSON domainPlan);
+  domainPlanCommand = pkgs.writeShellScriptBin "epistola-proxy-domain-plan" ''
+    exec ${pkgs.jq}/bin/jq . ${domainPlanFile}
+  '';
+
+  testBackendScript = pkgs.writeText "epistola-proxy-test-backend.py" ''
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"epistola proxy test ok\n"
+            self.send_response(200)
+            self.send_header("content-type", "text/plain")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            return
+
+    HTTPServer(("127.0.0.1", ${toString cfg.testBackend.port}), Handler).serve_forever()
+  '';
+
+  testCertificate = pkgs.runCommand "epistola-proxy-test-certificate"
+    { nativeBuildInputs = [ pkgs.openssl ]; }
+    ''
+      mkdir -p "$out"
+      openssl req \
+        -x509 \
+        -newkey rsa:2048 \
+        -nodes \
+        -days 30 \
+        -subj ${lib.escapeShellArg "/CN=${cfg.testBackend.domain}"} \
+        -addext ${lib.escapeShellArg "subjectAltName = DNS:${cfg.testBackend.domain}"} \
+        -keyout "$out/key.pem" \
+        -out "$out/cert.pem"
+    '';
+in
+{
+  options.my.proxy = {
+    enable = lib.mkEnableOption "NetBird-first Traefik proxy";
+
+    entryPointName = lib.mkOption {
+      type = lib.types.str;
+      default = "websecure";
+      description = "Traefik entry point used for application HTTPS traffic.";
+    };
+
+    port = lib.mkOption {
+      type = lib.types.port;
+      default = 443;
+      description = "Local HTTPS/TLS port served by Traefik.";
+    };
+
+    openPublicFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Open the proxy port on the public host firewall.";
+    };
+
+    acme = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Enable ACME DNS-01 certificate issuance.";
+      };
+
+      email = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "ACME account email used by Traefik.";
+      };
+
+      dnsProvider = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Traefik/lego DNS provider name used for DNS-01 validation.";
+      };
+
+      environmentFile = lib.mkOption {
+        type = lib.types.str;
+        default = "/etc/epistola/traefik-acme.env";
+        description = "Environment file containing DNS provider credentials for Traefik ACME.";
+      };
+
+      environment = lib.mkOption {
+        type = lib.types.enum [ "production" "staging" ];
+        default = "production";
+        description = "ACME issuance environment. Staging uses Let's Encrypt staging and a separate resolver name.";
+      };
+
+      caServer = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional ACME CA directory URL override. Defaults to Let's Encrypt staging only when my.proxy.acme.environment is staging.";
+      };
+
+      resolverName = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional Traefik certificate resolver name override. Defaults to dns01-production or dns01-staging.";
+      };
+
+      propagationDelayBeforeChecks = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 0;
+        description = "Seconds Traefik waits before checking DNS-01 TXT propagation.";
+      };
+    };
+
+    dns = {
+      acmeDelegatedZone = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "acme.epistola.io";
+        description = "Delegated DNS zone that receives ACME DNS-01 TXT records.";
+      };
+
+      managedZones = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "int.epistola.io" ];
+        description = "DNS zones delegated to the ACME provider where Traefik can create challenge TXT records directly.";
+      };
+
+      publicCnameTarget = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "eu1.netbird.services.";
+        description = "Compatibility alias for my.proxy.dns.publicTarget.";
+      };
+
+      publicTarget = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "eu1.netbird.services.";
+        description = "Public DNS target for services marked visibility = netbird-edge or direct-public.";
+      };
+
+      publicRecordType = lib.mkOption {
+        type = lib.types.enum [ "CNAME" "A" "AAAA" ];
+        default = "CNAME";
+        description = "DNS record type used for generated public DNS records.";
+      };
+
+      netbirdCnameTarget = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "test-vps.epistola.int.";
+        description = "Private NetBird DNS CNAME target. Defaults to the configured NetBird peer name.";
+      };
+    };
+
+    http.services = lib.mkOption {
+      type = lib.types.attrsOf httpServiceType;
+      default = { };
+      description = "HTTP services routed by hostname.";
+    };
+
+    tcp.services = lib.mkOption {
+      type = lib.types.attrsOf tcpServiceType;
+      default = { };
+      description = "TCP services routed by SNI.";
+    };
+
+    testBackend = {
+      enable = lib.mkEnableOption "local proxy smoke-test HTTP backend";
+
+      domain = lib.mkOption {
+        type = lib.types.str;
+        default = "proxy-test.epistola.int";
+        description = "Hostname routed to the local proxy smoke-test backend.";
+      };
+
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 18080;
+        description = "Loopback port for the local proxy smoke-test backend.";
+      };
+
+      visibility = lib.mkOption {
+        type = visibilityType;
+        default = "internal";
+        description = "Ingress path for the proxy smoke-test backend.";
+      };
+    };
+  };
+
+  config = lib.mkMerge [
+    {
+      assertions = [
+        {
+          assertion = cfg.enable || !proxyConfigured;
+          message = "my.proxy options are configured but my.proxy.enable is false. Set my.proxy.enable = true or remove the proxy configuration.";
+        }
+      ];
+    }
+
+    (lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      assertions = [
+        {
+          assertion = !cfg.acme.enable || cfg.acme.email != "";
+          message = "my.proxy.acme.email is required when my.proxy.enable is true.";
+        }
+        {
+          assertion = !cfg.acme.enable || cfg.acme.dnsProvider != "";
+          message = "my.proxy.acme.dnsProvider is required when my.proxy.enable is true.";
+        }
+        {
+          assertion = lib.all (service: service.tlsPassthrough) (lib.attrValues cfg.tcp.services);
+          message = "my.proxy.tcp.services currently supports only tlsPassthrough = true.";
+        }
+        {
+          assertion = !hasDirectPublicRoutes || cfg.openPublicFirewall;
+          message = "my.proxy.openPublicFirewall must be true when any proxy route has visibility = \"direct-public\".";
+        }
+        {
+          assertion = !cfg.openPublicFirewall || !hasNonDirectPublicRoutes;
+          message = "my.proxy.openPublicFirewall can only be true when all proxy routes have visibility = \"direct-public\".";
+        }
+      ];
+
+      services.traefik = {
+        enable = true;
+        environmentFiles = lib.optional cfg.acme.enable cfg.acme.environmentFile;
+        staticConfigOptions = lib.mkMerge [
+          {
+            entryPoints.${cfg.entryPointName}.address = ":${toString cfg.port}";
+          }
+          (lib.mkIf cfg.acme.enable {
+            certificatesResolvers.${acmeResolverName}.acme = {
+              email = cfg.acme.email;
+              storage = "${config.services.traefik.dataDir}/acme.json";
+              dnsChallenge = {
+                provider = cfg.acme.dnsProvider;
+              } // lib.optionalAttrs (cfg.acme.propagationDelayBeforeChecks > 0) {
+                propagation.delayBeforeChecks = cfg.acme.propagationDelayBeforeChecks;
+              };
+            } // lib.optionalAttrs (acmeCaServer != "") {
+              caServer = acmeCaServer;
+            };
+          })
+        ];
+        dynamicConfigOptions = lib.mkIf hasRoutes {
+          http = lib.mkIf (httpServicesConfig != { }) {
+            routers = httpRouters;
+            services = httpServices;
+          };
+          tcp = lib.mkIf (cfg.tcp.services != { }) {
+            routers = tcpRouters;
+            services = tcpServices;
+          };
+          tls = lib.mkIf (!cfg.acme.enable && cfg.testBackend.enable) {
+            stores.default.defaultCertificate = {
+              certFile = "${testCertificate}/cert.pem";
+              keyFile = "${testCertificate}/key.pem";
+            };
+          };
+        };
+      };
+
+      environment.etc."epistola/proxy-domains.json".source = domainPlanFile;
+      environment.systemPackages = [ domainPlanCommand ];
+    }
+
+    (lib.mkIf (cfg.acme.enable && !config.my.secrets.allowPrototypeDefaults) {
+      sops.secrets."traefik/acme-env" = {
+        path = cfg.acme.environmentFile;
+        owner = "traefik";
+        group = "traefik";
+        mode = "0400";
+      };
+    })
+
+    (lib.mkIf (cfg.acme.enable && config.my.secrets.allowPrototypeDefaults) {
+      environment.etc."epistola/traefik-acme.env" = {
+        mode = "0400";
+        text = ''
+          # Prototype placeholder. Configure DNS provider credentials before enabling ACME issuance.
+        '';
+      };
+    })
+
+    (lib.mkIf cfg.testBackend.enable {
+      systemd.services.epistola-proxy-test-backend = {
+        description = "Epistola proxy smoke-test backend";
+        wantedBy = lib.optional (!config.my.restoreMode) "apps.target";
+        partOf = [ "apps.target" ];
+        serviceConfig = {
+          Type = "simple";
+          Restart = "always";
+          RestartSec = "5s";
+          ExecStart = "${pkgs.python3}/bin/python3 ${testBackendScript}";
+        };
+      };
+    })
+
+    (lib.mkIf (netbirdEnabled && !config.my.restoreMode) {
+      networking.firewall.interfaces.${netbirdInterface}.allowedTCPPorts = [ cfg.port ];
+    })
+
+    (lib.mkIf cfg.openPublicFirewall {
+      networking.firewall.allowedTCPPorts = [ cfg.port ];
+    })
+
+    (lib.mkIf config.my.restoreMode {
+      systemd.services.traefik.wantedBy = lib.mkForce [ ];
+    })
+    ]))
+  ];
+}

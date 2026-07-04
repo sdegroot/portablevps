@@ -1,0 +1,11 @@
+{
+  "system": "x86_64-linux",
+  "lifecycleAdapter": "hetzner",
+  "defaultLocation": "nbg1",
+  "defaultServerType": "cx22",
+  "defaultImage": "ubuntu-24.04",
+  "defaultDisk": "/dev/sda",
+  "defaultTargetUser": "root",
+  "defaultKexecExtraFlags": "--kexec-syscall",
+  "netbirdInterface": "wt0"
+}

@@ -1,0 +1,8 @@
+{
+  "system": "x86_64-linux",
+  "lifecycleAdapter": "leaseweb",
+  "defaultDisk": "/dev/sda",
+  "defaultTargetUser": "root",
+  "defaultKexecExtraFlags": "",
+  "netbirdInterface": "wt0"
+}

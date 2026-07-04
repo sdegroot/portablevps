@@ -1,0 +1,24 @@
+# Quadlet definition for the PostgreSQL 18 container managed by the PostgreSQL module.
+[Unit]
+Description=PostgreSQL demo container
+After=network-online.target
+Wants=network-online.target
+PartOf=apps.target
+ConditionPathIsDirectory=/data/postgres
+ConditionPathExists=!/run/my/restore-mode
+
+[Container]
+Image=docker.io/library/postgres:18
+ContainerName=postgres-demo
+Environment=POSTGRES_USER=demo
+Environment=POSTGRES_DB=demo
+EnvironmentFile=/etc/epistola/postgres.env
+Volume=/data/postgres:/var/lib/postgresql
+PublishPort=127.0.0.1:5432:5432
+Exec=-c summarize_wal=on
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=apps.target

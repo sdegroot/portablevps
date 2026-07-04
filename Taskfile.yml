@@ -1,0 +1,111 @@
+# portablevps tool development and disaster-recovery validation tasks.
+version: "3"
+
+vars:
+  VM_A_SSH: '{{default "-i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2224 admin@127.0.0.1" .VM_A_SSH}}'
+  VM_B_SSH: '{{default "-i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2225 admin@127.0.0.1" .VM_B_SSH}}'
+  REMOTE_REPO: '{{default "/host" .REMOTE_REPO}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  check:
+    desc: Run shell syntax, Python, and Nix flake checks
+    cmds:
+      - bash -n scripts/*.sh scripts/lib/*.sh tests/test-disaster-recovery.sh
+      - python3 -m py_compile scripts/cloud.py tests/test_cloud.py
+      - python3 -m unittest discover -s tests -p 'test_*.py'
+      - nix --extra-experimental-features 'nix-command flakes' flake check
+
+  flake-check:
+    desc: Run Nix flake checks
+    cmds:
+      - nix --extra-experimental-features 'nix-command flakes' flake check
+
+  validate:
+    desc: Run fast checks and the local QEMU disaster recovery validation
+    cmds:
+      - task check
+      - task validate:qemu
+
+  local-s3:start:
+    desc: Start local MinIO for S3-compatible restic tests
+    cmds:
+      - scripts/local-s3-start.sh
+
+  local-s3:stop:
+    desc: Stop local MinIO
+    cmds:
+      - scripts/local-s3-stop.sh
+
+  local-s3:reset:
+    desc: Stop local MinIO, remove object data, and start empty MinIO
+    cmds:
+      - scripts/local-s3-stop.sh --remove-data
+      - scripts/local-s3-start.sh
+
+  local-s3:env:
+    desc: Print shell exports for VM access to local MinIO
+    cmds:
+      - scripts/local-s3-env.sh
+
+  qemu:boot-a:
+    desc: Boot VM A with host repo mounted at /host
+    interactive: true
+    cmds:
+      - scripts/qemu-boot-vm.sh vm-a --ssh-port 2224 --share "$PWD"
+
+  qemu:boot-b:
+    desc: Boot VM B with host repo mounted at /host
+    interactive: true
+    cmds:
+      - scripts/qemu-boot-vm.sh vm-b --ssh-port 2225 --share "$PWD"
+
+  qemu:wait-ssh:
+    desc: Wait for VM A and VM B SSH to become reachable
+    cmds:
+      - |
+        for port in 2224 2225; do
+          for i in $(seq 1 90); do
+            if ssh -i "$PWD/.local/qemu/test_ed25519" \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o ConnectTimeout=2 \
+              -o StrictHostKeyChecking=accept-new \
+              -p "$port" admin@127.0.0.1 true >/dev/null 2>&1; then
+              echo "ssh ready on $port"
+              break
+            fi
+            if [ "$i" -eq 90 ]; then
+              echo "ssh not ready on $port" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+        done
+
+  dr:test:
+    desc: Run the two-VM disaster recovery test against local MinIO
+    deps:
+      - local-s3:start
+    cmds:
+      - |
+        eval "$(scripts/local-s3-env.sh)"
+        VM_A_SSH="{{.VM_A_SSH}}" \
+        VM_B_SSH="{{.VM_B_SSH}}" \
+        REMOTE_REPO="{{.REMOTE_REPO}}" \
+        tests/test-disaster-recovery.sh
+
+  dr:test-clean:
+    desc: Reset MinIO object data, then run the two-VM disaster recovery test
+    cmds:
+      - task local-s3:reset
+      - task dr:test
+
+  validate:qemu:
+    desc: Validate backup and restore end to end with the local QEMU VMs
+    cmds:
+      - VM_A_SSH="{{.VM_A_SSH}}" VM_B_SSH="{{.VM_B_SSH}}" REMOTE_REPO="{{.REMOTE_REPO}}" scripts/qemu-validate.sh
