@@ -100,9 +100,9 @@ class HetznerAdapter(ProviderAdapter):
 
     def _labels(self, context: LifecycleContext) -> dict[str, str]:
         labels = {
-            "managed-by": "epistola-nix-infra",
-            "epistola-server": context.server.name,
-            "epistola-role": context.role,
+            "managed-by": "portablevps-nix-infra",
+            "portablevps-server": context.server.name,
+            "portablevps-role": context.role,
         }
         extra_labels = context.server.placement.get("labels", {})
         if isinstance(extra_labels, dict):
@@ -111,7 +111,7 @@ class HetznerAdapter(ProviderAdapter):
 
     def ensure_ssh_key(self, context: LifecycleContext, *, public_key_path: Path) -> int:
         public_key = public_key_path.read_text(encoding="utf-8").strip()
-        key_name = f"epistola-{context.server.name}-{context.role}"
+        key_name = f"portablevps-{context.server.name}-{context.role}"
         payload = self._request(context, "GET", "/ssh_keys")
         for ssh_key in payload.get("ssh_keys", []):
             if ssh_key.get("name") == key_name and ssh_key.get("public_key") == public_key:

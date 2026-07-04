@@ -9,9 +9,9 @@ load_restic_env() {
   local env_aws_default_region="${AWS_DEFAULT_REGION:-}"
   local env_aws_region="${AWS_REGION:-}"
 
-  if [ -r /etc/epistola/restic.env ]; then
+  if [ -r /etc/portablevps/restic.env ]; then
     # shellcheck disable=SC1091
-    source /etc/epistola/restic.env
+    source /etc/portablevps/restic.env
   fi
 
   RESTIC_REPOSITORY="${env_restic_repository:-${RESTIC_REPOSITORY:-/backup-repo}}"
@@ -38,9 +38,9 @@ load_postgres_env() {
   PGDATABASE="${PGDATABASE:-demo}"
   PGPASSWORD="${PGPASSWORD:-demo-password}"
 
-  if [ -r /etc/epistola/postgres.env ]; then
+  if [ -r /etc/portablevps/postgres.env ]; then
     # shellcheck disable=SC1091
-    source /etc/epistola/postgres.env
+    source /etc/portablevps/postgres.env
   fi
 
   PGHOST="${env_pghost:-$PGHOST}"

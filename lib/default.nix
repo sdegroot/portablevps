@@ -34,7 +34,7 @@ let
       modules = [ hostModule ]
         ++ extraModules
         ++ coreModules
-        ++ [ ({ ... }: { my.restoreMode = restoreMode; }) ];
+        ++ [ ({ ... }: { portablevps.restoreMode = restoreMode; }) ];
     };
 
   # Read provider metadata (providers/<name>/provider.json) from a directory.

@@ -13,7 +13,7 @@ fi
 
 load_restic_env
 
-BACKUP_CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/epistola/backups}"
+BACKUP_CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/portablevps/backups}"
 
 if ! wait_restic_available; then
   echo "error: restic repository is not initialized: $RESTIC_REPOSITORY" >&2

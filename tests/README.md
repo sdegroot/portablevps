@@ -9,7 +9,7 @@ Run from the macOS host after cloning this repository into both VMs:
 ```sh
 VM_A_SSH=admin@vm-a.local \
 VM_B_SSH=admin@vm-b.local \
-REMOTE_REPO=/home/admin/epistola-nix-infra \
+REMOTE_REPO=/home/admin/portablevps-nix-infra \
 tests/test-disaster-recovery.sh
 ```
 
@@ -19,7 +19,7 @@ host port `2223`, then run:
 ```sh
 VM_A_SSH="-p 2222 admin@localhost" \
 VM_B_SSH="-p 2223 admin@localhost" \
-REMOTE_REPO=/home/admin/epistola-nix-infra \
+REMOTE_REPO=/home/admin/portablevps-nix-infra \
 tests/test-disaster-recovery.sh
 ```
 

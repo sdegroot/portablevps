@@ -14,19 +14,19 @@ in
     ../modules/system/scripts.nix
   ];
 
-  my.cloud = {
+  portablevps.cloud = {
     providerName = providerName;
     netbirdInterface = netbirdInterface;
   };
-  my.netbird = {
+  portablevps.netbird = {
     enable = true;
     interface = netbirdInterface;
   };
-  my.breakGlassSsh = {
+  portablevps.breakGlassSsh = {
     enable = true;
     netbirdInterface = netbirdInterface;
   };
-  my.secrets.allowPrototypeDefaults = false;
+  portablevps.secrets.allowPrototypeDefaults = false;
 
   system.stateVersion = "25.05";
 }

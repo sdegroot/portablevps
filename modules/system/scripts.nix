@@ -2,7 +2,7 @@
 { pkgs, ... }:
 
 let
-  scriptPackage = pkgs.runCommand "epistola-dr-scripts" { } ''
+  scriptPackage = pkgs.runCommand "portablevps-dr-scripts" { } ''
     mkdir -p "$out/bin"
     cp ${../../scripts/lib/runtime-env.sh} "$out/bin/runtime-env.sh"
     cp ${../../scripts/create-zpool.sh} "$out/bin/create-zpool.sh"

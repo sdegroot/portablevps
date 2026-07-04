@@ -14,11 +14,11 @@ fi
 load_restic_env
 
 echo "== systemd timers =="
-systemctl list-timers epistola-backup.timer --no-pager || true
+systemctl list-timers portablevps-backup.timer --no-pager || true
 
 echo
 echo "== backup service =="
-systemctl status epistola-backup.service --no-pager -l || true
+systemctl status portablevps-backup.service --no-pager -l || true
 
 echo
 echo "== latest restic snapshots =="

@@ -7,7 +7,7 @@ cases where no usable generation can be booted.
 
 ## Netbird Registration
 
-Netbird uses the explicit `my.netbird.name` value as the peer hostname. Cloud
+Netbird uses the explicit `portablevps.netbird.name` value as the peer hostname. Cloud
 servers set that value in `servers/<server>.nix`.
 
 Current logical server names:
@@ -47,7 +47,7 @@ login are disabled. Fail2ban is enabled on cloud profiles and watches the
 default `sshd` jail through the systemd journal.
 
 SSH is normally open on the Netbird interface only. The
-`epistola-break-glass-ssh.timer` checks Netbird health every minute. If Netbird
+`portablevps-break-glass-ssh.timer` checks Netbird health every minute. If Netbird
 is unhealthy, it opens public SSH through a dedicated host-firewall chain for
 configured Dutch source ranges. After Netbird recovers, public SSH stays open
 for one hour and then closes automatically.
@@ -57,9 +57,9 @@ Check SSH protection:
 ```sh
 systemctl is-active sshd.service fail2ban.service
 sudo fail2ban-client status sshd
-systemctl status epistola-break-glass-ssh.timer
+systemctl status portablevps-break-glass-ssh.timer
 sudo journalctl -u fail2ban.service -n 100 --no-pager
-sudo journalctl -u epistola-break-glass-ssh.service -n 100 --no-pager
+sudo journalctl -u portablevps-break-glass-ssh.service -n 100 --no-pager
 ```
 
 The portable firewall policy lives in NixOS. Provider firewalls should be used
@@ -276,7 +276,7 @@ DNS and ACME provider policy:
 - Delegate `acme.<domain>` from Mijn.host to deSEC with NS records. This is the
   fallback ACME validation zone for public hostnames that are still managed in
   the Mijn.host parent zone.
-- Delegate the internal service namespace, such as `int.epistola.io`, from
+- Delegate the internal service namespace, such as `int.portablevps.io`, from
   Mijn.host to deSEC with NS records. Traefik can then create DNS-01 challenge
   TXT records directly in that managed zone and no per-internal-host ACME CNAME
   is needed.
@@ -289,9 +289,9 @@ DNS and ACME provider policy:
   DESEC_TOKEN=...
   ```
 
-- Configure Traefik with `my.proxy.acme.dnsProvider = "desec";`.
-- Declare service domains on the server through `my.proxy.http.services`,
-  `my.proxy.tcp.services`, or the temporary `my.proxy.testBackend`. Set
+- Configure Traefik with `portablevps.proxy.acme.dnsProvider = "desec";`.
+- Declare service domains on the server through `portablevps.proxy.http.services`,
+  `portablevps.proxy.tcp.services`, or the temporary `portablevps.proxy.testBackend`. Set
   `visibility = "netbird-edge"` for services reachable through the NetBird
   public reverse proxy, `visibility = "internal"` for services that should only
   resolve for connected NetBird clients, and `visibility = "direct-public"` for
@@ -301,12 +301,12 @@ DNS and ACME provider policy:
 - Configure DNS planning metadata on the server:
 
   ```nix
-  my.proxy.dns = {
-    managedZones = [ "int.epistola.io" ];
-    acmeDelegatedZone = "acme.epistola.io";
+  portablevps.proxy.dns = {
+    managedZones = [ "int.portablevps.io" ];
+    acmeDelegatedZone = "acme.portablevps.io";
     publicTarget = "eu1.netbird.services.";
     publicRecordType = "CNAME";
-    netbirdCnameTarget = "test-vps.epistola.int.";
+    netbirdCnameTarget = "test-vps.portablevps.int.";
   };
   ```
 
@@ -322,10 +322,10 @@ DNS and ACME provider policy:
 - On a configured server, inspect the generated domain registration plan:
 
   ```sh
-  epistola-proxy-domain-plan
+  portablevps-proxy-domain-plan
   ```
 
-  The same JSON is available at `/etc/epistola/proxy-domains.json`.
+  The same JSON is available at `/etc/portablevps/proxy-domains.json`.
 - For each hostname outside `managedZones`, add a one-time Mijn.host CNAME into
   the delegated ACME zone:
 
@@ -333,7 +333,7 @@ DNS and ACME provider policy:
   _acme-challenge.app.example.com. CNAME _acme-challenge.app.example.com.acme.example.com.
   ```
 
-  For names under `managedZones`, such as `test.int.epistola.io`, do not add an
+  For names under `managedZones`, such as `test.int.portablevps.io`, do not add an
   ACME challenge CNAME. The delegated deSEC zone is authoritative and Traefik
   writes `_acme-challenge` TXT records there directly.
 
@@ -344,7 +344,7 @@ DNS and ACME provider policy:
   ```
 
 - For each `visibility = "direct-public"` hostname, add public DNS to the host
-  ingress target and set `my.proxy.openPublicFirewall = true`. The NixOS module
+  ingress target and set `portablevps.proxy.openPublicFirewall = true`. The NixOS module
   rejects this when any non-`direct-public` route exists on the same Traefik
   listener, because opening the public firewall exposes every configured
   hostname on that listener.
@@ -352,7 +352,7 @@ DNS and ACME provider policy:
 - For each `visibility = "internal"` hostname, add NetBird private DNS:
 
   ```dns
-  app.example.com. CNAME test-vps.epistola.int.
+  app.example.com. CNAME test-vps.portablevps.int.
   ```
 
   For `internal`, do not add a public app DNS record. With the default firewall
@@ -362,7 +362,7 @@ DNS and ACME provider policy:
 
   ```sh
   NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-dns-sync \
-    HOST=100.85.5.203 NETBIRD_DNS_ZONE=int.epistola.io \
+    HOST=100.85.5.203 NETBIRD_DNS_ZONE=int.portablevps.io \
     NETBIRD_DNS_GROUP_IDS=<netbird-group-id>
   ```
 
@@ -373,12 +373,12 @@ DNS and ACME provider policy:
 The `test-vps` server enables a persistent internal proxy smoke route:
 
 ```text
-test.int.epistola.io
+test.int.portablevps.io
 ```
 
 It uses `visibility = "internal"`, so deploy the profile, sync NetBird DNS, and
 test it from a NetBird-connected client. While
-`my.proxy.acme.environment = "staging"`, the route should work for connectivity
+`portablevps.proxy.acme.environment = "staging"`, the route should work for connectivity
 testing but browsers will not trust the certificate. The Hetzner profile waits
 before ACME DNS propagation checks so deSEC has time to publish challenge TXT
 records on both authoritative nameservers.
@@ -386,77 +386,77 @@ records on both authoritative nameservers.
 - Test new domains against Let's Encrypt staging first:
 
   ```nix
-  my.proxy.acme.environment = "staging";
+  portablevps.proxy.acme.environment = "staging";
   ```
 
-Switch to `my.proxy.acme.environment = "production"` for production issuance.
+Switch to `portablevps.proxy.acme.environment = "production"` for production issuance.
 The two environments use separate Traefik resolver names, `dns01-staging` and
 `dns01-production`, so staging certificates can remain in ACME storage without
 blocking production certificates. Direct `dnsProvider = "mijnhost"` is allowed
 only as a short-lived fallback when delegated ACME is unavailable.
 
-For `epistola.io`, keep the broad public wildcard:
+For `portablevps.io`, keep the broad public wildcard:
 
 ```dns
-*.epistola.io. CNAME eu1.netbird.services.
+*.portablevps.io. CNAME eu1.netbird.services.
 ```
 
-Use explicit public names such as `test.epistola.io` with
+Use explicit public names such as `test.portablevps.io` with
 `visibility = "netbird-edge"`. Their application DNS is covered by the wildcard,
 but their ACME challenge still needs the fallback CNAME unless the whole
 hostname is under a managed delegated zone:
 
 ```dns
-_acme-challenge.test.epistola.io. CNAME _acme-challenge.test.epistola.io.acme.epistola.io.
+_acme-challenge.test.portablevps.io. CNAME _acme-challenge.test.portablevps.io.acme.portablevps.io.
 ```
 
-For internal-only names, use a delegated subzone such as `int.epistola.io`:
+For internal-only names, use a delegated subzone such as `int.portablevps.io`:
 
 ```dns
-int.epistola.io. NS <desec-ns-1>
-int.epistola.io. NS <desec-ns-2>
-int.epistola.io. DS <key-tag> <algorithm> <digest-type> <digest>
+int.portablevps.io. NS <desec-ns-1>
+int.portablevps.io. NS <desec-ns-2>
+int.portablevps.io. DS <key-tag> <algorithm> <digest-type> <digest>
 ```
 
-Do not create public wildcard records below `int.epistola.io`. Internal records
-such as `test.int.epistola.io` should be created in NetBird DNS by the deploy
+Do not create public wildcard records below `int.portablevps.io`. Internal records
+such as `test.int.portablevps.io` should be created in NetBird DNS by the deploy
 task, and ACME TXT records are created in the delegated deSEC zone by Traefik.
 
-For `epistola.io`, configure the fallback delegated ACME zone in this order:
+For `portablevps.io`, configure the fallback delegated ACME zone in this order:
 
-1. Create `acme.epistola.io` in deSEC and note its nameservers.
-2. In Mijn.host DNS for `epistola.io`, add the child-zone NS records:
+1. Create `acme.portablevps.io` in deSEC and note its nameservers.
+2. In Mijn.host DNS for `portablevps.io`, add the child-zone NS records:
 
    ```dns
-   acme.epistola.io. NS <desec-ns-1>
-   acme.epistola.io. NS <desec-ns-2>
+   acme.portablevps.io. NS <desec-ns-1>
+   acme.portablevps.io. NS <desec-ns-2>
    ```
 
 3. If Mijn.host supports DS records in the DNS zone editor, add the DS record
-   deSEC shows with name `acme.epistola.io`:
+   deSEC shows with name `acme.portablevps.io`:
 
    ```dns
-   acme.epistola.io. DS <key-tag> <algorithm> <digest-type> <digest>
+   acme.portablevps.io. DS <key-tag> <algorithm> <digest-type> <digest>
    ```
 
    If Mijn.host instead asks for DNSKEY for a delegated child zone, paste the
    DNSKEY block from deSEC there and let Mijn.host derive DS. Do not paste the
    deSEC DNSKEY or DS material into a registrar DNSSEC screen for the apex
-   `epistola.io` domain.
+   `portablevps.io` domain.
 
 4. Add one-time challenge CNAMEs in Mijn.host for service hostnames:
 
    ```dns
-   _acme-challenge.test.epistola.io. CNAME _acme-challenge.test.epistola.io.acme.epistola.io.
+   _acme-challenge.test.portablevps.io. CNAME _acme-challenge.test.portablevps.io.acme.portablevps.io.
    ```
 
 5. Verify delegation and DNSSEC:
 
    ```sh
-   dig NS acme.epistola.io +short
-   dig DS acme.epistola.io +short
-   dig CNAME _acme-challenge.test.epistola.io +short
-   dig +dnssec TXT _acme-challenge.test.epistola.io
+   dig NS acme.portablevps.io +short
+   dig DS acme.portablevps.io +short
+   dig CNAME _acme-challenge.test.portablevps.io +short
+   dig +dnssec TXT _acme-challenge.test.portablevps.io
    ```
 
 An empty `dig DS` result means DNSSEC trust is not delegated yet; NS delegation
@@ -492,9 +492,9 @@ Check the backup timer and last service run:
 
 ```sh
 backup-status.sh
-systemctl list-timers epistola-backup.timer
-systemctl status epistola-backup.service
-sudo journalctl -u epistola-backup.service -n 200 --no-pager
+systemctl list-timers portablevps-backup.timer
+systemctl status portablevps-backup.service
+sudo journalctl -u portablevps-backup.service -n 200 --no-pager
 ```
 
 Run a manual backup:
@@ -507,7 +507,7 @@ sudo backup.sh
 For S3-compatible repositories:
 
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` must be exported from
-  `/etc/epistola/restic.env`.
+  `/etc/portablevps/restic.env`.
 - Scaleway requires `AWS_DEFAULT_REGION` and `AWS_REGION` to match the bucket
   region, for example `nl-ams`.
 - `lock/*` must be deletable by restic.

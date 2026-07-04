@@ -13,11 +13,11 @@ fi
 
 load_restic_env
 
-BACKUP_CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/epistola/backups}"
+BACKUP_CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/portablevps/backups}"
 
 restore_mode="false"
-if [ -r /etc/my/restore-mode ]; then
-  restore_mode="$(tr -d '[:space:]' </etc/my/restore-mode)"
+if [ -r /etc/portablevps/restore-mode ]; then
+  restore_mode="$(tr -d '[:space:]' </etc/portablevps/restore-mode)"
 fi
 
 apps_inactive=true
@@ -26,7 +26,7 @@ if systemctl is-active --quiet apps.target; then
 fi
 
 if [ "$restore_mode" != "true" ] && [ "$apps_inactive" != "true" ]; then
-  echo "error: refusing restore unless my.restoreMode=true or apps.target is inactive" >&2
+  echo "error: refusing restore unless portablevps.restoreMode=true or apps.target is inactive" >&2
   exit 78
 fi
 

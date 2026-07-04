@@ -2,7 +2,7 @@
 { config, lib, pkgs, netbirdPkgs ? pkgs, ... }:
 
 let
-  cfg = config.my.netbird;
+  cfg = config.portablevps.netbird;
   netbirdPackage = netbirdPkgs.netbird;
   netbirdDaemon = pkgs.writeShellScript "netbird-daemon" ''
     exec ${netbirdPackage}/bin/netbird \
@@ -33,12 +33,12 @@ let
   '';
 in
 {
-  options.my.netbird = {
+  options.portablevps.netbird = {
     enable = lib.mkEnableOption "Netbird auto-join";
 
     interface = lib.mkOption {
       type = lib.types.str;
-      default = config.my.cloud.netbirdInterface or "wt0";
+      default = config.portablevps.cloud.netbirdInterface or "wt0";
       description = "Expected Netbird WireGuard interface.";
     };
 

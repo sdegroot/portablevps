@@ -2,10 +2,10 @@
 { lib, config, ... }:
 
 let
-  cfg = config.my.containerState;
+  cfg = config.portablevps.containerState;
 in
 {
-  options.my.containerState = {
+  options.portablevps.containerState = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -24,7 +24,7 @@ in
       "d ${cfg.path} 0755 root root -"
     ];
 
-    my.backups.components."container-state" = {
+    portablevps.backups.components."container-state" = {
       order = 20;
       paths = [ cfg.path ];
       clearBeforeRestore = [ cfg.path ];

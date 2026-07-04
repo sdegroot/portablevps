@@ -14,7 +14,7 @@ if [ -z "$runtime" ]; then
   fi
 fi
 
-container_name="${MINIO_CONTAINER_NAME:-epistola-minio}"
+container_name="${MINIO_CONTAINER_NAME:-portablevps-minio}"
 data_dir="${MINIO_DATA_DIR:-.local/minio/data}"
 remove_data=false
 

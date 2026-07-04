@@ -2,7 +2,7 @@
 { lib, config, ... }:
 
 {
-  options.my.server = {
+  options.portablevps.server = {
     name = lib.mkOption {
       type = lib.types.str;
       default = config.networking.hostName;
@@ -11,7 +11,7 @@
 
     provider = lib.mkOption {
       type = lib.types.str;
-      default = config.my.cloud.providerName or "cloud";
+      default = config.portablevps.cloud.providerName or "cloud";
       description = "Active provider placement for this server.";
     };
 
@@ -22,34 +22,34 @@
     };
   };
 
-  options.my.deployment = {
+  options.portablevps.deployment = {
     name = lib.mkOption {
       type = lib.types.str;
       default = config.networking.hostName;
-      description = "Compatibility alias for my.server.name.";
+      description = "Compatibility alias for portablevps.server.name.";
     };
 
     provider = lib.mkOption {
       type = lib.types.str;
-      default = config.my.cloud.providerName or "cloud";
-      description = "Compatibility alias for my.server.provider.";
+      default = config.portablevps.cloud.providerName or "cloud";
+      description = "Compatibility alias for portablevps.server.provider.";
     };
 
     backupRepository = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "Compatibility alias for my.server.backupRepository.";
+      description = "Compatibility alias for portablevps.server.backupRepository.";
     };
   };
 
   config = {
-    my.server = {
-      name = lib.mkDefault config.my.deployment.name;
-      provider = lib.mkDefault config.my.deployment.provider;
-      backupRepository = lib.mkDefault config.my.deployment.backupRepository;
+    portablevps.server = {
+      name = lib.mkDefault config.portablevps.deployment.name;
+      provider = lib.mkDefault config.portablevps.deployment.provider;
+      backupRepository = lib.mkDefault config.portablevps.deployment.backupRepository;
     };
 
-    my.backups.restic.repository = lib.mkIf (config.my.server.backupRepository != "")
-      (lib.mkDefault config.my.server.backupRepository);
+    portablevps.backups.restic.repository = lib.mkIf (config.portablevps.server.backupRepository != "")
+      (lib.mkDefault config.portablevps.server.backupRepository);
   };
 }

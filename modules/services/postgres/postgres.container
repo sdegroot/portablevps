@@ -5,14 +5,14 @@ After=network-online.target
 Wants=network-online.target
 PartOf=apps.target
 ConditionPathIsDirectory=/data/postgres
-ConditionPathExists=!/run/my/restore-mode
+ConditionPathExists=!/run/portablevps/restore-mode
 
 [Container]
 Image=docker.io/library/postgres:18
 ContainerName=postgres-demo
 Environment=POSTGRES_USER=demo
 Environment=POSTGRES_DB=demo
-EnvironmentFile=/etc/epistola/postgres.env
+EnvironmentFile=/etc/portablevps/postgres.env
 Volume=/data/postgres:/var/lib/postgresql
 PublishPort=127.0.0.1:5432:5432
 Exec=-c summarize_wal=on

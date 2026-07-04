@@ -2,10 +2,10 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.my.base;
+  cfg = config.portablevps.base;
 in
 {
-  options.my.base = {
+  options.portablevps.base = {
     passwordAuthentication = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -53,7 +53,7 @@ in
 
     users.users.admin = {
       isNormalUser = true;
-      description = "Epistola administrator";
+      description = "portablevps administrator";
       extraGroups = [ "wheel" ];
       openssh.authorizedKeys.keyFiles = cfg.adminAuthorizedKeyFiles;
     } // lib.optionalAttrs (cfg.adminInitialPassword != null) {
@@ -72,7 +72,7 @@ in
     assertions = [
       {
         assertion = cfg.adminInitialPassword != null || cfg.adminAuthorizedKeyFiles != [ ];
-        message = "The admin user has neither an initial password nor authorized keys; this host would be unreachable. Set my.base.adminInitialPassword or my.base.adminAuthorizedKeyFiles.";
+        message = "The admin user has neither an initial password nor authorized keys; this host would be unreachable. Set portablevps.base.adminInitialPassword or portablevps.base.adminAuthorizedKeyFiles.";
       }
     ];
   };

@@ -2,14 +2,14 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.my.breakGlassSsh;
+  cfg = config.portablevps.breakGlassSsh;
   chain = "EPIS_BGLASS_SSH";
   countrySet4 = "EPIS_NL4";
-  stateDir = "/var/lib/epistola-break-glass-ssh";
+  stateDir = "/var/lib/portablevps-break-glass-ssh";
   allowedCidrs = lib.escapeShellArgs cfg.allowedCidrs;
   countryCodes = lib.escapeShellArgs cfg.countryCodes;
   nlZoneUrl = cfg.countryZoneUrls.nl or "https://www.ipdeny.com/ipblocks/data/countries/nl.zone";
-  watchdog = pkgs.writeShellScript "epistola-break-glass-ssh" ''
+  watchdog = pkgs.writeShellScript "portablevps-break-glass-ssh" ''
     set -eu
 
     iptables="${pkgs.iptables}/bin/iptables"
@@ -163,12 +163,12 @@ let
   '';
 in
 {
-  options.my.breakGlassSsh = {
+  options.portablevps.breakGlassSsh = {
     enable = lib.mkEnableOption "automatic public SSH break-glass access";
 
     netbirdInterface = lib.mkOption {
       type = lib.types.str;
-      default = config.my.cloud.netbirdInterface or "wt0";
+      default = config.portablevps.cloud.netbirdInterface or "wt0";
       description = "Netbird interface that normally carries SSH access.";
     };
 
@@ -221,7 +221,7 @@ in
   config = lib.mkIf cfg.enable {
     networking.firewall.interfaces.${cfg.netbirdInterface}.allowedTCPPorts = [ cfg.port ];
 
-    systemd.services.epistola-break-glass-ssh = {
+    systemd.services.portablevps-break-glass-ssh = {
       description = "Open public SSH temporarily when Netbird is unhealthy";
       after = [ "network-online.target" "firewall.service" ];
       wants = [ "network-online.target" ];
@@ -237,19 +237,19 @@ in
       ];
       serviceConfig = {
         Type = "oneshot";
-        StateDirectory = "epistola-break-glass-ssh";
+        StateDirectory = "portablevps-break-glass-ssh";
         ExecStart = watchdog;
       };
     };
 
-    systemd.timers.epistola-break-glass-ssh = {
+    systemd.timers.portablevps-break-glass-ssh = {
       description = "Watch Netbird health for public SSH break-glass access";
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnBootSec = "30s";
         OnUnitActiveSec = "1min";
         AccuracySec = "15s";
-        Unit = "epistola-break-glass-ssh.service";
+        Unit = "portablevps-break-glass-ssh.service";
       };
     };
   };

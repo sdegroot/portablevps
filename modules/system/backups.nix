@@ -2,7 +2,7 @@
 { lib, config, pkgs, ... }:
 
 let
-  cfg = config.my.backups;
+  cfg = config.portablevps.backups;
   componentType = lib.types.submodule ({ name, ... }: {
     options = {
       paths = lib.mkOption {
@@ -72,7 +72,7 @@ let
       hookText = component.${hookOptionName};
     in
     lib.optionalAttrs (hookText != "") {
-      "epistola/backups/${hookDirName}.d/${orderName}" = {
+      "portablevps/backups/${hookDirName}.d/${orderName}" = {
         text = ''
           #!/usr/bin/env bash
           set -euo pipefail
@@ -84,13 +84,13 @@ let
 
   pathsFile = component:
     lib.optionalAttrs (component.paths != [ ]) {
-      "epistola/backups/paths.d/${component.name}".text =
+      "portablevps/backups/paths.d/${component.name}".text =
         lib.concatMapStringsSep "\n" (path: path) component.paths + "\n";
     };
 
   clearFile = component:
     lib.optionalAttrs (component.clearBeforeRestore != [ ]) {
-      "epistola/backups/clear-before-restore.d/${component.name}".text =
+      "portablevps/backups/clear-before-restore.d/${component.name}".text =
         lib.concatMapStringsSep "\n" (path: path) component.clearBeforeRestore + "\n";
     };
 
@@ -107,17 +107,17 @@ let
   );
 in
 {
-  options.my.backups = {
+  options.portablevps.backups = {
     restic = {
       repository = lib.mkOption {
         type = lib.types.str;
-        default = "s3:http://10.0.2.2:9000/epistola-dr";
+        default = "s3:http://10.0.2.2:9000/portablevps-dr";
         description = "Restic repository URL used by backup and restore scripts.";
       };
 
       awsAccessKeyId = lib.mkOption {
         type = lib.types.str;
-        default = "epistola";
+        default = "portablevps";
         description = "AWS access key ID for S3-compatible restic repositories.";
       };
     };
@@ -190,45 +190,45 @@ in
 
     systemd.tmpfiles.rules = [
       "d /backup-repo 0700 root root -"
-      "d /etc/epistola/backups/paths.d 0755 root root -"
-      "d /etc/epistola/backups/clear-before-restore.d 0755 root root -"
-      "d /etc/epistola/backups/pre-backup.d 0755 root root -"
-      "d /etc/epistola/backups/pre-restore.d 0755 root root -"
-      "d /etc/epistola/backups/post-restore.d 0755 root root -"
+      "d /etc/portablevps/backups/paths.d 0755 root root -"
+      "d /etc/portablevps/backups/clear-before-restore.d 0755 root root -"
+      "d /etc/portablevps/backups/pre-backup.d 0755 root root -"
+      "d /etc/portablevps/backups/pre-restore.d 0755 root root -"
+      "d /etc/portablevps/backups/post-restore.d 0755 root root -"
     ];
 
-    systemd.services.epistola-backup = {
+    systemd.services.portablevps-backup = {
       description = "Run coordinated module-owned backup";
       after = lib.unique (lib.concatMap (component: component.afterServices) componentList);
       wants = lib.unique (lib.concatMap (component: component.wantsServices) componentList);
       serviceConfig = {
         Type = "oneshot";
         EnvironmentFile = [
-          "/etc/epistola/restic.env"
+          "/etc/portablevps/restic.env"
         ];
-        ExecStart = "${pkgs.util-linux}/bin/flock -w 900 /run/lock/epistola-backups.lock /run/current-system/sw/bin/backup.sh";
+        ExecStart = "${pkgs.util-linux}/bin/flock -w 900 /run/lock/portablevps-backups.lock /run/current-system/sw/bin/backup.sh";
       };
     };
 
-    systemd.timers.epistola-backup = {
-      wantedBy = lib.optional (!config.my.restoreMode) "timers.target";
+    systemd.timers.portablevps-backup = {
+      wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "hourly";
         Persistent = true;
       };
     };
 
-    systemd.services.epistola-backup-maintenance = {
+    systemd.services.portablevps-backup-maintenance = {
       description = "Apply restic retention policy and verify repository integrity";
       serviceConfig = {
         Type = "oneshot";
         EnvironmentFile = [
-          "/etc/epistola/restic.env"
+          "/etc/portablevps/restic.env"
         ];
       };
       script = ''
         set -euo pipefail
-        exec ${pkgs.util-linux}/bin/flock -w 3600 /run/lock/epistola-backups.lock ${pkgs.writeShellScript "epistola-backup-maintenance-locked" ''
+        exec ${pkgs.util-linux}/bin/flock -w 3600 /run/lock/portablevps-backups.lock ${pkgs.writeShellScript "portablevps-backup-maintenance-locked" ''
           set -euo pipefail
           ${lib.optionalString cfg.retention.enable ''
             ${pkgs.restic}/bin/restic forget \
@@ -244,8 +244,8 @@ in
       '';
     };
 
-    systemd.timers.epistola-backup-maintenance = {
-      wantedBy = lib.optional (!config.my.restoreMode) "timers.target";
+    systemd.timers.portablevps-backup-maintenance = {
+      wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "weekly";
         RandomizedDelaySec = "1h";

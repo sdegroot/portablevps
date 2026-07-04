@@ -2,10 +2,10 @@
 { lib, config, ... }:
 
 let
-  cfg = config.my;
+  cfg = config.portablevps;
 in
 {
-  options.my.restoreMode = lib.mkOption {
+  options.portablevps.restoreMode = lib.mkOption {
     type = lib.types.bool;
     default = false;
     description = "Keep application services stopped so /data can be restored first.";
@@ -17,17 +17,17 @@ in
 
     system.activationScripts.restoreModeRuntimeMarker.text =
       if cfg.restoreMode then ''
-        mkdir -p /run/my
-        touch /run/my/restore-mode
+        mkdir -p /run/portablevps
+        touch /run/portablevps/restore-mode
         if [ -e /run/systemd/system ]; then
           /run/current-system/sw/bin/systemctl stop postgres.service apps.target || true
         fi
       '' else ''
-        rm -f /run/my/restore-mode
+        rm -f /run/portablevps/restore-mode
       '';
 
     systemd.targets.apps = {
-      description = "Epistola application services";
+      description = "portablevps application services";
       wantedBy = lib.optional (!cfg.restoreMode) "multi-user.target";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];

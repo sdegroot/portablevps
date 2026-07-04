@@ -25,7 +25,7 @@ ssh-keygen \
   -t ed25519 \
   -a 64 \
   -N "" \
-  -C "epistola-cloud-admin" \
+  -C "portablevps-cloud-admin" \
   -f "$private_key" >/dev/null
 
 cp "$private_key.pub" "$public_key"

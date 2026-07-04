@@ -153,8 +153,8 @@ class CloudTests(unittest.TestCase):
 
     def test_safe_nixos_name_is_hostname_safe(self):
         self.assertEqual(
-            cloud.safe_nixos_name("Epistola Hetzner Restore 203.0.113.10"),
-            "epistola-hetzner-restore-203-0-113-10",
+            cloud.safe_nixos_name("portablevps Hetzner Restore 203.0.113.10"),
+            "portablevps-hetzner-restore-203-0-113-10",
         )
 
     def test_restore_rehearsal_default_names_are_derived_from_restore_host(self):
@@ -239,22 +239,22 @@ class CloudTests(unittest.TestCase):
             override_text = (tmpdir / "cloud-override.nix").read_text(encoding="utf-8")
 
         self.assertIn('networking.hostName = "restore-a";', override_text)
-        self.assertIn('my.netbird.name = "restore-peer-a";', override_text)
+        self.assertIn('portablevps.netbird.name = "restore-peer-a";', override_text)
 
     def test_write_proxy_smoke_override(self):
         with tempfile.TemporaryDirectory() as temp:
             tmpdir = Path(temp)
             cloud.write_proxy_smoke_override(
                 tmpdir,
-                domain="proxy-test.epistola.int",
+                domain="proxy-test.portablevps.int",
                 visibility="internal",
             )
             override_text = (tmpdir / "cloud-override.nix").read_text(encoding="utf-8")
 
-        self.assertIn("my.proxy = {", override_text)
+        self.assertIn("portablevps.proxy = {", override_text)
         self.assertIn("acme.enable = false;", override_text)
         self.assertIn("enable = true;", override_text)
-        self.assertIn('domain = "proxy-test.epistola.int";', override_text)
+        self.assertIn('domain = "proxy-test.portablevps.int";', override_text)
         self.assertIn('visibility = "internal";', override_text)
 
     def test_proxy_smoke_test_switches_and_verifies_internal_route(self):
@@ -268,13 +268,13 @@ class CloudTests(unittest.TestCase):
             with mock.patch.object(cloud, "wait_admin_ssh") as wait_admin_ssh:
                 with mock.patch.object(cloud, "copy_repo_to_temp") as copy_repo:
                     with mock.patch.object(cloud, "switch_profile") as switch_profile:
-                        with mock.patch.object(cloud, "curl_proxy", return_value="epistola proxy test ok") as curl_proxy:
+                        with mock.patch.object(cloud, "curl_proxy", return_value="portablevps proxy test ok") as curl_proxy:
                             cloud.command_proxy_smoke_test(mock.Mock())
 
         wait_admin_ssh.assert_called_once()
         copy_repo.assert_called_once()
         switch_profile.assert_called_once()
-        curl_proxy.assert_called_once_with("proxy-test.epistola.int", "100.85.5.203")
+        curl_proxy.assert_called_once_with("proxy-test.portablevps.int", "100.85.5.203")
 
     def test_preflight_checks_local_config_and_optional_target(self):
         env = {
@@ -317,8 +317,8 @@ class CloudTests(unittest.TestCase):
                     "dns": {
                         "netbird": {
                             "type": "CNAME",
-                            "name": "test.int.epistola.io.",
-                            "target": "test-vps.epistola.int.",
+                            "name": "test.int.portablevps.io.",
+                            "target": "test-vps.portablevps.int.",
                         }
                     },
                 },
@@ -327,7 +327,7 @@ class CloudTests(unittest.TestCase):
                     "dns": {
                         "public": {
                             "type": "CNAME",
-                            "name": "test.epistola.io.",
+                            "name": "test.portablevps.io.",
                             "target": "eu1.netbird.services.",
                         }
                     },
@@ -345,10 +345,10 @@ class CloudTests(unittest.TestCase):
             ]
         }
 
-        records = cloud.internal_netbird_records_from_plan(plan, "int.epistola.io")
+        records = cloud.internal_netbird_records_from_plan(plan, "int.portablevps.io")
 
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["name"], "test.int.epistola.io.")
+        self.assertEqual(records[0]["name"], "test.int.portablevps.io.")
 
     def test_netbird_upsert_record_updates_changed_record(self):
         calls = []
@@ -359,7 +359,7 @@ class CloudTests(unittest.TestCase):
                 return [
                     {
                         "id": "record-a",
-                        "name": "test.int.epistola.io",
+                        "name": "test.int.portablevps.io",
                         "type": "CNAME",
                         "content": "old.example.com",
                         "ttl": 300,
@@ -369,8 +369,8 @@ class CloudTests(unittest.TestCase):
 
         record = {
             "type": "CNAME",
-            "name": "test.int.epistola.io.",
-            "target": "test-vps.epistola.int.",
+            "name": "test.int.portablevps.io.",
+            "target": "test-vps.portablevps.int.",
         }
         with mock.patch.object(cloud, "netbird_request", side_effect=fake_request):
             status = cloud.netbird_upsert_record("token", "zone-a", record)
@@ -381,9 +381,9 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(
             calls[-1][2],
             {
-                "name": "test.int.epistola.io",
+                "name": "test.int.portablevps.io",
                 "type": "CNAME",
-                "content": "test-vps.epistola.int",
+                "content": "test-vps.portablevps.int",
                 "ttl": 300,
             },
         )
@@ -394,7 +394,7 @@ class CloudTests(unittest.TestCase):
                 return [
                     {
                         "id": "record-a",
-                        "name": "test.int.epistola.io",
+                        "name": "test.int.portablevps.io",
                         "type": "A",
                         "content": "100.85.5.203",
                         "ttl": 300,
@@ -404,8 +404,8 @@ class CloudTests(unittest.TestCase):
 
         record = {
             "type": "CNAME",
-            "name": "test.int.epistola.io.",
-            "target": "test-vps.epistola.int.",
+            "name": "test.int.portablevps.io.",
+            "target": "test-vps.portablevps.int.",
         }
         with mock.patch.object(cloud, "netbird_request", side_effect=fake_request):
             with self.assertRaises(cloud.CloudError) as raised:

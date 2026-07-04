@@ -10,8 +10,8 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from epistola_cloud.hetzner import HetznerAdapter  # noqa: E402
-from epistola_cloud.lifecycle import (  # noqa: E402
+from portablevps_cloud.hetzner import HetznerAdapter  # noqa: E402
+from portablevps_cloud.lifecycle import (  # noqa: E402
     LifecycleContext,
     LifecycleError,
     ProviderSpec,
@@ -19,7 +19,7 @@ from epistola_cloud.lifecycle import (  # noqa: E402
     UnsupportedProviderAdapter,
     require_delete_confirmation,
 )
-from epistola_cloud.state import StateStore  # noqa: E402
+from portablevps_cloud.state import StateStore  # noqa: E402
 
 
 def context(*, env=None, placement=None):
@@ -148,7 +148,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(create_call[2]["location"], "nbg1")
         self.assertEqual(create_call[2]["image"], "ubuntu-24.04")
         self.assertEqual(create_call[2]["ssh_keys"], [42])
-        self.assertEqual(create_call[2]["labels"]["epistola-role"], "candidate")
+        self.assertEqual(create_call[2]["labels"]["portablevps-role"], "candidate")
         self.assertEqual(resource["provider_server_id"], "123")
         self.assertEqual(resource["public_ipv4"], "203.0.113.10")
 

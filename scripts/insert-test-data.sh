@@ -9,9 +9,9 @@ PGPORT="${PGPORT:-5432}"
 PGUSER="${PGUSER:-demo}"
 PGDATABASE="${PGDATABASE:-demo}"
 PGPASSWORD="${PGPASSWORD:-demo-password}"
-if [ -r /etc/epistola/postgres.env ]; then
+if [ -r /etc/portablevps/postgres.env ]; then
   # shellcheck disable=SC1091
-  source /etc/epistola/postgres.env
+  source /etc/portablevps/postgres.env
 fi
 export PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
 

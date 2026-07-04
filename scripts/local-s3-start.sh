@@ -14,15 +14,15 @@ if [ -z "$runtime" ]; then
   fi
 fi
 
-container_name="${MINIO_CONTAINER_NAME:-epistola-minio}"
-network_name="${MINIO_NETWORK_NAME:-epistola-minio}"
+container_name="${MINIO_CONTAINER_NAME:-portablevps-minio}"
+network_name="${MINIO_NETWORK_NAME:-portablevps-minio}"
 data_dir="${MINIO_DATA_DIR:-.local/minio/data}"
 address="${MINIO_ADDRESS:-127.0.0.1}"
 api_port="${MINIO_API_PORT:-9000}"
 console_port="${MINIO_CONSOLE_PORT:-9001}"
-bucket="${MINIO_BUCKET:-epistola-dr}"
-access_key="${MINIO_ROOT_USER:-epistola}"
-secret_key="${MINIO_ROOT_PASSWORD:-epistola-minio-password}"
+bucket="${MINIO_BUCKET:-portablevps-dr}"
+access_key="${MINIO_ROOT_USER:-portablevps}"
+secret_key="${MINIO_ROOT_PASSWORD:-portablevps-minio-password}"
 minio_image="${MINIO_IMAGE:-quay.io/minio/minio:latest}"
 mc_image="${MINIO_MC_IMAGE:-quay.io/minio/mc:latest}"
 

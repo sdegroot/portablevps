@@ -11,11 +11,11 @@ Required environment:
   VM_B_SSH       SSH target for the fresh restore VM.
 
 Optional environment:
-  REMOTE_REPO    Repo path on both VMs. Default: /home/admin/epistola-nix-infra
+  REMOTE_REPO    Repo path on both VMs. Default: /home/admin/portablevps-nix-infra
   MARKER         Test marker. Default: generated timestamp marker.
   INITIAL_MARKER First marker used to seed the full backup. Default: generated.
   RESTIC_REPOSITORY
-                 Shared restic repo, for example s3:http://10.0.2.2:9000/epistola-dr.
+                 Shared restic repo, for example s3:http://10.0.2.2:9000/portablevps-dr.
 
 Preconditions:
   - Both VMs can be reached by SSH.
@@ -34,13 +34,13 @@ fi
 : "${VM_A_SSH:?set VM_A_SSH, for example admin@192.0.2.10}"
 : "${VM_B_SSH:?set VM_B_SSH, for example admin@192.0.2.11}"
 
-REMOTE_REPO="${REMOTE_REPO:-/home/admin/epistola-nix-infra}"
+REMOTE_REPO="${REMOTE_REPO:-/home/admin/portablevps-nix-infra}"
 MARKER="${MARKER:-fresh-server-restore-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
 INITIAL_MARKER="${INITIAL_MARKER:-fresh-server-full-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
-RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-s3:http://10.0.2.2:9000/epistola-dr}"
+RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-s3:http://10.0.2.2:9000/portablevps-dr}"
 RESTIC_PASSWORD="${RESTIC_PASSWORD:-dev-password}"
-AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-epistola}"
-AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-epistola-minio-password}"
+AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-portablevps}"
+AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-portablevps-minio-password}"
 REMOTE_ENV="RESTIC_REPOSITORY='$RESTIC_REPOSITORY'"
 if [ -n "${RESTIC_PASSWORD:-}" ]; then
   REMOTE_ENV="$REMOTE_ENV RESTIC_PASSWORD='$RESTIC_PASSWORD'"
@@ -89,14 +89,14 @@ require_remote_tools "$VM_B_SSH"
 echo "configuring VM A in normal mode"
 remote_repo "$VM_A_SSH" "sudo nixos-rebuild switch --flake .#local-vm"
 remote "$VM_A_SSH" "sudo systemctl start apps.target"
-remote "$VM_A_SSH" "sudo rm -rf /var/lib/epistola-backups/postgres-physical"
+remote "$VM_A_SSH" "sudo rm -rf /var/lib/portablevps-backups/postgres-physical"
 
 echo "inserting initial marker on VM A"
 remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
 remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$INITIAL_MARKER'"
 
 echo "creating or reusing restic repository on VM A"
-remote "$VM_A_SSH" "if ! sudo env $REMOTE_ENV bash -lc 'source /etc/epistola/restic.env; timeout 30s restic snapshots' >/dev/null 2>&1; then sudo env $REMOTE_ENV init-backup-repo.sh; fi"
+remote "$VM_A_SSH" "if ! sudo env $REMOTE_ENV bash -lc 'source /etc/portablevps/restic.env; timeout 30s restic snapshots' >/dev/null 2>&1; then sudo env $REMOTE_ENV init-backup-repo.sh; fi"
 
 echo "creating full backup on VM A"
 full_backup_output="$(

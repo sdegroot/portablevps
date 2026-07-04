@@ -2,10 +2,10 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.my.proxy;
-  netbirdEnabled = config.my.netbird.enable or false;
-  netbirdName = config.my.netbird.name or config.networking.hostName;
-  netbirdInterface = config.my.netbird.interface or (config.my.cloud.netbirdInterface or "wt0");
+  cfg = config.portablevps.proxy;
+  netbirdEnabled = config.portablevps.netbird.enable or false;
+  netbirdName = config.portablevps.netbird.name or config.networking.hostName;
+  netbirdInterface = config.portablevps.netbird.interface or (config.portablevps.cloud.netbirdInterface or "wt0");
   stagingCaServer = "https://acme-staging-v02.api.letsencrypt.org/directory";
   acmeResolverName =
     if cfg.acme.resolverName != null
@@ -18,7 +18,7 @@ let
     then stagingCaServer
     else "";
   # True when any meaningful proxy sub-option is set. Used to fail evaluation
-  # when a server configures the proxy but forgets my.proxy.enable = true,
+  # when a server configures the proxy but forgets portablevps.proxy.enable = true,
   # which would otherwise leave Traefik and ACME silently inert.
   proxyConfigured =
     cfg.testBackend.enable
@@ -251,17 +251,17 @@ let
     managedZones = cfg.dns.managedZones;
     domains = domainPlanEntries;
   };
-  domainPlanFile = pkgs.writeText "epistola-proxy-domains.json" (builtins.toJSON domainPlan);
-  domainPlanCommand = pkgs.writeShellScriptBin "epistola-proxy-domain-plan" ''
+  domainPlanFile = pkgs.writeText "portablevps-proxy-domains.json" (builtins.toJSON domainPlan);
+  domainPlanCommand = pkgs.writeShellScriptBin "portablevps-proxy-domain-plan" ''
     exec ${pkgs.jq}/bin/jq . ${domainPlanFile}
   '';
 
-  testBackendScript = pkgs.writeText "epistola-proxy-test-backend.py" ''
+  testBackendScript = pkgs.writeText "portablevps-proxy-test-backend.py" ''
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = b"epistola proxy test ok\n"
+            body = b"portablevps proxy test ok\n"
             self.send_response(200)
             self.send_header("content-type", "text/plain")
             self.send_header("content-length", str(len(body)))
@@ -274,7 +274,7 @@ let
     HTTPServer(("127.0.0.1", ${toString cfg.testBackend.port}), Handler).serve_forever()
   '';
 
-  testCertificate = pkgs.runCommand "epistola-proxy-test-certificate"
+  testCertificate = pkgs.runCommand "portablevps-proxy-test-certificate"
     { nativeBuildInputs = [ pkgs.openssl ]; }
     ''
       mkdir -p "$out"
@@ -290,7 +290,7 @@ let
     '';
 in
 {
-  options.my.proxy = {
+  options.portablevps.proxy = {
     enable = lib.mkEnableOption "NetBird-first Traefik proxy";
 
     entryPointName = lib.mkOption {
@@ -332,7 +332,7 @@ in
 
       environmentFile = lib.mkOption {
         type = lib.types.str;
-        default = "/etc/epistola/traefik-acme.env";
+        default = "/etc/portablevps/traefik-acme.env";
         description = "Environment file containing DNS provider credentials for Traefik ACME.";
       };
 
@@ -345,7 +345,7 @@ in
       caServer = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Optional ACME CA directory URL override. Defaults to Let's Encrypt staging only when my.proxy.acme.environment is staging.";
+        description = "Optional ACME CA directory URL override. Defaults to Let's Encrypt staging only when portablevps.proxy.acme.environment is staging.";
       };
 
       resolverName = lib.mkOption {
@@ -365,14 +365,14 @@ in
       acmeDelegatedZone = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "acme.epistola.io";
+        example = "acme.portablevps.io";
         description = "Delegated DNS zone that receives ACME DNS-01 TXT records.";
       };
 
       managedZones = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        example = [ "int.epistola.io" ];
+        example = [ "int.portablevps.io" ];
         description = "DNS zones delegated to the ACME provider where Traefik can create challenge TXT records directly.";
       };
 
@@ -380,7 +380,7 @@ in
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "eu1.netbird.services.";
-        description = "Compatibility alias for my.proxy.dns.publicTarget.";
+        description = "Compatibility alias for portablevps.proxy.dns.publicTarget.";
       };
 
       publicTarget = lib.mkOption {
@@ -399,7 +399,7 @@ in
       netbirdCnameTarget = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "test-vps.epistola.int.";
+        example = "test-vps.portablevps.int.";
         description = "Private NetBird DNS CNAME target. Defaults to the configured NetBird peer name.";
       };
     };
@@ -421,7 +421,7 @@ in
 
       domain = lib.mkOption {
         type = lib.types.str;
-        default = "proxy-test.epistola.int";
+        default = "proxy-test.portablevps.int";
         description = "Hostname routed to the local proxy smoke-test backend.";
       };
 
@@ -444,7 +444,7 @@ in
       assertions = [
         {
           assertion = cfg.enable || !proxyConfigured;
-          message = "my.proxy options are configured but my.proxy.enable is false. Set my.proxy.enable = true or remove the proxy configuration.";
+          message = "portablevps.proxy options are configured but portablevps.proxy.enable is false. Set portablevps.proxy.enable = true or remove the proxy configuration.";
         }
       ];
     }
@@ -454,23 +454,23 @@ in
       assertions = [
         {
           assertion = !cfg.acme.enable || cfg.acme.email != "";
-          message = "my.proxy.acme.email is required when my.proxy.enable is true.";
+          message = "portablevps.proxy.acme.email is required when portablevps.proxy.enable is true.";
         }
         {
           assertion = !cfg.acme.enable || cfg.acme.dnsProvider != "";
-          message = "my.proxy.acme.dnsProvider is required when my.proxy.enable is true.";
+          message = "portablevps.proxy.acme.dnsProvider is required when portablevps.proxy.enable is true.";
         }
         {
           assertion = lib.all (service: service.tlsPassthrough) (lib.attrValues cfg.tcp.services);
-          message = "my.proxy.tcp.services currently supports only tlsPassthrough = true.";
+          message = "portablevps.proxy.tcp.services currently supports only tlsPassthrough = true.";
         }
         {
           assertion = !hasDirectPublicRoutes || cfg.openPublicFirewall;
-          message = "my.proxy.openPublicFirewall must be true when any proxy route has visibility = \"direct-public\".";
+          message = "portablevps.proxy.openPublicFirewall must be true when any proxy route has visibility = \"direct-public\".";
         }
         {
           assertion = !cfg.openPublicFirewall || !hasNonDirectPublicRoutes;
-          message = "my.proxy.openPublicFirewall can only be true when all proxy routes have visibility = \"direct-public\".";
+          message = "portablevps.proxy.openPublicFirewall can only be true when all proxy routes have visibility = \"direct-public\".";
         }
       ];
 
@@ -513,11 +513,11 @@ in
         };
       };
 
-      environment.etc."epistola/proxy-domains.json".source = domainPlanFile;
+      environment.etc."portablevps/proxy-domains.json".source = domainPlanFile;
       environment.systemPackages = [ domainPlanCommand ];
     }
 
-    (lib.mkIf (cfg.acme.enable && !config.my.secrets.allowPrototypeDefaults) {
+    (lib.mkIf (cfg.acme.enable && !config.portablevps.secrets.allowPrototypeDefaults) {
       sops.secrets."traefik/acme-env" = {
         path = cfg.acme.environmentFile;
         owner = "traefik";
@@ -526,8 +526,8 @@ in
       };
     })
 
-    (lib.mkIf (cfg.acme.enable && config.my.secrets.allowPrototypeDefaults) {
-      environment.etc."epistola/traefik-acme.env" = {
+    (lib.mkIf (cfg.acme.enable && config.portablevps.secrets.allowPrototypeDefaults) {
+      environment.etc."portablevps/traefik-acme.env" = {
         mode = "0400";
         text = ''
           # Prototype placeholder. Configure DNS provider credentials before enabling ACME issuance.
@@ -536,9 +536,9 @@ in
     })
 
     (lib.mkIf cfg.testBackend.enable {
-      systemd.services.epistola-proxy-test-backend = {
-        description = "Epistola proxy smoke-test backend";
-        wantedBy = lib.optional (!config.my.restoreMode) "apps.target";
+      systemd.services.portablevps-proxy-test-backend = {
+        description = "portablevps proxy smoke-test backend";
+        wantedBy = lib.optional (!config.portablevps.restoreMode) "apps.target";
         partOf = [ "apps.target" ];
         serviceConfig = {
           Type = "simple";
@@ -549,7 +549,7 @@ in
       };
     })
 
-    (lib.mkIf (netbirdEnabled && !config.my.restoreMode) {
+    (lib.mkIf (netbirdEnabled && !config.portablevps.restoreMode) {
       networking.firewall.interfaces.${netbirdInterface}.allowedTCPPorts = [ cfg.port ];
     })
 
@@ -557,7 +557,7 @@ in
       networking.firewall.allowedTCPPorts = [ cfg.port ];
     })
 
-    (lib.mkIf config.my.restoreMode {
+    (lib.mkIf config.portablevps.restoreMode {
       systemd.services.traefik.wantedBy = lib.mkForce [ ];
     })
     ]))

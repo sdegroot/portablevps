@@ -2,10 +2,10 @@
 { config, lib, postgresPkgs, pkgs, ... }:
 
 let
-  cfg = config.my.postgres;
+  cfg = config.portablevps.postgres;
 in
 {
-  options.my.postgres = {
+  options.portablevps.postgres = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -26,7 +26,7 @@ in
 
     backupRoot = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/epistola-backups/postgres-physical";
+      default = "/var/lib/portablevps-backups/postgres-physical";
       description = "Scratch directory containing the PostgreSQL physical backup chain.";
     };
 
@@ -63,7 +63,7 @@ in
       "d ${cfg.dataRoot} 0755 root root -"
     ];
 
-    my.serviceExposure.services.postgres.netbird.tcp = [
+    portablevps.serviceExposure.services.postgres.netbird.tcp = [
       {
         listenPort = 5432;
         targetHost = "127.0.0.1";
@@ -73,7 +73,7 @@ in
       }
     ];
 
-    my.backups.components.postgres = {
+    portablevps.backups.components.postgres = {
       order = 10;
       paths = [ cfg.backupRoot ];
       clearBeforeRestore = [
@@ -197,7 +197,7 @@ in
           exit 70
         fi
 
-        work_dir="$(mktemp -d /tmp/epistola-pg-combine.XXXXXX)"
+        work_dir="$(mktemp -d /tmp/portablevps-pg-combine.XXXXXX)"
         combined_dir="$work_dir/combined"
         cleanup() {
           rm -rf "$work_dir"

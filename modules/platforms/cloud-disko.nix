@@ -2,7 +2,7 @@
 { config, lib, ... }:
 
 {
-  options.my.cloud.diskDevice = lib.mkOption {
+  options.portablevps.cloud.diskDevice = lib.mkOption {
     type = lib.types.str;
     default = "/dev/sda";
     description = "Primary disk device that nixos-anywhere/disko will partition.";
@@ -11,7 +11,7 @@
   config.disko.devices = {
     disk.main = {
       type = "disk";
-      device = config.my.cloud.diskDevice;
+      device = config.portablevps.cloud.diskDevice;
       content = {
         type = "gpt";
         partitions = {

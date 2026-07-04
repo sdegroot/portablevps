@@ -2,9 +2,9 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.my.serviceExposure;
-  netbirdEnabled = config.my.netbird.enable or false;
-  netbirdInterface = config.my.netbird.interface or (config.my.cloud.netbirdInterface or "wt0");
+  cfg = config.portablevps.serviceExposure;
+  netbirdEnabled = config.portablevps.netbird.enable or false;
+  netbirdInterface = config.portablevps.netbird.interface or (config.portablevps.cloud.netbirdInterface or "wt0");
 
   tcpTargetType = lib.types.submodule {
     options = {
@@ -88,7 +88,7 @@ let
     in
     lib.nameValuePair serviceName {
       description = "Expose ${entry.serviceName} TCP ${toString entry.exposure.listenPort} on Netbird";
-      wantedBy = lib.optional (!config.my.restoreMode) "apps.target";
+      wantedBy = lib.optional (!config.portablevps.restoreMode) "apps.target";
       partOf = [ "apps.target" ];
       after = [
         "netbird-join.service"
@@ -105,7 +105,7 @@ let
     };
 in
 {
-  options.my.serviceExposure.services = lib.mkOption {
+  options.portablevps.serviceExposure.services = lib.mkOption {
     type = lib.types.attrsOf serviceExposureType;
     default = { };
     description = "Network exposure declarations for application services.";

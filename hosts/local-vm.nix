@@ -16,8 +16,8 @@
     ../modules/platforms/qemu-test-access.nix
   ];
 
-  networking.hostName = "epistola-local-vm";
-  my.secrets.allowPrototypeDefaults = true;
+  networking.hostName = "portablevps-local-vm";
+  portablevps.secrets.allowPrototypeDefaults = true;
 
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = false;

@@ -51,7 +51,7 @@ def flake_base(copied_root: Path) -> Path:
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from epistola_cloud.lifecycle import (  # noqa: E402
+from portablevps_cloud.lifecycle import (  # noqa: E402
     LifecycleContext,
     LifecycleError,
     ProviderSpec,
@@ -59,8 +59,8 @@ from epistola_cloud.lifecycle import (  # noqa: E402
     require_delete_confirmation,
     require_role,
 )
-from epistola_cloud.providers import provider_adapter  # noqa: E402
-from epistola_cloud.state import StateStore  # noqa: E402
+from portablevps_cloud.providers import provider_adapter  # noqa: E402
+from portablevps_cloud.state import StateStore  # noqa: E402
 
 
 class CloudError(RuntimeError):
@@ -582,11 +582,11 @@ def install_cloud(
     with tempfile.TemporaryDirectory() as temp:
         tmpdir = Path(temp)
         base = copy_repo_to_temp(tmpdir)
-        override_lines = [f'  my.cloud.diskDevice = "{disk}";']
+        override_lines = [f'  portablevps.cloud.diskDevice = "{disk}";']
         if override_hostname:
             override_lines.append(f'  networking.hostName = "{override_hostname}";')
         if override_netbird_name:
-            override_lines.append(f'  my.netbird.name = "{override_netbird_name}";')
+            override_lines.append(f'  portablevps.netbird.name = "{override_netbird_name}";')
         write_override_file(base, override_lines)
         target_age_dir = tmpdir / "extra-files/etc/sops/age"
         target_age_dir.mkdir(parents=True, exist_ok=True)
@@ -860,13 +860,13 @@ def write_cloud_identity_override(base: Path, *, override_hostname: str, overrid
     if override_hostname:
         override_lines.append(f'  networking.hostName = "{override_hostname}";')
     if override_netbird_name:
-        override_lines.append(f'  my.netbird.name = "{override_netbird_name}";')
+        override_lines.append(f'  portablevps.netbird.name = "{override_netbird_name}";')
     write_override_file(base, override_lines)
 
 
 def write_proxy_smoke_override(base: Path, *, domain: str, visibility: str) -> None:
     write_override_file(base, [
-        "  my.proxy = {",
+        "  portablevps.proxy = {",
         "    enable = true;",
         "    acme.enable = false;",
         "    testBackend = {",
@@ -1078,7 +1078,7 @@ def netbird_upsert_record(token: str, zone_id: str, record: dict) -> str:
 
 
 def proxy_domain_plan(host: str, *, port: str, admin_key: str) -> dict:
-    raw = admin_capture(host, "epistola-proxy-domain-plan", port=port, admin_key=admin_key)
+    raw = admin_capture(host, "portablevps-proxy-domain-plan", port=port, admin_key=admin_key)
     try:
         plan = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -1115,7 +1115,7 @@ def command_proxy_smoke_test(_args: argparse.Namespace) -> None:
 
     ssh_port = env("SSH_PORT", "22")
     admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
-    domain = env("PROXY_DOMAIN", "") or "proxy-test.epistola.int"
+    domain = env("PROXY_DOMAIN", "") or "proxy-test.portablevps.int"
     visibility = env("PROXY_VISIBILITY", "") or "internal"
     public_host = env("PUBLIC_HOST", "")
     public_domain = env("PUBLIC_DOMAIN", "") or domain
@@ -1132,14 +1132,14 @@ def command_proxy_smoke_test(_args: argparse.Namespace) -> None:
 
     print(f"verify: internal https://{domain}/ via {host}", flush=True)
     body = curl_proxy(domain, host)
-    if body != "epistola proxy test ok":
+    if body != "portablevps proxy test ok":
         raise CloudError(f"error: unexpected internal proxy response: {body}", 70)
     print("PASS: internal NetBird proxy route returned expected response", flush=True)
 
     if public_host:
         print(f"verify: public https://{public_domain}/ via {public_host}", flush=True)
         public_body = curl_proxy(public_domain, public_host)
-        if public_body != "epistola proxy test ok":
+        if public_body != "portablevps proxy test ok":
             raise CloudError(f"error: unexpected public proxy response: {public_body}", 70)
         print("PASS: public proxy route returned expected response", flush=True)
     else:
@@ -1153,7 +1153,7 @@ def command_netbird_dns_sync(_args: argparse.Namespace) -> None:
     token = env("NETBIRD_API_TOKEN", "")
     if not token:
         raise CloudError("error: NETBIRD_API_TOKEN is required", 64)
-    zone_domain = env("NETBIRD_DNS_ZONE", "int.epistola.io")
+    zone_domain = env("NETBIRD_DNS_ZONE", "int.portablevps.io")
     zone_name = env("NETBIRD_DNS_ZONE_NAME", zone_domain)
     group_ids = comma_list(env("NETBIRD_DNS_GROUP_IDS", ""))
     ssh_port = env("SSH_PORT", "22")

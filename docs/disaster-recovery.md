@@ -17,9 +17,9 @@ usable previous generation can be booted.
 - **RTO: operator-driven, typically well under an hour for small datasets.**
   Restore requires provisioning or rescue-booting a host, a restore-mode
   install, `restore.sh`, and a profile switch. `pg_combinebackup` replays one
-  backup chain; `my.postgres.backup.maxChainLength` bounds chain length so
+  backup chain; `portablevps.postgres.backup.maxChainLength` bounds chain length so
   restore time stays predictable.
-- Watch `epistola_backup_last_success_timestamp_seconds` from the monitoring
+- Watch `portablevps_backup_last_success_timestamp_seconds` from the monitoring
   server: the real RPO at any moment is the age of the last successful
   backup, not the timer schedule.
 
@@ -123,8 +123,8 @@ restore host by default. Override them when needed:
 ```sh
 mise exec -- task cloud:restore-rehearsal PHASE=restore \
   SERVER=test-vps SOURCE_HOST=1.2.3.4 RESTORE_HOST=5.6.7.8 \
-  RESTORE_HOSTNAME=epistola-restore-a \
-  RESTORE_NETBIRD_NAME=epistola-restore-a \
+  RESTORE_HOSTNAME=portablevps-restore-a \
+  RESTORE_NETBIRD_NAME=portablevps-restore-a \
   ROOT_IDENTITY=.local/ssh/cloud-admin_ed25519 \
   CONFIRM_DESTROY=5.6.7.8
 ```
@@ -151,7 +151,7 @@ The Hetzner + Scaleway path has been validated end to end with restic snapshot
 Use a server-specific restic repository prefix inside an environment bucket:
 
 ```text
-epistola-backups-prod/servers/hetzner-primary/restic/
+portablevps-backups-prod/servers/hetzner-primary/restic/
 ```
 
 For direct restic-to-S3 backups, do not lock the entire live repository if that
@@ -178,30 +178,30 @@ S3-style bucket policies with its own principal format):
       "Sid": "AllowList",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::epistola-backups-prod"
+      "Resource": "arn:aws:s3:::portablevps-backups-prod"
     },
     {
       "Sid": "AllowReadWrite",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/*"
+      "Resource": "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/*"
     },
     {
       "Sid": "AllowLockDelete",
       "Effect": "Allow",
       "Action": "s3:DeleteObject",
-      "Resource": "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/lock/*"
+      "Resource": "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/lock/*"
     },
     {
       "Sid": "DenyBackupDelete",
       "Effect": "Deny",
       "Action": "s3:DeleteObject",
       "Resource": [
-        "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/data/*",
-        "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/snapshots/*",
-        "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/index/*",
-        "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/keys/*",
-        "arn:aws:s3:::epistola-backups-prod/servers/test-vps/restic/config"
+        "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/data/*",
+        "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/snapshots/*",
+        "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/index/*",
+        "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/keys/*",
+        "arn:aws:s3:::portablevps-backups-prod/servers/test-vps/restic/config"
       ]
     }
   ]
@@ -210,7 +210,7 @@ S3-style bucket policies with its own principal format):
 
 This policy is what stops a compromised host from deleting its own backups:
 the host necessarily holds working S3 credentials in
-`/etc/epistola/restic.env`. Without a deny-delete policy, host root can wipe
+`/etc/portablevps/restic.env`. Without a deny-delete policy, host root can wipe
 the repository.
 
 Deny-delete conflicts with the weekly retention job: `restic forget --prune`
@@ -218,10 +218,10 @@ must delete `snapshots/*`, `data/*`, and rewrite `index/*`. Choose one mode
 per repository:
 
 - **Mutable repository** (default): no deny-delete policy, retention enabled
-  (`my.backups.retention.enable = true`). Protect against deletion with
+  (`portablevps.backups.retention.enable = true`). Protect against deletion with
   versioning or replication to a second locked bucket instead.
 - **Append-only repository**: apply the deny-delete policy and set
-  `my.backups.retention.enable = false`. Rotate to a fresh repository
+  `portablevps.backups.retention.enable = false`. Rotate to a fresh repository
   periodically and delete the old one with elevated (non-host) credentials.
 
 If bucket-wide object lock cannot exclude `lock/*`, use a live operational

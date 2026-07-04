@@ -1,7 +1,7 @@
-# Epistola NixOS Infrastructure
+# portablevps NixOS Infrastructure
 
 This repository contains NixOS infrastructure for disposable single-instance
-Epistola servers. The local QEMU flow proves backup and restore. The cloud VPS
+portablevps servers. The local QEMU flow proves backup and restore. The cloud VPS
 flow installs the same server shape onto an existing provider machine.
 
 ## Host Profiles
@@ -19,7 +19,7 @@ Reusable server shapes live in `modules/profiles/*.nix`. Logical servers live
 in `servers/*.nix`; `servers/test-vps.nix` currently selects Hetzner as its
 active placement, sets hostname and NetBird identity to `test-vps`, declares
 the backup repository, and enables the
-persistent internal smoke route at `test.int.epistola.io` with Let's Encrypt
+persistent internal smoke route at `test.int.portablevps.io` with Let's Encrypt
 staging certificates.
 
 ## Cloud VPS Setup
@@ -61,7 +61,7 @@ The required values are:
 - `restic.aws-access-key-id`
 - `restic.aws-secret-access-key`
 - `netbird.setup-key`
-- `traefik/acme-env` when `my.proxy.enable = true`
+- `traefik/acme-env` when `portablevps.proxy.enable = true`
 
 ## Provider Lifecycle
 
@@ -138,7 +138,7 @@ journald logs for rescue-mode diagnostics.
 
 Cloud profiles enable key-only SSH for `admin`, disable root SSH login, and run
 fail2ban for the default `sshd` jail. SSH is normally allowed on the Netbird
-interface only. If Netbird is unhealthy, `epistola-break-glass-ssh.timer`
+interface only. If Netbird is unhealthy, `portablevps-break-glass-ssh.timer`
 temporarily opens public SSH for configured Dutch source ranges, then closes it
 one hour after Netbird recovers. The Dutch source ranges come from a pinned
 country list bundled in the repository
@@ -164,7 +164,7 @@ for hostname and SNI routing on the server itself.
 The proxy module is disabled until a server declares routes:
 
 ```nix
-my.proxy = {
+portablevps.proxy = {
   enable = true;
   acme = {
     email = "ops@example.com";
@@ -185,10 +185,10 @@ my.proxy = {
     visibility = "internal";
   };
   dns = {
-    managedZones = [ "int.epistola.io" ];
-    acmeDelegatedZone = "acme.epistola.io";
+    managedZones = [ "int.portablevps.io" ];
+    acmeDelegatedZone = "acme.portablevps.io";
     publicTarget = "eu1.netbird.services.";
-    netbirdCnameTarget = "test-vps.epistola.int.";
+    netbirdCnameTarget = "test-vps.portablevps.int.";
   };
 };
 ```
@@ -197,7 +197,7 @@ Traefik listens on port 443 and the host firewall opens that port only on the
 NetBird interface by default. Use NetBird Reverse Proxy TLS passthrough for
 public names and NetBird Custom Zones for internal names. Certificates are
 issued per server/service through DNS-01 ACME using sops-managed provider
-credentials at `/etc/epistola/traefik-acme.env`; wildcard certificates are not
+credentials at `/etc/portablevps/traefik-acme.env`; wildcard certificates are not
 the default.
 
 Keep normal DNS at the domain registrar, currently Mijn.host, but do not put an
@@ -217,31 +217,31 @@ delegated zone:
 _acme-challenge.app.example.com. CNAME _acme-challenge.app.example.com.acme.example.com.
 ```
 
-For internal names, delegate a whole namespace such as `int.epistola.io` to
-deSEC once and add it to `my.proxy.dns.managedZones`. Those names do not need
+For internal names, delegate a whole namespace such as `int.portablevps.io` to
+deSEC once and add it to `portablevps.proxy.dns.managedZones`. Those names do not need
 per-host ACME CNAMEs; Traefik writes the challenge TXT records directly in the
 delegated deSEC zone. Keep NetBird API tokens on the deploy machine and sync
 NetBird DNS records from the generated server plan:
 
 ```sh
 NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-dns-sync \
-  HOST=100.85.5.203 NETBIRD_DNS_ZONE=int.epistola.io \
+  HOST=100.85.5.203 NETBIRD_DNS_ZONE=int.portablevps.io \
   NETBIRD_DNS_GROUP_IDS=<netbird-group-id>
 ```
 
 When deSEC shows DNSSEC material for the delegated zone, add the child-zone
 DNSSEC data at Mijn.host only for the delegated ACME zone. Prefer DS format when
 Mijn.host offers it; DNSKEY format is only for provider UIs that compute DS from
-DNSKEY. For `epistola.io`, the parent-zone records are:
+DNSKEY. For `portablevps.io`, the parent-zone records are:
 
 ```dns
-acme.epistola.io. NS <desec-ns-1>
-acme.epistola.io. NS <desec-ns-2>
-acme.epistola.io. DS <key-tag> <algorithm> <digest-type> <digest>
+acme.portablevps.io. NS <desec-ns-1>
+acme.portablevps.io. NS <desec-ns-2>
+acme.portablevps.io. DS <key-tag> <algorithm> <digest-type> <digest>
 ```
 
-Do not paste deSEC's `acme.epistola.io` DNSKEY or DS material into a registrar
-DNSSEC screen for the apex `epistola.io` domain. It belongs to the delegated
+Do not paste deSEC's `acme.portablevps.io` DNSKEY or DS material into a registrar
+DNSSEC screen for the apex `portablevps.io` domain. It belongs to the delegated
 child zone, not the parent zone itself.
 
 Traefik then writes only TXT records in deSEC during DNS-01 validation. Direct
@@ -249,7 +249,7 @@ Mijn.host API use with `dnsProvider = "mijnhost"` is a temporary fallback only,
 because the API key cannot currently be scoped narrowly enough for this server
 template.
 
-Use `my.proxy.acme.environment = "staging"` for test issuance. Staging and
+Use `portablevps.proxy.acme.environment = "staging"` for test issuance. Staging and
 production use separate Traefik resolver names, `dns01-staging` and
 `dns01-production`, so a staging certificate can stay in ACME storage without
 blocking production issuance later.
@@ -263,7 +263,7 @@ mise exec -- task cloud:proxy-smoke-test SERVER=test-vps HOST=100.85.5.203
 ```
 
 That command switches the host with a temporary Traefik route for
-`proxy-test.epistola.int` and verifies HTTPS over the NetBird path. The route
+`proxy-test.portablevps.int` and verifies HTTPS over the NetBird path. The route
 stays active as the current NixOS generation until the next normal switch. To
 also verify the public path, first create a NetBird Reverse Proxy TLS
 passthrough target to the same peer on TCP 443, then pass the public ingress
@@ -411,7 +411,7 @@ The default admin user is `admin` with initial password `dev-password`. Change
 that before using this outside a local prototype.
 
 PostgreSQL and restic secrets are provided through
-`/etc/epistola/postgres.env` and `/etc/epistola/restic.env`. Without
+`/etc/portablevps/postgres.env` and `/etc/portablevps/restic.env`. Without
 `secrets/secrets.yaml`, those files contain prototype defaults. Once an
 encrypted sops file exists, `sops-nix` renders those same paths from decrypted
 secret values during activation. Cloud profiles do not allow prototype defaults.
@@ -456,7 +456,7 @@ PostgreSQL 18 incremental base backups require WAL summarization.
 
 The PostgreSQL NixOS module owns its backup and restore behavior. It registers
 the physical backup scratch path and ordered backup/restore hooks with the
-shared backup orchestrator under `/etc/epistola/backups/`.
+shared backup orchestrator under `/etc/portablevps/backups/`.
 
 Start apps manually after the first switch if needed:
 
@@ -477,14 +477,14 @@ Every host runs node_exporter on port 9100, reachable only over the NetBird
 interface. Monitoring itself is the job of a separate server that scrapes all
 peers through NetBird; application servers only expose metrics. The scheduled
 backup writes textfile metrics to
-`/var/lib/epistola-metrics/textfile/epistola-backup.prom`:
+`/var/lib/portablevps-metrics/textfile/portablevps-backup.prom`:
 
-- `epistola_backup_last_run_timestamp_seconds`
-- `epistola_backup_last_success_timestamp_seconds`
-- `epistola_backup_last_run_failed`
+- `portablevps_backup_last_run_timestamp_seconds`
+- `portablevps_backup_last_success_timestamp_seconds`
+- `portablevps_backup_last_run_failed`
 
-Alert on `epistola_backup_last_run_failed == 1` for immediate failures and on
-`time() - epistola_backup_last_success_timestamp_seconds` exceeding a few
+Alert on `portablevps_backup_last_run_failed == 1` for immediate failures and on
+`time() - portablevps_backup_last_success_timestamp_seconds` exceeding a few
 timer intervals for silent staleness, which also catches a dead timer or an
 unreachable host.
 
@@ -501,11 +501,11 @@ eval "$(scripts/local-s3-env.sh)"
 With QEMU user networking, the VMs reach the host MinIO API at `10.0.2.2:9000`.
 The MinIO container stores object data on the host under `.local/minio/data`.
 The local VM profile writes the matching restic backend configuration to
-`/etc/epistola/restic.env` by default:
+`/etc/portablevps/restic.env` by default:
 
 ```sh
-RESTIC_REPOSITORY=s3:http://10.0.2.2:9000/epistola-dr
-AWS_ACCESS_KEY_ID=epistola
+RESTIC_REPOSITORY=s3:http://10.0.2.2:9000/portablevps-dr
+AWS_ACCESS_KEY_ID=portablevps
 ```
 
 `backup.sh` runs one coordinated restic snapshot from module-registered backup
@@ -525,7 +525,7 @@ Prefer one S3 bucket per environment and one restic repository prefix per
 server:
 
 ```text
-epistola-backups-prod/
+portablevps-backups-prod/
   servers/
     hetzner-primary/
       restic/
@@ -536,7 +536,7 @@ epistola-backups-prod/
 The restic repository URL for that layout is:
 
 ```text
-s3:https://s3.nl-ams.scw.cloud/epistola-backups-prod/servers/hetzner-primary/restic
+s3:https://s3.nl-ams.scw.cloud/portablevps-backups-prod/servers/hetzner-primary/restic
 ```
 
 A bucket per server is simpler to reason about and easier to delete wholesale,
@@ -581,20 +581,20 @@ or operational isolation become easier that way.
 
 `backup.sh` runs hourly. Every backup after the first is a PostgreSQL
 incremental base backup until the chain reaches
-`my.postgres.backup.maxChainLength` (default 24) entries; the next backup is
+`portablevps.postgres.backup.maxChainLength` (default 24) entries; the next backup is
 then a fresh full that starts a new chain and prunes the old chain from the
 local scratch directory. Restore replays one chain with `pg_combinebackup`,
 so this bounds both restore time and the damage a single corrupt chain link
 can do.
 
-A weekly `epistola-backup-maintenance` timer applies the restic retention
-policy (`my.backups.retention`, default 48 hourly / 14 daily / 8 weekly / 12
+A weekly `portablevps-backup-maintenance` timer applies the restic retention
+policy (`portablevps.backups.retention`, default 48 hourly / 14 daily / 8 weekly / 12
 monthly, with prune) and runs `restic check` with a small
-`--read-data-subset` sample (`my.backups.check.readDataSubset`, default 2%).
+`--read-data-subset` sample (`portablevps.backups.check.readDataSubset`, default 2%).
 
 Retention conflicts with strict append-only bucket policies: `restic forget
 --prune` must delete objects. If the repository bucket denies deletes outside
-`lock/`, set `my.backups.retention.enable = false` and rotate repositories
+`lock/`, set `portablevps.backups.retention.enable = false` and rotate repositories
 out of band instead.
 
 Stop MinIO when finished:
@@ -624,7 +624,7 @@ then restore file state and module-owned service state:
 sudo restore.sh
 ```
 
-`restore.sh` refuses to run unless `my.restoreMode=true` or `apps.target` is
+`restore.sh` refuses to run unless `portablevps.restoreMode=true` or `apps.target` is
 inactive. Restore safety checks, path cleanup, and post-restore reconstruction
 come from module-registered restore components. The PostgreSQL component refuses
 to restore while the `postgres-demo` container is running, uses
@@ -648,7 +648,7 @@ VMs:
 ```sh
 VM_A_SSH=admin@vm-a.local \
 VM_B_SSH=admin@vm-b.local \
-REMOTE_REPO=/home/admin/epistola-nix-infra \
+REMOTE_REPO=/home/admin/portablevps-nix-infra \
 tests/test-disaster-recovery.sh
 ```
 
@@ -659,7 +659,7 @@ scripts/local-s3-start.sh
 eval "$(scripts/local-s3-env.sh)"
 VM_A_SSH="-p 2222 admin@localhost" \
 VM_B_SSH="-p 2223 admin@localhost" \
-REMOTE_REPO=/home/admin/epistola-nix-infra \
+REMOTE_REPO=/home/admin/portablevps-nix-infra \
 tests/test-disaster-recovery.sh
 ```
 

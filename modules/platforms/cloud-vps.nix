@@ -2,7 +2,7 @@
 { config, lib, ... }:
 
 {
-  options.my.cloud = {
+  options.portablevps.cloud = {
     providerName = lib.mkOption {
       type = lib.types.str;
       default = "cloud";
@@ -21,7 +21,7 @@
   ];
 
   config = {
-    my.base = {
+    portablevps.base = {
       passwordAuthentication = false;
       adminInitialPassword = null;
       allowedTCPPorts = [ ];
@@ -45,7 +45,7 @@
       enable = true;
       efiSupport = true;
       efiInstallAsRemovable = true;
-      device = config.my.cloud.diskDevice;
+      device = config.portablevps.cloud.diskDevice;
       extraConfig = ''
         serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
         terminal_input console serial
@@ -87,8 +87,8 @@
 
     assertions = [
       {
-        assertion = config.my.base.adminAuthorizedKeyFiles != [ ];
-        message = "Cloud VPS hosts use key-only SSH; set my.base.adminAuthorizedKeyFiles (e.g. from your provisioned cloud admin key).";
+        assertion = config.portablevps.base.adminAuthorizedKeyFiles != [ ];
+        message = "Cloud VPS hosts use key-only SSH; set portablevps.base.adminAuthorizedKeyFiles (e.g. from your provisioned cloud admin key).";
       }
     ];
   };

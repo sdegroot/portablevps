@@ -2,10 +2,10 @@
 # Prints restic/S3 environment exports for QEMU guests to reach host-local MinIO.
 set -euo pipefail
 
-bucket="${MINIO_BUCKET:-epistola-dr}"
+bucket="${MINIO_BUCKET:-portablevps-dr}"
 api_port="${MINIO_API_PORT:-9000}"
-access_key="${MINIO_ROOT_USER:-epistola}"
-secret_key="${MINIO_ROOT_PASSWORD:-epistola-minio-password}"
+access_key="${MINIO_ROOT_USER:-portablevps}"
+secret_key="${MINIO_ROOT_PASSWORD:-portablevps-minio-password}"
 restic_password="${RESTIC_PASSWORD:-dev-password}"
 guest_host="${MINIO_GUEST_HOST:-10.0.2.2}"
 
