@@ -173,6 +173,26 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def per_server_age_key(server_name: str) -> str:
+    return f".local/sops/servers/{server_name}/age-key.txt"
+
+
+def resolve_age_key(server_name: str) -> str:
+    """Age identity shipped to a host so it can decrypt its secrets.
+
+    Prefers a per-server key (.local/sops/servers/<name>/age-key.txt); falls
+    back to the shared bootstrap key for repositories that have not migrated.
+    An explicit SOPS_AGE_KEY_FILE always wins.
+    """
+    explicit = env("SOPS_AGE_KEY_FILE", "")
+    if explicit:
+        return explicit
+    per_server = per_server_age_key(server_name)
+    if repo_path(per_server).is_file():
+        return per_server
+    return ".local/sops/age-key.txt"
+
+
 def provider_env(provider: Provider) -> dict[str, str]:
     local_values = read_env_file(REPO_ROOT / ".local/providers" / f"{provider.name}.env")
     return {
@@ -636,7 +656,7 @@ def command_install(_args: argparse.Namespace) -> None:
         restore_mode=env("RESTORE_MODE", "false"),
         admin_key=env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519"),
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
-        age_key=env("SOPS_AGE_KEY_FILE", ".local/sops/age-key.txt"),
+        age_key=resolve_age_key(deployment.name),
         kexec_flags=kexec_extra_flags(provider),
         override_hostname=env("INSTALL_HOSTNAME", ""),
         override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
@@ -648,7 +668,7 @@ def command_preflight(_args: argparse.Namespace) -> None:
     provider = require_provider(server.provider_name)
     admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
     admin_pubkey = env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub")
-    age_key = env("SOPS_AGE_KEY_FILE", ".local/sops/age-key.txt")
+    age_key = resolve_age_key(server.name)
     check_local_preflight(
         server,
         provider,
@@ -764,7 +784,7 @@ def command_install_created(_args: argparse.Namespace) -> None:
         restore_mode=env("RESTORE_MODE", "false"),
         admin_key=env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519"),
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
-        age_key=env("SOPS_AGE_KEY_FILE", ".local/sops/age-key.txt"),
+        age_key=resolve_age_key(server.name),
         kexec_flags=kexec_extra_flags(provider),
         override_hostname=env("INSTALL_HOSTNAME", ""),
         override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
@@ -807,7 +827,7 @@ def command_smoke_test(_args: argparse.Namespace) -> None:
         restore_mode="false",
         admin_key=admin_key,
         admin_pubkey=admin_pubkey,
-        age_key=env("SOPS_AGE_KEY_FILE", ".local/sops/age-key.txt"),
+        age_key=resolve_age_key(deployment.name),
         kexec_flags=kexec_extra_flags(provider),
     )
 
@@ -1255,7 +1275,7 @@ def command_restore_test(_args: argparse.Namespace) -> None:
         restore_mode="true",
         admin_key=admin_key,
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
-        age_key=env("SOPS_AGE_KEY_FILE", ".local/sops/age-key.txt"),
+        age_key=resolve_age_key(deployment.name),
         kexec_flags=kexec_extra_flags(provider),
         override_hostname=override_hostname,
         override_netbird_name=override_netbird_name,
@@ -1371,6 +1391,28 @@ def command_promote_candidate(_args: argparse.Namespace) -> None:
     )
 
 
+def command_secrets_init_server(_args: argparse.Namespace) -> None:
+    server = selected_server()
+    key_rel = per_server_age_key(server.name)
+    key_path = repo_path(key_rel)
+    if key_path.exists() and not truthy(env("FORCE", "")):
+        raise CloudError(f"error: {key_rel} already exists; set FORCE=1 to replace it", 73)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    if key_path.exists():
+        key_path.unlink()
+    run(["age-keygen", "-o", str(key_path)])
+    os.chmod(key_path, 0o600)
+    recipient = capture(["age-keygen", "-y", str(key_path)])
+    print(f"created per-server age key: {key_rel}", flush=True)
+    print(f"recipient: {recipient}", flush=True)
+    print("next steps:", flush=True)
+    print(f"  1. add the recipient above to .sops.yaml for secrets/{server.name}.yaml", flush=True)
+    print(f"     (keep your operator recipient too so you can still decrypt)", flush=True)
+    print(f"  2. set portablevps.secrets.file = ./secrets/{server.name}.yaml in servers/{server.name}.nix", flush=True)
+    print(f"  3. create or rekey the secrets: sops secrets/{server.name}.yaml", flush=True)
+    print(f"     then: sops updatekeys secrets/{server.name}.yaml", flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -1416,6 +1458,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     netbird_dns = subcommands.add_parser("netbird-dns-sync", help="Sync internal proxy DNS records into NetBird DNS")
     netbird_dns.set_defaults(func=command_netbird_dns_sync)
+
+    secrets_init = subcommands.add_parser("secrets-init-server", help="Generate a per-server age key and print its recipient")
+    secrets_init.set_defaults(func=command_secrets_init_server)
 
     return parser
 

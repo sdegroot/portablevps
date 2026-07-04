@@ -76,10 +76,22 @@ This writes the private key to `.local/ssh/cloud-admin_ed25519` and commits the
 matching public key at `keys/cloud-admin.pub`. The private key stays local
 because `.local/` is ignored.
 
-Cloud installs require encrypted sops secrets. The age recipient is tracked in
-`keys/sops-age.pub`; the private identity stays local at
-`.local/sops/age-key.txt` and is copied to the target during install as
-`/etc/sops/age/keys.txt`.
+Cloud installs require encrypted sops secrets, decrypted on the host with an
+age identity that the CLI ships to `/etc/sops/age/keys.txt` during install.
+
+Prefer a **per-server age key** so a single host compromise does not expose
+every server's secrets:
+
+```sh
+mise exec -- task cloud:secrets-init-server SERVER=<name>
+```
+
+This generates `.local/sops/servers/<name>/age-key.txt` and prints the age
+recipient. Add that recipient (plus your operator recipient) to `.sops.yaml`
+for `secrets/<name>.yaml`, point `portablevps.secrets.file` at that file, and
+`sops updatekeys` it. Install then ships the per-server key automatically; the
+CLI falls back to a shared `.local/sops/age-key.txt` only for repositories that
+have not migrated.
 
 Edit the encrypted values before a real cloud install:
 

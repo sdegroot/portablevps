@@ -169,6 +169,29 @@ class CloudTests(unittest.TestCase):
             "test-vps-restore-203-0-113-10",
         )
 
+    def test_resolve_age_key_prefers_explicit_env(self):
+        with mock.patch.dict(os.environ, {"SOPS_AGE_KEY_FILE": "/custom/key.txt"}, clear=False):
+            self.assertEqual(cloud.resolve_age_key("test-vps"), "/custom/key.txt")
+
+    def test_resolve_age_key_uses_per_server_key_when_present(self):
+        project = Path(self.tempdir.name) / "project"
+        key = project / ".local/sops/servers/test-vps/age-key.txt"
+        key.parent.mkdir(parents=True, exist_ok=True)
+        key.write_text("AGE-SECRET-KEY-TEST\n", encoding="utf-8")
+        with mock.patch.object(cloud, "REPO_ROOT", project):
+            with mock.patch.dict(os.environ, {"SOPS_AGE_KEY_FILE": ""}, clear=False):
+                self.assertEqual(
+                    cloud.resolve_age_key("test-vps"),
+                    ".local/sops/servers/test-vps/age-key.txt",
+                )
+
+    def test_resolve_age_key_falls_back_to_shared_key(self):
+        project = Path(self.tempdir.name) / "empty-project"
+        project.mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(cloud, "REPO_ROOT", project):
+            with mock.patch.dict(os.environ, {"SOPS_AGE_KEY_FILE": ""}, clear=False):
+                self.assertEqual(cloud.resolve_age_key("test-vps"), ".local/sops/age-key.txt")
+
     def test_ssh_args_resolve_relative_identity_from_repo_root(self):
         args = cloud.ssh_args("root@203.0.113.1", port="2222", identity=".local/key")
 
