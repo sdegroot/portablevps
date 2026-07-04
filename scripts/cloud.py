@@ -577,6 +577,42 @@ def copy_repo_to_temp(tmpdir: Path) -> Path:
     return flake_base(tmpdir)
 
 
+def vendor_path_inputs(base: Path, copied_root: Path) -> None:
+    """Make the consumer flake self-contained for remote evaluation.
+
+    In a monorepo the consumer references the tool as `path:../portablevps`.
+    nixos-anywhere --build-on-remote evaluates the flake on the target in pure
+    mode, where that sibling directory does not exist, so it fails with
+    "access to absolute path ... is forbidden". Copy each `path:../<name>`
+    input into the flake tree and rewrite the input to an in-tree relative
+    path so the whole flake travels to the target as one self-contained unit.
+    A standalone consumer (tool pinned from a registry) has no such input and
+    is left unchanged.
+    """
+    flake_file = base / "flake.nix"
+    if not flake_file.is_file():
+        return
+    text = flake_file.read_text(encoding="utf-8")
+    names = sorted(set(re.findall(r"path:\.\./([A-Za-z0-9._-]+)", text)))
+
+    def ignore(_directory: str, entries: list[str]) -> set[str]:
+        return {e for e in entries if e in {".git", ".local", "result"}}
+
+    changed = False
+    for name in names:
+        src = copied_root / name
+        if not src.is_dir():
+            continue
+        shutil.copytree(src, base / ".vendor" / name, dirs_exist_ok=True, ignore=ignore)
+        text = text.replace(f"path:../{name}", f"path:./.vendor/{name}")
+        changed = True
+    if not changed:
+        return
+    flake_file.write_text(text, encoding="utf-8")
+    (base / "flake.lock").unlink(missing_ok=True)
+    run(["nix", "--extra-experimental-features", "nix-command flakes", "flake", "lock", str(base)])
+
+
 def install_cloud(
     deployment: Deployment,
     provider: Provider,
@@ -615,6 +651,8 @@ def install_cloud(
     with tempfile.TemporaryDirectory() as temp:
         tmpdir = Path(temp)
         base = copy_repo_to_temp(tmpdir)
+        # nixos-anywhere evaluates on the target; make the flake self-contained.
+        vendor_path_inputs(base, tmpdir)
         override_lines = [f'  portablevps.cloud.diskDevice = "{disk}";']
         if override_hostname:
             override_lines.append(f'  networking.hostName = "{override_hostname}";')
