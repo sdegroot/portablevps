@@ -127,6 +127,30 @@ printf 'HCLOUD_TOKEN=...\n' > .local/providers/hetzner.env
 chmod 600 .local/providers/hetzner.env
 ```
 
+### Password-manager references
+
+Any operator credential the CLI reads — provider tokens
+(`.local/providers/<provider>.env`) and API tokens such as
+`NETBIRD_API_TOKEN` — may be a **secret reference** instead of a plaintext
+value, resolved at runtime:
+
+```sh
+# .local/providers/hetzner.env
+HCLOUD_TOKEN=op://Private/Hetzner/token     # 1Password (needs the `op` CLI)
+# or
+HCLOUD_TOKEN=env://HCLOUD_TOKEN             # read from the environment
+```
+
+Plain values still work unchanged. 1Password is resolved with `op read`;
+support for another manager (Bitwarden, pass, Vault, ...) is a scheme handler
+registered in `scripts/portablevps_cloud/secrets.py`.
+
+For the host secrets that are encrypted into `secrets/<server>.yaml`, keep them
+in 1Password and fill the sops file with 1Password's own tooling — write a
+template of `op://` references and run `op inject` (or `op run`) before
+`sops --encrypt`. That keeps the password manager as the source of truth
+without the host ever holding a service-account token.
+
 Create a candidate VPS, enable rescue mode, and install onto it:
 
 ```sh

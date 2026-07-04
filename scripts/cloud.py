@@ -60,6 +60,11 @@ from portablevps_cloud.lifecycle import (  # noqa: E402
     require_role,
 )
 from portablevps_cloud.providers import provider_adapter  # noqa: E402
+from portablevps_cloud.secrets import (  # noqa: E402
+    SecretError,
+    resolve_mapping,
+    resolve_secret,
+)
 from portablevps_cloud.state import StateStore  # noqa: E402
 
 
@@ -193,12 +198,20 @@ def resolve_age_key(server_name: str) -> str:
     return ".local/sops/age-key.txt"
 
 
+def secret_env(name: str, default: str = "") -> str:
+    """Read an environment variable, resolving password-manager references
+    (e.g. op://vault/item/field) to their secret value."""
+    return resolve_secret(env(name, default))
+
+
 def provider_env(provider: Provider) -> dict[str, str]:
     local_values = read_env_file(REPO_ROOT / ".local/providers" / f"{provider.name}.env")
-    return {
+    # Provider credentials (e.g. HCLOUD_TOKEN) may be stored as password-manager
+    # references in the provider env file or the environment; resolve them.
+    return resolve_mapping({
         **local_values,
         **os.environ,
-    }
+    })
 
 
 def providers_registry_path() -> Path:
@@ -1170,7 +1183,7 @@ def command_netbird_dns_sync(_args: argparse.Namespace) -> None:
     host = env("HOST", "")
     if not host:
         raise CloudError("error: HOST is required", 64)
-    token = env("NETBIRD_API_TOKEN", "")
+    token = secret_env("NETBIRD_API_TOKEN", "")
     if not token:
         raise CloudError("error: NETBIRD_API_TOKEN is required", 64)
     zone_domain = env("NETBIRD_DNS_ZONE", "int.portablevps.io")
@@ -1474,6 +1487,9 @@ def main() -> int:
         print(str(error), file=sys.stderr)
         return error.exit_code
     except LifecycleError as error:
+        print(str(error), file=sys.stderr)
+        return error.exit_code
+    except SecretError as error:
         print(str(error), file=sys.stderr)
         return error.exit_code
     except subprocess.CalledProcessError as error:

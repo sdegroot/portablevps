@@ -16,7 +16,7 @@ tasks:
     desc: Run shell syntax, Python, and Nix flake checks
     cmds:
       - bash -n scripts/*.sh scripts/lib/*.sh tests/test-disaster-recovery.sh
-      - python3 -m py_compile scripts/cloud.py tests/test_cloud.py
+      - python3 -m py_compile scripts/cloud.py scripts/portablevps_cloud/*.py tests/test_cloud.py tests/test_secrets.py
       - python3 -m unittest discover -s tests -p 'test_*.py'
       - nix --extra-experimental-features 'nix-command flakes' flake check
 
