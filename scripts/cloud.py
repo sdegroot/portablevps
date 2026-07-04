@@ -638,6 +638,11 @@ def install_cloud(
             f"error: missing sops age key: {repo_path(age_key)}\nrun the documented secrets bootstrap before installing cloud hosts",
             66,
         )
+    if disk.strip() in ("", "auto"):
+        disk = detect_disk(target, port=ssh_port, identity=root_identity)
+        if not disk:
+            raise CloudError(f"error: could not detect an install disk on {target}; set DISK=/dev/...", 66)
+        print(f"detected install disk: {disk}", flush=True)
     require_disk_path(disk)
     verify_install_disk(
         target,
@@ -707,7 +712,7 @@ def command_install(_args: argparse.Namespace) -> None:
         deployment,
         provider,
         target=env("TARGET", ""),
-        disk=env_or("DISK", provider.default_disk),
+        disk=env("DISK", ""),
         ssh_port=env("SSH_PORT", "22"),
         root_identity=env("ROOT_IDENTITY", ""),
         restore_mode=env("RESTORE_MODE", "false"),
@@ -795,7 +800,7 @@ def command_adopt(_args: argparse.Namespace) -> None:
         server,
         provider,
         target=f"{login_user}@{host}",
-        disk=env_or("DISK", provider.default_disk),
+        disk=env("DISK", ""),
         ssh_port=ssh_port,
         root_identity=admin_key,
         restore_mode=env("RESTORE_MODE", "false"),
@@ -923,7 +928,7 @@ def command_install_created(_args: argparse.Namespace) -> None:
         server,
         provider,
         target=provider_target(provider, host),
-        disk=env_or("DISK", provider.default_disk),
+        disk=env("DISK", ""),
         ssh_port=env("SSH_PORT", "22"),
         root_identity=env("ROOT_IDENTITY", ""),
         restore_mode=env("RESTORE_MODE", "false"),

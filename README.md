@@ -186,12 +186,12 @@ mise exec -- task cloud:install SERVER=test-vps TARGET=root@1.2.3.4 DISK=/dev/sd
 local admin and sops keys, flake evaluation, and, when `HOST` or `TARGET` is
 set, rescue SSH plus disk discovery. `TARGET` is the rescue or temporary Linux
 SSH target. The server selects its active provider placement; `test-vps` uses
-Hetzner. `DISK` is the disk that will be
-partitioned and formatted by disko; for Hetzner it defaults to `/dev/sda`.
-Installs verify that the chosen disk actually exists on the target before
-anything is wiped. When the target has more than one disk, automatic
-detection refuses to choose and the provider default is rejected; an explicit
-`DISK=/dev/...` is required.
+Hetzner. `DISK` is the disk that will be partitioned and formatted by disko.
+**`DISK` is optional**: when omitted, the installer probes the target and uses
+its single disk (whatever it is named). If the target has more than one disk,
+it refuses to guess and requires an explicit `DISK=/dev/...` so it can never
+wipe the wrong one. Either way it verifies the disk exists on the target
+before anything is wiped.
 
 ### Adopting an existing host
 
@@ -201,19 +201,20 @@ key — `cloud:adopt` bootstraps your admin key onto the host and then reinstall
 it in a single step:
 
 ```sh
-# root + password (e.g. a freshly created VPS)
+# root + password (e.g. a freshly created VPS); DISK auto-detected
 mise exec -- task cloud:adopt SERVER=leaseweb-1 HOST=1.2.3.4 \
-  CONFIRM_DESTROY=1.2.3.4 PASSWORD=... DISK=/dev/sda
+  CONFIRM_DESTROY=1.2.3.4 PASSWORD=...
 
 # root + a provider-issued initial private key
 mise exec -- task cloud:adopt SERVER=leaseweb-1 HOST=1.2.3.4 \
-  CONFIRM_DESTROY=1.2.3.4 INITIAL_KEY=/path/to/key DISK=/dev/sda
+  CONFIRM_DESTROY=1.2.3.4 INITIAL_KEY=/path/to/key
 ```
 
 `adopt` appends `keys/cloud-admin.pub` to the login user's `authorized_keys`
 (deduplicated), then runs the normal install over key auth. `LOGIN_USER`
 defaults to `root` (the install needs root on the target). `PASSWORD` may be a
-password-manager reference such as `op://vault/item/field`. `CONFIRM_DESTROY`
+password-manager reference such as `op://vault/item/field`. `DISK` is optional
+(auto-detected; pass it only for multi-disk hosts). `CONFIRM_DESTROY`
 must equal `HOST`, because adoption reinstalls — it wipes the disk. Define the
 server and its secrets first (`servers/<name>.nix`,
 `task cloud:secrets-init-server`, `task secrets:edit`), exactly as for a normal

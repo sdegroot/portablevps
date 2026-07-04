@@ -111,7 +111,10 @@ class CloudTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"DISK": ""}, clear=False):
             self.assertEqual(cloud.env_or("DISK", "auto"), "auto")
 
-    def test_install_uses_provider_disk_when_taskfile_passes_empty_disk(self):
+    def test_install_passes_empty_disk_for_autodetection(self):
+        # When DISK is unset, the command passes "" so install_cloud probes the
+        # target and auto-detects the single disk (rather than assuming a
+        # provider default).
         env = {
             **self.server_env,
             "SERVER": "test-vps",
@@ -123,7 +126,31 @@ class CloudTests(unittest.TestCase):
             with mock.patch.object(cloud, "install_cloud") as install_cloud:
                 cloud.command_install(mock.Mock())
 
-        self.assertEqual(install_cloud.call_args.kwargs["disk"], "/dev/sda")
+        self.assertEqual(install_cloud.call_args.kwargs["disk"], "")
+
+    def test_install_cloud_autodetects_disk_when_empty(self):
+        provider = cloud.Provider("hetzner", {"defaultDisk": "/dev/sda"})
+        deployment = cloud.Deployment("test-vps", {"provider": "hetzner"})
+        keydir = Path(self.tempdir.name)
+        (keydir / "admin").write_text("k", encoding="utf-8")
+        (keydir / "admin.pub").write_text("ssh-ed25519 AAA test", encoding="utf-8")
+        (keydir / "age.txt").write_text("AGE-SECRET-KEY", encoding="utf-8")
+        with mock.patch.object(cloud, "detect_disk", return_value="/dev/vda") as detect:
+            with mock.patch.object(cloud, "verify_install_disk"):
+                with mock.patch.object(cloud, "run"):
+                    with mock.patch.object(cloud, "copy_repo_to_temp", return_value=Path(self.tempdir.name)):
+                        with mock.patch.object(cloud, "vendor_path_inputs"):
+                            cloud.install_cloud(
+                                deployment, provider,
+                                target="root@203.0.113.20", disk="",
+                                ssh_port="22", root_identity="",
+                                restore_mode="false",
+                                admin_key=str(keydir / "admin"),
+                                admin_pubkey=str(keydir / "admin.pub"),
+                                age_key=str(keydir / "age.txt"),
+                                kexec_flags="",
+                            )
+        detect.assert_called_once()
 
     def test_adopt_requires_host(self):
         env = {**self.server_env, "SERVER": "test-vps", "HOST": ""}
