@@ -652,6 +652,12 @@ def install_cloud(
             args.extend(["-i", str(repo_path(root_identity))])
         if kexec_flags:
             args.extend(["--kexec-extra-flags", kexec_flags])
+        # Build the system closure on the target rather than the operator
+        # machine. Required when the operator's architecture differs from the
+        # server's (e.g. an aarch64 macOS laptop installing an x86_64 VPS).
+        # Set BUILD_ON_REMOTE=false to build locally instead.
+        if env("BUILD_ON_REMOTE", "true") != "false":
+            args.append("--build-on-remote")
         args.append(target)
         run(args)
 

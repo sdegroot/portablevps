@@ -12,7 +12,7 @@ in
   };
 
   config = {
-    environment.etc."my/restore-mode".text =
+    environment.etc."portablevps/restore-mode".text =
       if cfg.restoreMode then "true\n" else "false\n";
 
     system.activationScripts.restoreModeRuntimeMarker.text =

@@ -41,6 +41,15 @@ mount_host_repo() {
       sudo mount -t 9p -o trans=virtio,version=9p2000.L hostshare '$REMOTE_REPO'
     fi
     test -f '$REMOTE_REPO/flake.nix'
+    # The shared repo is the portablevps flake directory, which is not a git
+    # root, so nix would copy the whole tree into the store, including the
+    # multi-GB .local test scratch (VM images, ISO, MinIO data) and fill the
+    # guest disk. Mask .local with an empty bind mount so the flake copy stays
+    # lean. (.local is nothing the flake build needs.)
+    if [ -d '$REMOTE_REPO/.local' ] && ! findmnt '$REMOTE_REPO/.local' >/dev/null 2>&1; then
+      sudo mkdir -p /run/empty-local
+      sudo mount --bind /run/empty-local '$REMOTE_REPO/.local'
+    fi
   "
 }
 
