@@ -39,7 +39,9 @@
         postgres = ./modules/services/postgres;
         containerState = ./modules/services/container-state.nix;
         podman = ./modules/runtime/podman.nix;
+        network = ./modules/networking/network.nix;
         netbird = ./modules/networking/netbird.nix;
+        tailscale = ./modules/networking/tailscale.nix;
         proxy = ./modules/networking/proxy.nix;
         serviceExposure = ./modules/networking/service-exposure.nix;
         breakGlassSsh = ./modules/networking/break-glass-ssh.nix;

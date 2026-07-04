@@ -9,7 +9,7 @@ in
     ../modules/system/base.nix
     ../modules/platforms/cloud-vps.nix
     ../modules/networking/break-glass-ssh.nix
-    ../modules/networking/netbird.nix
+    ../modules/networking/network.nix
     ../modules/system/monitoring.nix
     ../modules/system/scripts.nix
   ];
@@ -18,14 +18,11 @@ in
     providerName = providerName;
     netbirdInterface = netbirdInterface;
   };
-  portablevps.netbird = {
+  portablevps.network = {
     enable = true;
-    interface = netbirdInterface;
+    backend = "netbird";
   };
-  portablevps.breakGlassSsh = {
-    enable = true;
-    netbirdInterface = netbirdInterface;
-  };
+  portablevps.breakGlassSsh.enable = true;
   portablevps.secrets.allowPrototypeDefaults = false;
 
   system.stateVersion = "25.05";

@@ -3,8 +3,8 @@
 
 let
   cfg = config.portablevps.monitoring;
-  netbirdEnabled = config.portablevps.netbird.enable or false;
-  netbirdInterface = config.portablevps.netbird.interface or (config.portablevps.cloud.netbirdInterface or "wt0");
+  netbirdEnabled = config.portablevps.network.enable or false;
+  netbirdInterface = config.portablevps.network.interface;
   backupsPresent = (config.portablevps.backups.components or { }) != { };
 
   # Writes the backup outcome as node_exporter textfile metrics. On failure the
@@ -47,6 +47,8 @@ let
   '';
 in
 {
+  imports = [ ../networking/network.nix ];
+
   options.portablevps.monitoring = {
     enable = lib.mkOption {
       type = lib.types.bool;

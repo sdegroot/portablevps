@@ -586,7 +586,7 @@ def install_cloud(
         if override_hostname:
             override_lines.append(f'  networking.hostName = "{override_hostname}";')
         if override_netbird_name:
-            override_lines.append(f'  portablevps.netbird.name = "{override_netbird_name}";')
+            override_lines.append(f'  portablevps.network.name = "{override_netbird_name}";')
         write_override_file(base, override_lines)
         target_age_dir = tmpdir / "extra-files/etc/sops/age"
         target_age_dir.mkdir(parents=True, exist_ok=True)
@@ -860,7 +860,7 @@ def write_cloud_identity_override(base: Path, *, override_hostname: str, overrid
     if override_hostname:
         override_lines.append(f'  networking.hostName = "{override_hostname}";')
     if override_netbird_name:
-        override_lines.append(f'  portablevps.netbird.name = "{override_netbird_name}";')
+        override_lines.append(f'  portablevps.network.name = "{override_netbird_name}";')
     write_override_file(base, override_lines)
 
 

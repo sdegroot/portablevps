@@ -1,14 +1,18 @@
-# Installs and joins Netbird using sops-managed setup credentials.
+# NetBird backend for portablevps.network. Installs and joins NetBird using
+# sops-managed setup credentials, and reports the contract values
+# (interface, joinUnit) that the rest of portablevps consumes.
 { config, lib, pkgs, netbirdPkgs ? pkgs, ... }:
 
 let
-  cfg = config.portablevps.netbird;
+  net = config.portablevps.network;
+  cfg = net.netbird;
+  active = net.enable && net.backend == "netbird";
   netbirdPackage = netbirdPkgs.netbird;
   netbirdDaemon = pkgs.writeShellScript "netbird-daemon" ''
     exec ${netbirdPackage}/bin/netbird \
       --management-url ${lib.escapeShellArg cfg.managementUrl} \
       --admin-url ${lib.escapeShellArg cfg.adminUrl} \
-      --hostname ${lib.escapeShellArg cfg.name} \
+      --hostname ${lib.escapeShellArg net.name} \
       --log-file console \
       service run
   '';
@@ -21,50 +25,51 @@ let
     done
 
     if [ ! -S /run/netbird/sock ]; then
-      echo "error: Netbird daemon socket did not become ready" >&2
+      echo "error: NetBird daemon socket did not become ready" >&2
       exit 1
     fi
 
     exec ${netbirdPackage}/bin/netbird \
       --management-url ${lib.escapeShellArg cfg.managementUrl} \
       --admin-url ${lib.escapeShellArg cfg.adminUrl} \
-      --hostname ${lib.escapeShellArg cfg.name} \
-      up --setup-key-file ${config.sops.secrets."netbird/setup-key".path}
+      --hostname ${lib.escapeShellArg net.name} \
+      up --setup-key-file ${config.sops.secrets.${cfg.setupKeySecret}.path}
   '';
 in
 {
-  options.portablevps.netbird = {
-    enable = lib.mkEnableOption "Netbird auto-join";
-
+  options.portablevps.network.netbird = {
     interface = lib.mkOption {
       type = lib.types.str;
       default = config.portablevps.cloud.netbirdInterface or "wt0";
-      description = "Expected Netbird WireGuard interface.";
-    };
-
-    name = lib.mkOption {
-      type = lib.types.str;
-      default = config.networking.hostName;
-      description = "Explicit Netbird peer name for this server.";
+      description = "Expected NetBird WireGuard interface.";
     };
 
     managementUrl = lib.mkOption {
       type = lib.types.str;
       default = "https://api.netbird.io:443";
-      description = "Netbird management service URL.";
+      description = "NetBird management service URL.";
     };
 
     adminUrl = lib.mkOption {
       type = lib.types.str;
       default = "https://app.netbird.io:443";
-      description = "Netbird admin panel URL.";
+      description = "NetBird admin panel URL.";
+    };
+
+    setupKeySecret = lib.mkOption {
+      type = lib.types.str;
+      default = "netbird/setup-key";
+      description = "sops secret key holding the NetBird setup key.";
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf active {
+    portablevps.network.interface = lib.mkDefault cfg.interface;
+    portablevps.network.joinUnit = "netbird-join.service";
+
     environment.systemPackages = [ netbirdPackage ];
 
-    sops.secrets."netbird/setup-key" = { };
+    sops.secrets.${cfg.setupKeySecret} = { };
 
     systemd.tmpfiles.rules = [
       "d /var/lib/netbird 0700 root root -"
@@ -72,7 +77,7 @@ in
     ];
 
     systemd.services.netbird = {
-      description = "Netbird daemon";
+      description = "NetBird daemon";
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
@@ -86,7 +91,7 @@ in
     };
 
     systemd.services.netbird-join = {
-      description = "Join Netbird network";
+      description = "Join NetBird network";
       wantedBy = [ "multi-user.target" ];
       after = [ "netbird.service" ];
       requires = [ "netbird.service" ];

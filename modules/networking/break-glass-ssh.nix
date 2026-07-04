@@ -1,8 +1,10 @@
-# Temporarily opens public SSH from approved source ranges when Netbird access is unhealthy.
+# Temporarily opens public SSH from approved source ranges when mesh VPN access
+# is unhealthy.
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.portablevps.breakGlassSsh;
+  net = config.portablevps.network;
   chain = "EPIS_BGLASS_SSH";
   countrySet4 = "EPIS_NL4";
   stateDir = "/var/lib/portablevps-break-glass-ssh";
@@ -24,7 +26,8 @@ let
 
     chain=${lib.escapeShellArg chain}
     country_set4=${lib.escapeShellArg countrySet4}
-    iface=${lib.escapeShellArg cfg.netbirdInterface}
+    iface=${lib.escapeShellArg net.interface}
+    join_unit=${lib.escapeShellArg net.joinUnit}
     port=${toString cfg.port}
     close_after_seconds=${toString cfg.closeAfterSeconds}
     state_dir=${lib.escapeShellArg stateDir}
@@ -130,14 +133,14 @@ let
       echo "public SSH break-glass is closed"
     }
 
-    netbird_healthy() {
-      "$systemctl" is-active --quiet netbird-join.service \
+    vpn_healthy() {
+      "$systemctl" is-active --quiet "$join_unit" \
         && "$ip" -4 -o addr show dev "$iface" >/dev/null 2>&1
     }
 
     now="$("$date" +%s)"
 
-    if ! netbird_healthy; then
+    if ! vpn_healthy; then
       rm -f "$recovered_at_state"
       open_public_ssh
       exit 0
@@ -163,14 +166,10 @@ let
   '';
 in
 {
+  imports = [ ./network.nix ];
+
   options.portablevps.breakGlassSsh = {
     enable = lib.mkEnableOption "automatic public SSH break-glass access";
-
-    netbirdInterface = lib.mkOption {
-      type = lib.types.str;
-      default = config.portablevps.cloud.netbirdInterface or "wt0";
-      description = "Netbird interface that normally carries SSH access.";
-    };
 
     port = lib.mkOption {
       type = lib.types.port;
@@ -219,10 +218,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    networking.firewall.interfaces.${cfg.netbirdInterface}.allowedTCPPorts = [ cfg.port ];
+    networking.firewall.interfaces.${net.interface}.allowedTCPPorts = [ cfg.port ];
 
     systemd.services.portablevps-break-glass-ssh = {
-      description = "Open public SSH temporarily when Netbird is unhealthy";
+      description = "Open public SSH temporarily when mesh VPN is unhealthy";
       after = [ "network-online.target" "firewall.service" ];
       wants = [ "network-online.target" ];
       path = [

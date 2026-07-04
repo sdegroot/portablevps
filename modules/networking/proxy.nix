@@ -3,9 +3,9 @@
 
 let
   cfg = config.portablevps.proxy;
-  netbirdEnabled = config.portablevps.netbird.enable or false;
-  netbirdName = config.portablevps.netbird.name or config.networking.hostName;
-  netbirdInterface = config.portablevps.netbird.interface or (config.portablevps.cloud.netbirdInterface or "wt0");
+  netbirdEnabled = config.portablevps.network.enable or false;
+  netbirdName = config.portablevps.network.name or config.networking.hostName;
+  netbirdInterface = config.portablevps.network.interface;
   stagingCaServer = "https://acme-staging-v02.api.letsencrypt.org/directory";
   acmeResolverName =
     if cfg.acme.resolverName != null
@@ -290,6 +290,8 @@ let
     '';
 in
 {
+  imports = [ ./network.nix ];
+
   options.portablevps.proxy = {
     enable = lib.mkEnableOption "NetBird-first Traefik proxy";
 

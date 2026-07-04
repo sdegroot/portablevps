@@ -3,8 +3,10 @@
 
 let
   cfg = config.portablevps.serviceExposure;
-  netbirdEnabled = config.portablevps.netbird.enable or false;
-  netbirdInterface = config.portablevps.netbird.interface or (config.portablevps.cloud.netbirdInterface or "wt0");
+  net = config.portablevps.network;
+  netbirdEnabled = net.enable or false;
+  netbirdInterface = net.interface;
+  joinUnit = net.joinUnit;
 
   tcpTargetType = lib.types.submodule {
     options = {
@@ -91,10 +93,10 @@ let
       wantedBy = lib.optional (!config.portablevps.restoreMode) "apps.target";
       partOf = [ "apps.target" ];
       after = [
-        "netbird-join.service"
+        joinUnit
       ] ++ entry.exposure.afterServices;
       wants = [
-        "netbird-join.service"
+        joinUnit
       ] ++ entry.exposure.wantsServices;
       serviceConfig = {
         Type = "simple";
@@ -105,6 +107,8 @@ let
     };
 in
 {
+  imports = [ ./network.nix ];
+
   options.portablevps.serviceExposure.services = lib.mkOption {
     type = lib.types.attrsOf serviceExposureType;
     default = { };

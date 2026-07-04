@@ -239,7 +239,7 @@ class CloudTests(unittest.TestCase):
             override_text = (tmpdir / "cloud-override.nix").read_text(encoding="utf-8")
 
         self.assertIn('networking.hostName = "restore-a";', override_text)
-        self.assertIn('portablevps.netbird.name = "restore-peer-a";', override_text)
+        self.assertIn('portablevps.network.name = "restore-peer-a";', override_text)
 
     def test_write_proxy_smoke_override(self):
         with tempfile.TemporaryDirectory() as temp:
