@@ -125,6 +125,67 @@ class CloudTests(unittest.TestCase):
 
         self.assertEqual(install_cloud.call_args.kwargs["disk"], "/dev/sda")
 
+    def test_adopt_requires_host(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_adopt(mock.Mock())
+        self.assertIn("HOST", str(raised.exception))
+
+    def test_adopt_requires_destroy_confirmation(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": "203.0.113.50", "CONFIRM_DESTROY": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_adopt(mock.Mock())
+        self.assertIn("CONFIRM_DESTROY", str(raised.exception))
+
+    def test_adopt_bootstraps_then_installs(self):
+        env = {
+            **self.server_env,
+            "SERVER": "test-vps",
+            "HOST": "203.0.113.50",
+            "CONFIRM_DESTROY": "203.0.113.50",
+            "PASSWORD": "s3cret",
+            "DISK": "/dev/sda",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "ensure_admin_keypair"):
+                with mock.patch.object(cloud, "bootstrap_admin_key") as boot:
+                    with mock.patch.object(cloud, "install_cloud") as install_cloud:
+                        cloud.command_adopt(mock.Mock())
+
+        self.assertEqual(boot.call_args.kwargs["password"], "s3cret")
+        self.assertEqual(boot.call_args.args[0], "203.0.113.50")
+        self.assertEqual(install_cloud.call_args.kwargs["target"], "root@203.0.113.50")
+        self.assertEqual(install_cloud.call_args.kwargs["root_identity"], ".local/ssh/cloud-admin_ed25519")
+        self.assertEqual(install_cloud.call_args.kwargs["disk"], "/dev/sda")
+
+    def test_bootstrap_admin_key_password_uses_sshpass(self):
+        pub = Path(self.tempdir.name) / "admin.pub"
+        pub.write_text("ssh-ed25519 AAA test\n", encoding="utf-8")
+        with mock.patch.object(cloud.shutil, "which", return_value="/usr/bin/sshpass"):
+            with mock.patch.object(cloud.subprocess, "run") as run:
+                cloud.bootstrap_admin_key(
+                    "203.0.113.50", login_user="root", ssh_port="22",
+                    password="pw", initial_key="", admin_pubkey=str(pub),
+                )
+        self.assertEqual(run.call_args.args[0][0], "sshpass")
+        self.assertEqual(run.call_args.kwargs["env"]["SSHPASS"], "pw")
+        self.assertEqual(run.call_args.kwargs["input"], "ssh-ed25519 AAA test")
+
+    def test_bootstrap_admin_key_initial_key_uses_ssh_identity(self):
+        pub = Path(self.tempdir.name) / "admin.pub"
+        pub.write_text("ssh-ed25519 AAA test\n", encoding="utf-8")
+        with mock.patch.object(cloud.subprocess, "run") as run:
+            cloud.bootstrap_admin_key(
+                "203.0.113.50", login_user="rescue", ssh_port="2222",
+                password="", initial_key="/tmp/initial_key", admin_pubkey=str(pub),
+            )
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("-i", argv)
+        self.assertIn("rescue@203.0.113.50", argv)
+
     def test_disk_path_validation_accepts_device_paths_only(self):
         cloud.require_disk_path("/dev/sda")
         cloud.require_disk_path("/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive")

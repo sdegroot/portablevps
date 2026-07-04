@@ -720,6 +720,94 @@ def command_install(_args: argparse.Namespace) -> None:
     )
 
 
+def sshpass_prefix() -> list[str]:
+    """sshpass invocation prefix; falls back to running it from nixpkgs so
+    operators do not have to install sshpass separately."""
+    if shutil.which("sshpass") is not None:
+        return ["sshpass", "-e"]
+    return ["nix", "--extra-experimental-features", "nix-command flakes", "run", "nixpkgs#sshpass", "--", "-e"]
+
+
+def bootstrap_admin_key(
+    host: str,
+    *,
+    login_user: str,
+    ssh_port: str,
+    password: str,
+    initial_key: str,
+    admin_pubkey: str,
+) -> None:
+    """Install the cloud admin public key onto an existing host using a one-off
+    credential (a password, or a provider-issued initial private key), so the
+    reinstall can proceed over key auth. The key is deduplicated and appended
+    to the login user's authorized_keys."""
+    pub_path = repo_path(admin_pubkey)
+    if not pub_path.is_file():
+        raise CloudError(f"error: admin public key not found: {pub_path}; run: task cloud:keygen", 66)
+    pubkey = pub_path.read_text(encoding="utf-8").strip()
+    target = f"{login_user}@{host}"
+    remote_script = (
+        "set -eu; mkdir -p ~/.ssh; chmod 700 ~/.ssh; "
+        "touch ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; "
+        'key="$(cat)"; '
+        'grep -qxF "$key" ~/.ssh/authorized_keys || printf "%s\\n" "$key" >> ~/.ssh/authorized_keys'
+    )
+    ssh_opts = [
+        "-p", ssh_port,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=20",
+    ]
+    env_vars = dict(os.environ)
+    if password:
+        cmd = sshpass_prefix() + ["ssh"] + ssh_opts + [target, remote_script]
+        env_vars["SSHPASS"] = password
+    elif initial_key:
+        cmd = ["ssh", "-i", str(repo_path(initial_key)), "-o", "IdentitiesOnly=yes"] + ssh_opts + [target, remote_script]
+    else:
+        cmd = ["ssh"] + ssh_opts + [target, remote_script]
+    print(f"adopt: installing admin key on {target}", flush=True)
+    subprocess.run(cmd, input=pubkey, text=True, check=True, env=env_vars)
+
+
+def command_adopt(_args: argparse.Namespace) -> None:
+    server = selected_server()
+    provider = require_provider(server.provider_name)
+    host = env("HOST", "")
+    if not host:
+        raise CloudError("error: HOST is required", 64)
+    require_destroy_confirmation(host, env("CONFIRM_DESTROY", ""))
+    login_user = env_or("LOGIN_USER", "root")
+    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    admin_pubkey = env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub")
+    ssh_port = env("SSH_PORT", "22")
+
+    ensure_admin_keypair(admin_key, admin_pubkey)
+    bootstrap_admin_key(
+        host,
+        login_user=login_user,
+        ssh_port=ssh_port,
+        password=secret_env("PASSWORD", ""),
+        initial_key=env("INITIAL_KEY", ""),
+        admin_pubkey=admin_pubkey,
+    )
+    install_cloud(
+        server,
+        provider,
+        target=f"{login_user}@{host}",
+        disk=env_or("DISK", provider.default_disk),
+        ssh_port=ssh_port,
+        root_identity=admin_key,
+        restore_mode=env("RESTORE_MODE", "false"),
+        admin_key=admin_key,
+        admin_pubkey=admin_pubkey,
+        age_key=resolve_age_key(server.name),
+        kexec_flags=kexec_extra_flags(provider),
+        override_hostname=env("INSTALL_HOSTNAME", ""),
+        override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
+    )
+
+
 def command_preflight(_args: argparse.Namespace) -> None:
     server = selected_server()
     provider = require_provider(server.provider_name)
@@ -1476,6 +1564,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     install = subcommands.add_parser("install", help="Install a logical server VPS with nixos-anywhere")
     install.set_defaults(func=command_install)
+
+    adopt = subcommands.add_parser("adopt", help="Bootstrap the admin key onto an existing host and reinstall it")
+    adopt.set_defaults(func=command_adopt)
 
     lifecycle_preflight = subcommands.add_parser("lifecycle-preflight", help="Validate provider lifecycle credentials and local state")
     lifecycle_preflight.set_defaults(func=command_lifecycle_preflight)
