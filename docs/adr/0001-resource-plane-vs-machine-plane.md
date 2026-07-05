@@ -44,28 +44,51 @@ should not build a NixOS closure.
 - Reuse existing providers (Hetzner, Scaleway, NetBird, deSEC) instead of
   hand-writing and maintaining API clients.
 - Keep the tool approachable — avoid piling on mental models for consumers.
+- **How large and ambitious will the resource plane become?** This is the
+  pivotal variable. A deliberately small, capped set of resource types favours
+  owning a minimal engine; a growing set (access policies, buckets, more
+  providers, provider firewalls, DNS) favours an existing engine that amortises
+  that work across a maintained ecosystem.
 
 ## Options considered
 
-1. **Stay fully bespoke** (hand-rolled Python adapters + JSON state).
-   - `+` no new dependencies, one language, self-contained appliance.
-   - `−` keep reinventing resource management and inheriting its bugs; every new
-     resource (access policies, buckets, more providers) is more hand-written
-     API + state code, exactly where it gets hardest.
+1. **Keep the current ad-hoc state** (`.local/cloud-state` JSON grown
+   organically, plus per-command reconcile loops).
+   - `+` no new dependencies; already written.
+   - `−` not a real engine: no drift detection, ordering, or destroy; already
+     the source of the bugs above. This is the status quo, not a design.
 
-2. **Adopt OpenTofu directly (HCL)** for the resource plane.
+2. **Build our own reconciliation engine, deliberately** — desired state from
+   server defs, observed state from provider APIs, a diff, apply, and recorded
+   state, with per-resource adapters, all in Python.
+   - `+` fully ours; one language; self-contained (no HCL / state backend /
+     Terranix dependency); can be tailored to a small resource set and stay
+     lean.
+   - `−` the hard parts of a state engine — drift detection, dependency
+     ordering, partial-failure recovery, locking, importing/moving existing
+     resources, and the long tail of provider-API quirks — are exactly what we
+     would re-discover one bug at a time (we already have). It is undifferentiated
+     work others maintain, and every provider is ours to write and keep working.
+     Gets steadily worse as the resource plane grows; only defensible if that
+     plane is deliberately capped small.
+
+3. **Adopt OpenTofu directly (HCL)** for the resource plane.
    - `+` mature engine: plan/apply/destroy, state + locking, large provider
      ecosystem.
    - `−` HCL and a state backend become a second source of truth alongside Nix;
      two mental models for consumers.
 
-3. **Terranix** — declare OpenTofu resources *in Nix*, generate the JSON, apply;
+4. **Terranix** — declare OpenTofu resources *in Nix*, generate the JSON, apply;
    `nixos-anywhere` still owns the machine. **(Recommended.)**
    - `+` Nix stays the single source of truth (server defs already are); the
      OpenTofu engine/state/providers sit underneath; the machine plane is
      unchanged.
    - `−` adds Terranix + OpenTofu to the toolchain; a state backend still needs
      a home.
+
+Options 3 and 4 are the same engine with a different authoring surface (HCL vs.
+Nix); the real fork is **own the engine (1/2) vs. reuse one (3/4)**, and that
+fork turns on the resource-plane-size driver above.
 
 ## Decision
 
@@ -76,6 +99,14 @@ Adopt an explicit **two-plane architecture**:
 - **Resource plane** moves onto **OpenTofu, expressed in Nix via Terranix**:
   VMs, DNS, NetBird groups/keys/policies, the backup bucket + object-lock,
   provider-side firewall.
+
+This chooses **reuse an engine (option 4)** over **own an engine (option 2)**,
+and it rests on one explicit assumption: **the resource plane will keep
+growing.** If instead we deliberately *cap* the resource plane to a tiny, stable
+set, option 2 (a minimal home-grown reconciler) becomes the better call, and
+this decision should be revisited. The bet is that access policies, the backup
+bucket, more providers, and provider firewalls are all coming — which makes
+owning a state engine a growing, undifferentiated maintenance burden.
 
 Adopt **incrementally, not big-bang**:
 
