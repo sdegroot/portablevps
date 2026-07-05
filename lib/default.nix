@@ -109,6 +109,7 @@ let
     { self
     , serverDir
     , providerDir ? (toolRoot + "/providers")
+    , netbird ? { }
     }:
     let
       providers = readProviders providerDir;
@@ -124,6 +125,12 @@ let
     {
       nixosConfigurations = cloudConfigurations;
       serverInfo = lib.mapAttrs (_name: server: server.info) servers;
+      # Fleet-level NetBird intent (access policies), consumed by
+      # `cloud:netbird-policy-sync`. Not per-server: policies are cross-cutting.
+      netbird = {
+        policies = netbird.policies or [ ];
+        disableDefaultPolicy = netbird.disableDefaultPolicy or false;
+      };
     };
 in
 {

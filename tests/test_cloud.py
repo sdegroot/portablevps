@@ -255,6 +255,66 @@ class CloudTests(unittest.TestCase):
         groups.assert_called_once_with("tok", ["portablevps-servers", "test-vps"])
         self.assertEqual(add.call_count, 2)
 
+    def test_netbird_policy_sync_requires_token(self):
+        with mock.patch.dict(os.environ, {**self.server_env, "NETBIRD_API_TOKEN": ""}, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_netbird_policy_sync(mock.Mock())
+        self.assertIn("NETBIRD_API_TOKEN", str(raised.exception))
+
+    def test_netbird_build_policy_payload_resolves_groups(self):
+        spec = {
+            "name": "operators-ssh",
+            "sources": ["operators"],
+            "destinations": ["portablevps-servers"],
+            "protocol": "tcp",
+            "ports": ["22"],
+            "bidirectional": False,
+        }
+        payload = cloud.netbird_build_policy_payload(spec, {"operators": "gO", "portablevps-servers": "gS"})
+        self.assertEqual(payload["name"], "portablevps:operators-ssh")
+        rule = payload["rules"][0]
+        self.assertEqual(rule["sources"], ["gO"])
+        self.assertEqual(rule["destinations"], ["gS"])
+        self.assertEqual(rule["ports"], ["22"])
+        self.assertEqual(rule["action"], "accept")
+
+    def test_netbird_policy_sync_creates_updates_and_prunes(self):
+        config = {
+            "policies": [{
+                "name": "operators-ssh",
+                "sources": ["operators"],
+                "destinations": ["portablevps-servers"],
+                "protocol": "tcp",
+                "ports": ["22"],
+            }],
+            "disableDefaultPolicy": False,
+        }
+        calls = []
+
+        def fake_request(method, path, *, token, payload=None):
+            calls.append((method, path))
+            if method == "GET" and path == "/api/policies":
+                # one stale managed policy that should be pruned
+                return [{"id": "old", "name": "portablevps:stale", "rules": []}]
+            return {}
+
+        with mock.patch.dict(os.environ, {**self.server_env, "NETBIRD_API_TOKEN": "tok"}, clear=False):
+            with mock.patch.object(cloud, "load_netbird_config", return_value=config):
+                with mock.patch.object(cloud, "netbird_ensure_groups", return_value={"operators": "gO", "portablevps-servers": "gS"}):
+                    with mock.patch.object(cloud, "netbird_request", side_effect=fake_request):
+                        cloud.command_netbird_policy_sync(mock.Mock())
+
+        self.assertIn(("POST", "/api/policies"), calls)          # created the declared policy
+        self.assertIn(("DELETE", "/api/policies/old"), calls)    # pruned the stale managed one
+
+    def test_netbird_policy_sync_refuses_default_deny_without_confirmation(self):
+        config = {"policies": [], "disableDefaultPolicy": True}
+        with mock.patch.dict(os.environ, {**self.server_env, "NETBIRD_API_TOKEN": "tok", "CONFIRM_DEFAULT_DENY": ""}, clear=False):
+            with mock.patch.object(cloud, "load_netbird_config", return_value=config):
+                with self.assertRaises(cloud.CloudError) as raised:
+                    cloud.command_netbird_policy_sync(mock.Mock())
+        self.assertIn("CONFIRM_DEFAULT_DENY", str(raised.exception))
+
     def test_bootstrap_admin_key_initial_key_uses_ssh_identity(self):
         pub = Path(self.tempdir.name) / "admin.pub"
         pub.write_text("ssh-ed25519 AAA test\n", encoding="utf-8")

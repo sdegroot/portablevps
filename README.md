@@ -347,6 +347,43 @@ command to store it), and adds an already-joined peer to its declared groups
 (additive; it does not remove memberships). `NETBIRD_API_TOKEN` is an operator
 credential — keep it local, and it may be an `op://` reference.
 
+### NetBird access policies from the operator plane
+
+By default NetBird lets every peer reach every other peer. To make the mesh an
+**allow-list** — so servers cannot talk to each other on arbitrary ports —
+declare fleet policies in the consumer flake (`netbird.nix`, surfaced as the
+`.#netbird` output) and reconcile them:
+
+```nix
+# netbird.nix
+{
+  policies = [
+    { name = "operators-ssh";
+      sources = [ "operators" ]; destinations = [ "portablevps-servers" ];
+      protocol = "tcp"; ports = [ "22" ]; }
+  ];
+  disableDefaultPolicy = false;   # flip to true for default-deny
+}
+```
+
+```sh
+NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-policy-sync
+```
+
+`netbird-policy-sync` creates/updates the declared policies (named
+`portablevps:<name>` so it only manages its own), prunes managed policies you
+removed, and creates any referenced groups. Policies are an allow-list: with
+`disableDefaultPolicy = true` the mesh is **default-deny** and only declared
+flows are permitted.
+
+**Lockout warning:** you administer servers over the mesh (SSH is NetBird-only).
+Disabling the default allow-all without a policy that lets your `operators`
+group reach the servers on port 22 will cut off your own access. For that
+reason flipping to default-deny is double-gated: `disableDefaultPolicy = true`
+in the flake **and** `CONFIRM_DEFAULT_DENY=yes` on the command. Put the peers
+you administer from into the `operators` group first, confirm the
+`operators-ssh` policy works, then flip it.
+
 When deSEC shows DNSSEC material for the delegated zone, add the child-zone
 DNSSEC data at Mijn.host only for the delegated ACME zone. Prefer DS format when
 Mijn.host offers it; DNSKEY format is only for provider UIs that compute DS from

@@ -290,6 +290,22 @@ def load_deployments() -> dict[str, Deployment]:
     return load_servers()
 
 
+def load_netbird_config() -> dict:
+    """Fleet-level NetBird intent from the consumer flake's `.#netbird` output
+    (policies + disableDefaultPolicy). Empty when the consumer declares none."""
+    override = env("NETBIRD_CONFIG", "")
+    if override:
+        return json.loads(repo_path(override).read_text(encoding="utf-8"))
+    try:
+        raw = subprocess.check_output([
+            "nix", "--extra-experimental-features", "nix-command flakes",
+            "eval", "--json", ".#netbird",
+        ], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+    except subprocess.CalledProcessError:
+        return {}
+    return json.loads(raw) if raw else {}
+
+
 def require_provider(name: str) -> Provider:
     providers = load_providers()
     provider = providers.get(name)
@@ -1478,6 +1494,128 @@ def command_netbird_sync(_args: argparse.Namespace) -> None:
         print(f"peer {server.netbird_name}: already in all declared groups", flush=True)
 
 
+NETBIRD_MANAGED_POLICY_PREFIX = "portablevps:"
+
+
+def netbird_list_policies(token: str) -> list[dict]:
+    policies = netbird_request("GET", "/api/policies", token=token)
+    if not isinstance(policies, list):
+        raise CloudError("error: NetBird API returned an unexpected policies payload", 70)
+    return policies
+
+
+def netbird_build_policy_payload(spec: dict, group_ids: dict[str, str]) -> dict:
+    name = NETBIRD_MANAGED_POLICY_PREFIX + str(spec["name"])
+    sources = [group_ids[g] for g in spec.get("sources", [])]
+    destinations = [group_ids[g] for g in spec.get("destinations", [])]
+    rule = {
+        "name": name,
+        "description": spec.get("description", ""),
+        "enabled": True,
+        "action": spec.get("action", "accept"),
+        "bidirectional": bool(spec.get("bidirectional", False)),
+        "protocol": spec.get("protocol", "all"),
+        "ports": [str(p) for p in spec.get("ports", [])],
+        "sources": sources,
+        "destinations": destinations,
+    }
+    return {
+        "name": name,
+        "description": spec.get("description", ""),
+        "enabled": True,
+        "rules": [rule],
+    }
+
+
+def netbird_policy_group_ids(items: list) -> list[str]:
+    return [str(i.get("id", i)) if isinstance(i, dict) else str(i) for i in items]
+
+
+def netbird_find_default_policy(token: str) -> dict | None:
+    for policy in netbird_list_policies(token):
+        if str(policy.get("name", "")) == "Default":
+            return policy
+    return None
+
+
+def netbird_set_policy_enabled(token: str, policy: dict, enabled: bool) -> None:
+    rules = []
+    for rule in policy.get("rules", []):
+        rules.append({
+            "name": rule.get("name", ""),
+            "description": rule.get("description", ""),
+            "enabled": rule.get("enabled", True),
+            "action": rule.get("action", "accept"),
+            "bidirectional": rule.get("bidirectional", False),
+            "protocol": rule.get("protocol", "all"),
+            "ports": rule.get("ports", []),
+            "sources": netbird_policy_group_ids(rule.get("sources", [])),
+            "destinations": netbird_policy_group_ids(rule.get("destinations", [])),
+        })
+    payload = {
+        "name": policy.get("name", ""),
+        "description": policy.get("description", ""),
+        "enabled": enabled,
+        "rules": rules,
+    }
+    netbird_request("PUT", f"/api/policies/{policy['id']}", token=token, payload=payload)
+
+
+def command_netbird_policy_sync(_args: argparse.Namespace) -> None:
+    token = secret_env("NETBIRD_API_TOKEN", "")
+    if not token:
+        raise CloudError("error: NETBIRD_API_TOKEN is required (op:// references are supported)", 64)
+    config = load_netbird_config()
+    policies = config.get("policies", [])
+    disable_default = bool(config.get("disableDefaultPolicy", False))
+    if not policies and not disable_default:
+        print("skip: no NetBird policies declared", flush=True)
+        return
+    if disable_default and not truthy(env("CONFIRM_DEFAULT_DENY", "")):
+        raise CloudError(
+            "error: refusing to disable NetBird's default allow-all without CONFIRM_DEFAULT_DENY=yes. "
+            "This makes the mesh default-deny; confirm operator SSH access is covered by a policy first "
+            "(you administer servers over the mesh).",
+            64,
+        )
+
+    group_names = sorted({
+        g for p in policies for g in (list(p.get("sources", [])) + list(p.get("destinations", [])))
+    })
+    group_ids = netbird_ensure_groups(token, group_names) if group_names else {}
+
+    existing = {
+        str(p.get("name", "")): p
+        for p in netbird_list_policies(token)
+        if str(p.get("name", "")).startswith(NETBIRD_MANAGED_POLICY_PREFIX)
+    }
+    declared: set[str] = set()
+    for spec in policies:
+        payload = netbird_build_policy_payload(spec, group_ids)
+        declared.add(payload["name"])
+        if payload["name"] in existing:
+            netbird_request("PUT", f"/api/policies/{existing[payload['name']]['id']}", token=token, payload=payload)
+            print(f"update: policy {payload['name']}", flush=True)
+        else:
+            netbird_request("POST", "/api/policies", token=token, payload=payload)
+            print(f"create: policy {payload['name']}", flush=True)
+
+    for name, policy in existing.items():
+        if name not in declared:
+            netbird_request("DELETE", f"/api/policies/{policy['id']}", token=token)
+            print(f"delete: policy {name}", flush=True)
+
+    if disable_default:
+        default = netbird_find_default_policy(token)
+        if default is None:
+            print("warning: no NetBird 'Default' policy found to disable", flush=True)
+        elif default.get("enabled", True):
+            netbird_set_policy_enabled(token, default, False)
+            print("disabled: NetBird default allow-all — the mesh is now default-deny", flush=True)
+        else:
+            print("default allow-all already disabled", flush=True)
+
+
 def command_restore_test(_args: argparse.Namespace) -> None:
     phase = env("PHASE", "")
     deployment = selected_deployment()
@@ -1741,6 +1879,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     netbird_sync = subcommands.add_parser("netbird-sync", help="Reconcile a server's NetBird groups and reusable setup key via the API")
     netbird_sync.set_defaults(func=command_netbird_sync)
+
+    netbird_policy_sync = subcommands.add_parser("netbird-policy-sync", help="Reconcile fleet NetBird access policies (allow-list) via the API")
+    netbird_policy_sync.set_defaults(func=command_netbird_policy_sync)
 
     secrets_init = subcommands.add_parser("secrets-init-server", help="Generate a per-server age key and print its recipient")
     secrets_init.set_defaults(func=command_secrets_init_server)
