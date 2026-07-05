@@ -325,6 +325,28 @@ NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-dns-sync \
   NETBIRD_DNS_GROUP_IDS=<netbird-group-id>
 ```
 
+### NetBird groups from the operator plane
+
+Rather than clicking groups and setup keys in the NetBird console, a server
+declares the groups it should belong to, and the CLI reconciles them through
+the management API:
+
+```nix
+# servers/<name>.nix (in info)
+netbird = { groups = [ "portablevps-servers" name ]; };
+```
+
+```sh
+NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-sync SERVER=<name>
+```
+
+`netbird-sync` creates any missing groups, ensures a reusable setup key named
+`portablevps-<server>` whose auto-groups are those groups (so a fresh join is
+grouped automatically — and printing the key with the exact `secrets:set`
+command to store it), and adds an already-joined peer to its declared groups
+(additive; it does not remove memberships). `NETBIRD_API_TOKEN` is an operator
+credential — keep it local, and it may be an `op://` reference.
+
 When deSEC shows DNSSEC material for the delegated zone, add the child-zone
 DNSSEC data at Mijn.host only for the delegated ACME zone. Prefer DS format when
 Mijn.host offers it; DNSKEY format is only for provider UIs that compute DS from

@@ -120,6 +120,14 @@ class Deployment:
     def netbird_name(self) -> str:
         return str(self.values.get("netbirdName", self.hostname))
 
+    @property
+    def netbird_groups(self) -> list[str]:
+        netbird = self.values.get("netbird", {})
+        if not isinstance(netbird, dict):
+            return []
+        groups = netbird.get("groups", [])
+        return [str(g) for g in groups] if isinstance(groups, list) else []
+
 
 Server = Deployment
 
@@ -1351,6 +1359,125 @@ def command_netbird_dns_sync(_args: argparse.Namespace) -> None:
         print(f"{status}: {payload['name']} {payload['type']} {payload['content']} ttl={payload['ttl']}", flush=True)
 
 
+def netbird_list_groups(token: str) -> list[dict]:
+    groups = netbird_request("GET", "/api/groups", token=token)
+    if not isinstance(groups, list):
+        raise CloudError("error: NetBird API returned an unexpected groups payload", 70)
+    return groups
+
+
+def netbird_ensure_groups(token: str, names: list[str]) -> dict[str, str]:
+    """Return {name: id} for each requested group, creating any that are missing."""
+    existing = {str(g.get("name", "")): str(g.get("id", "")) for g in netbird_list_groups(token)}
+    result: dict[str, str] = {}
+    for name in names:
+        if name in existing and existing[name]:
+            result[name] = existing[name]
+            continue
+        print(f"create: NetBird group {name}", flush=True)
+        created = netbird_request("POST", "/api/groups", token=token, payload={"name": name, "peers": []})
+        if not isinstance(created, dict) or not created.get("id"):
+            raise CloudError(f"error: failed to create NetBird group {name}", 70)
+        result[name] = str(created["id"])
+    return result
+
+
+def netbird_find_peer(token: str, name: str) -> dict | None:
+    peers = netbird_request("GET", "/api/peers", token=token)
+    if not isinstance(peers, list):
+        raise CloudError("error: NetBird API returned an unexpected peers payload", 70)
+    for peer in peers:
+        if str(peer.get("hostname", "")) == name or str(peer.get("name", "")) == name:
+            return peer
+    return None
+
+
+def netbird_group_peer_ids(group: dict) -> list[str]:
+    return [str(p.get("id", p)) if isinstance(p, dict) else str(p) for p in group.get("peers", [])]
+
+
+def netbird_ensure_peer_in_group(token: str, group_id: str, peer_id: str) -> bool:
+    """Add a peer to a group (idempotent, additive). Returns True if changed."""
+    group = netbird_request("GET", f"/api/groups/{group_id}", token=token)
+    if not isinstance(group, dict):
+        raise CloudError(f"error: NetBird group {group_id} not found", 70)
+    peer_ids = netbird_group_peer_ids(group)
+    if peer_id in peer_ids:
+        return False
+    netbird_request(
+        "PUT",
+        f"/api/groups/{group_id}",
+        token=token,
+        payload={"name": group.get("name", ""), "peers": peer_ids + [peer_id]},
+    )
+    return True
+
+
+def netbird_managed_setup_key_name(server_name: str) -> str:
+    return f"portablevps-{server_name}"
+
+
+def netbird_ensure_setup_key(token: str, name: str, group_ids: list[str]) -> tuple[str, bool]:
+    """Ensure a reusable, non-revoked setup key with the given auto-groups
+    exists. Returns (plaintext_key_or_empty, created). The plaintext value is
+    only available when the key is newly created."""
+    keys = netbird_request("GET", "/api/setup-keys", token=token)
+    if isinstance(keys, list):
+        for key in keys:
+            if str(key.get("name", "")) == name and not key.get("revoked", False) and key.get("valid", True):
+                return "", False
+    created = netbird_request(
+        "POST",
+        "/api/setup-keys",
+        token=token,
+        payload={
+            "name": name,
+            "type": "reusable",
+            "expires_in": 31536000,
+            "auto_groups": group_ids,
+            "usage_limit": 0,
+            "ephemeral": False,
+        },
+    )
+    if not isinstance(created, dict) or not created.get("key"):
+        raise CloudError(f"error: failed to create NetBird setup key {name}", 70)
+    return str(created["key"]), True
+
+
+def command_netbird_sync(_args: argparse.Namespace) -> None:
+    server = selected_server()
+    token = secret_env("NETBIRD_API_TOKEN", "")
+    if not token:
+        raise CloudError("error: NETBIRD_API_TOKEN is required (a NetBird management API token; op:// references are supported)", 64)
+    groups = server.netbird_groups
+    if not groups:
+        print(f"skip: {server.name} declares no netbird.groups", flush=True)
+        return
+
+    group_ids = netbird_ensure_groups(token, groups)
+    print(f"groups: {', '.join(f'{n}={i}' for n, i in group_ids.items())}", flush=True)
+
+    key_name = netbird_managed_setup_key_name(server.name)
+    key_value, created = netbird_ensure_setup_key(token, key_name, list(group_ids.values()))
+    if created:
+        print(f"created reusable setup key {key_name} with auto-groups {', '.join(groups)}", flush=True)
+        print("store it in this server's secrets:", flush=True)
+        print(f"  mise exec -- task secrets:set SERVER={server.name} KEY='[\"netbird\"][\"setup-key\"]' VALUE={key_value}", flush=True)
+    else:
+        print(f"setup key {key_name} already exists (auto-groups unchanged)", flush=True)
+
+    peer = netbird_find_peer(token, server.netbird_name)
+    if peer is None:
+        print(f"peer: {server.netbird_name} is not registered yet; it will be auto-grouped when it joins with the setup key", flush=True)
+        return
+    peer_id = str(peer.get("id", ""))
+    changed = [name for name, gid in group_ids.items() if netbird_ensure_peer_in_group(token, gid, peer_id)]
+    if changed:
+        print(f"peer {server.netbird_name}: added to groups {', '.join(changed)}", flush=True)
+    else:
+        print(f"peer {server.netbird_name}: already in all declared groups", flush=True)
+
+
 def command_restore_test(_args: argparse.Namespace) -> None:
     phase = env("PHASE", "")
     deployment = selected_deployment()
@@ -1611,6 +1738,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     netbird_dns = subcommands.add_parser("netbird-dns-sync", help="Sync internal proxy DNS records into NetBird DNS")
     netbird_dns.set_defaults(func=command_netbird_dns_sync)
+
+    netbird_sync = subcommands.add_parser("netbird-sync", help="Reconcile a server's NetBird groups and reusable setup key via the API")
+    netbird_sync.set_defaults(func=command_netbird_sync)
 
     secrets_init = subcommands.add_parser("secrets-init-server", help="Generate a per-server age key and print its recipient")
     secrets_init.set_defaults(func=command_secrets_init_server)

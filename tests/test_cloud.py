@@ -36,6 +36,7 @@ class CloudTests(unittest.TestCase):
                     "hostname": "test-vps",
                     "netbirdName": "test-vps",
                     "backupRepository": "s3://example/test-vps",
+                    "netbird": {"groups": ["portablevps-servers", "test-vps"]},
                 }
             }),
             encoding="utf-8",
@@ -199,6 +200,60 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][0], "sshpass")
         self.assertEqual(run.call_args.kwargs["env"]["SSHPASS"], "pw")
         self.assertEqual(run.call_args.kwargs["input"], "ssh-ed25519 AAA test")
+
+    def test_server_exposes_netbird_groups(self):
+        with mock.patch.dict(os.environ, self.server_env, clear=False):
+            server = cloud.require_server("test-vps")
+        self.assertEqual(server.netbird_groups, ["portablevps-servers", "test-vps"])
+
+    def test_netbird_sync_requires_token(self):
+        env = {**self.server_env, "SERVER": "test-vps", "NETBIRD_API_TOKEN": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_netbird_sync(mock.Mock())
+        self.assertIn("NETBIRD_API_TOKEN", str(raised.exception))
+
+    def test_netbird_ensure_groups_creates_missing(self):
+        calls = []
+
+        def fake(method, path, *, token, payload=None):
+            calls.append((method, path, payload))
+            if method == "GET" and path == "/api/groups":
+                return [{"id": "g1", "name": "portablevps-servers"}]
+            if method == "POST" and path == "/api/groups":
+                return {"id": "g2", "name": payload["name"]}
+            raise AssertionError((method, path))
+
+        with mock.patch.object(cloud, "netbird_request", side_effect=fake):
+            result = cloud.netbird_ensure_groups("tok", ["portablevps-servers", "test-vps"])
+
+        self.assertEqual(result, {"portablevps-servers": "g1", "test-vps": "g2"})
+        self.assertIn(("POST", "/api/groups", {"name": "test-vps", "peers": []}), calls)
+
+    def test_netbird_ensure_peer_in_group_is_additive(self):
+        def fake(method, path, *, token, payload=None):
+            if method == "GET":
+                return {"id": "g1", "name": "servers", "peers": [{"id": "existing"}]}
+            return {}
+
+        with mock.patch.object(cloud, "netbird_request", side_effect=fake) as req:
+            changed = cloud.netbird_ensure_peer_in_group("tok", "g1", "new-peer")
+
+        self.assertTrue(changed)
+        put = [c for c in req.call_args_list if c.args[0] == "PUT"][0]
+        self.assertEqual(put.kwargs["payload"]["peers"], ["existing", "new-peer"])
+
+    def test_netbird_sync_reconciles_groups_key_and_peer(self):
+        env = {**self.server_env, "SERVER": "test-vps", "NETBIRD_API_TOKEN": "tok"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "netbird_ensure_groups", return_value={"portablevps-servers": "g1", "test-vps": "g2"}) as groups:
+                with mock.patch.object(cloud, "netbird_ensure_setup_key", return_value=("", False)):
+                    with mock.patch.object(cloud, "netbird_find_peer", return_value={"id": "p1", "hostname": "test-vps"}):
+                        with mock.patch.object(cloud, "netbird_ensure_peer_in_group", return_value=True) as add:
+                            cloud.command_netbird_sync(mock.Mock())
+
+        groups.assert_called_once_with("tok", ["portablevps-servers", "test-vps"])
+        self.assertEqual(add.call_count, 2)
 
     def test_bootstrap_admin_key_initial_key_uses_ssh_identity(self):
         pub = Path(self.tempdir.name) / "admin.pub"
