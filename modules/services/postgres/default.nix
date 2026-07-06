@@ -142,6 +142,11 @@ in
       wantsServices = [ cfg.serviceName ];
       preBackup = ''
         source /run/current-system/sw/bin/runtime-env.sh
+        # Connect as the configured superuser/database (parameterised per app),
+        # not runtime-env's built-in demo defaults, so pg_basebackup can
+        # authenticate. load_postgres_env keeps a caller-set value.
+        export PGUSER="${cfg.user}"
+        export PGDATABASE="${cfg.database}"
         load_postgres_env
 
         POSTGRES_BACKUP_ROOT="${cfg.backupRoot}"
@@ -169,8 +174,11 @@ in
 
         if ! grep -Fxq "$replication_hba_line" "$POSTGRES_DATA_DIR/pg_hba.conf"; then
           printf '\n%s\n' "$replication_hba_line" >>"$POSTGRES_DATA_DIR/pg_hba.conf"
-          psql --no-psqlrc --quiet --tuples-only --command='select pg_reload_conf();' >/dev/null
         fi
+        # Always reload: a previous run may have appended the line but failed to
+        # reload (e.g. before the connecting user/password was correct), leaving
+        # it present-but-unloaded, which every later run would then skip.
+        psql --no-psqlrc --quiet --tuples-only --command='select pg_reload_conf();' >/dev/null
 
         mkdir -p "$POSTGRES_BACKUP_CHAIN_DIR" "$POSTGRES_BACKUP_METADATA_DIR"
 
