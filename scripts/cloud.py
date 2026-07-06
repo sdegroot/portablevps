@@ -1240,7 +1240,9 @@ def curl_proxy(domain: str, address: str) -> str:
 
 
 def netbird_api_base() -> str:
-    return env("NETBIRD_API_URL", "https://api.netbird.io").rstrip("/")
+    # env_or so an explicitly-empty NETBIRD_API_URL (e.g. a task passing "")
+    # still falls back to the NetBird Cloud API rather than an invalid URL.
+    return env_or("NETBIRD_API_URL", "https://api.netbird.io").rstrip("/")
 
 
 def netbird_request(method: str, path: str, *, token: str, payload: dict | None = None) -> object:
