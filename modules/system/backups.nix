@@ -205,7 +205,7 @@ in
       # restic / the component tools (pg_basebackup, podman, …) bare, so the
       # service PATH must carry them — the systemd default has neither bash nor
       # these tools, which silently failed every timer run with status 127.
-      path = [ pkgs.bash pkgs.restic pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.findutils ]
+      path = [ pkgs.bash pkgs.restic pkgs.jq pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.findutils ]
         ++ lib.unique (lib.concatMap (component: component.packages) componentList);
       serviceConfig = {
         Type = "oneshot";
