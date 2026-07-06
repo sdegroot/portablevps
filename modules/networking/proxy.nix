@@ -3,6 +3,10 @@
 
 let
   cfg = config.portablevps.proxy;
+  # Local-VM / prototype hosts have no mesh, ACME, or sops-provided deSEC token,
+  # so the mesh-first proxy can't run there. Treat it as inert under prototype
+  # defaults: a server keeps its proxy config, but no Traefik is built locally.
+  prototype = config.portablevps.secrets.allowPrototypeDefaults or false;
   netbirdEnabled = config.portablevps.network.enable or false;
   netbirdName = config.portablevps.network.name or config.networking.hostName;
   netbirdInterface = config.portablevps.network.interface;
@@ -445,13 +449,13 @@ in
     {
       assertions = [
         {
-          assertion = cfg.enable || !proxyConfigured;
+          assertion = prototype || cfg.enable || !proxyConfigured;
           message = "portablevps.proxy options are configured but portablevps.proxy.enable is false. Set portablevps.proxy.enable = true or remove the proxy configuration.";
         }
       ];
     }
 
-    (lib.mkIf cfg.enable (lib.mkMerge [
+    (lib.mkIf (cfg.enable && !prototype) (lib.mkMerge [
     {
       assertions = [
         {

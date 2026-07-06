@@ -102,9 +102,36 @@ let
       ] ++ overrideModules self;
     };
 
+  # Build a logical server as a local QEMU VM: its real profile + module + app
+  # stack + backup components, but on the local-vm platform with prototype
+  # secrets and no mesh (see hosts/local-vm-server.nix). Used to exercise a
+  # server's backup/restore steps on a laptop. Defaults to the operator's likely
+  # local arch; override `system` for a different VM architecture.
+  mkLocalVm =
+    { self, servers, serverName, restoreMode, system ? "aarch64-linux" }:
+    let
+      server = servers.${serverName};
+    in
+    mkHost {
+      inherit self restoreMode system;
+      hostModule = toolRoot + "/hosts/local-vm-server.nix";
+      extraModules = [
+        (resolveProfile server.profile)
+        server.module
+        ({ ... }: {
+          _module.args = {
+            serverConfig = server.info;
+            inherit serverName;
+            providerName = "local-vm";
+            providerConfig = { };
+          };
+        })
+      ] ++ overrideModules self;
+    };
+
   # Consumer-facing entry point. Produces nixosConfigurations (a normal and a
-  # -restore variant per logical server) and a serverInfo attrset consumed by
-  # the portablevps CLI.
+  # -restore variant per logical server, plus local-VM variants for DR testing)
+  # and a serverInfo attrset consumed by the portablevps CLI.
   mkFlake =
     { self
     , serverDir
@@ -121,9 +148,15 @@ let
           { name = "${serverName}-restore"; value = mkCloudServer { inherit self servers providers serverName; restoreMode = true; }; }
         ])
         serverNames);
+      localVmConfigurations = lib.listToAttrs (lib.concatMap
+        (serverName: [
+          { name = "${serverName}-local-vm"; value = mkLocalVm { inherit self servers serverName; restoreMode = false; }; }
+          { name = "${serverName}-local-vm-restore"; value = mkLocalVm { inherit self servers serverName; restoreMode = true; }; }
+        ])
+        serverNames);
     in
     {
-      nixosConfigurations = cloudConfigurations;
+      nixosConfigurations = cloudConfigurations // localVmConfigurations;
       serverInfo = lib.mapAttrs (_name: server: server.info) servers;
       # Fleet-level NetBird intent (access policies), consumed by
       # `cloud:netbird-policy-sync`. Not per-server: policies are cross-cutting.
@@ -134,5 +167,5 @@ let
     };
 in
 {
-  inherit mkHost mkCloudServer mkFlake readProviders readServers;
+  inherit mkHost mkCloudServer mkLocalVm mkFlake readProviders readServers;
 }
