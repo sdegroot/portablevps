@@ -30,7 +30,7 @@ let
 
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
 
-  commonContainer = execArg: extraVolumes: ''
+  commonContainer = execArg: extraLines: ''
     [Unit]
     Description=authentik ${execArg}
     After=network-online.target postgres.service authentik-provision.service
@@ -47,7 +47,7 @@ let
     EnvironmentFile=/etc/portablevps/authentik.env
     Volume=${mediaDir}:/media:Z
     Volume=${templatesDir}:/templates:Z
-    ${extraVolumes}
+    ${extraLines}
 
     [Service]
     Restart=always
@@ -301,8 +301,17 @@ in
     environment.etc."containers/systemd/authentik-server.container".text =
       commonContainer "server" "";
 
+    # The worker shares host networking + the env file with the server, so it
+    # would otherwise bind the server's AUTHENTIK_LISTEN__HTTP/METRICS ports
+    # (:9000/:9300) first and leave the server unable to listen — the proxy then
+    # hits the worker's minimal HTTP server and every page is a blank 200.
+    # Override the worker's listen ports so only the server owns :9000/:9300.
     environment.etc."containers/systemd/authentik-worker.container".text =
-      commonContainer "worker" "Volume=${blueprintsDir}:/blueprints/custom:ro,Z";
+      commonContainer "worker" (lib.concatStringsSep "\n    " [
+        "Volume=${blueprintsDir}:/blueprints/custom:ro,Z"
+        "Environment=AUTHENTIK_LISTEN__HTTP=127.0.0.1:9001"
+        "Environment=AUTHENTIK_LISTEN__METRICS=127.0.0.1:9301"
+      ]);
 
     # Back up authentik's file state (uploaded media, custom templates). The
     # database is covered by the platform PostgreSQL online backup. Blueprints
