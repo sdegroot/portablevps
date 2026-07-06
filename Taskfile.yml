@@ -94,6 +94,7 @@ tasks:
     cmds:
       - |
         eval "$(scripts/local-s3-env.sh)"
+        CONFIG="{{default "local-vm" .CONFIG}}" \
         VM_A_SSH="{{.VM_A_SSH}}" \
         VM_B_SSH="{{.VM_B_SSH}}" \
         REMOTE_REPO="{{.REMOTE_REPO}}" \
@@ -103,9 +104,9 @@ tasks:
     desc: Reset MinIO object data, then run the two-VM disaster recovery test
     cmds:
       - task local-s3:reset
-      - task dr:test
+      - task dr:test CONFIG="{{default "local-vm" .CONFIG}}"
 
   validate:qemu:
-    desc: Validate backup and restore end to end with the local QEMU VMs
+    desc: 'Validate backup and restore end to end with the local QEMU VMs (CONFIG=<server>-local-vm for a specific server)'
     cmds:
-      - VM_A_SSH="{{.VM_A_SSH}}" VM_B_SSH="{{.VM_B_SSH}}" REMOTE_REPO="{{.REMOTE_REPO}}" scripts/qemu-validate.sh
+      - CONFIG="{{default "local-vm" .CONFIG}}" VM_A_SSH="{{.VM_A_SSH}}" VM_B_SSH="{{.VM_B_SSH}}" REMOTE_REPO="{{.REMOTE_REPO}}" scripts/qemu-validate.sh

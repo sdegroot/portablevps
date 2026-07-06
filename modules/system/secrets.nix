@@ -6,6 +6,15 @@ let
   secretsFile = cfg.file;
   hasSecretsFile = secretsFile != null && builtins.pathExists secretsFile;
   useSops = hasSecretsFile && !cfg.allowPrototypeDefaults;
+
+  # Postgres connection identity (user/database) belongs in postgres.env so
+  # everything that sources it — the backup hook, verify-test-data.sh,
+  # load_postgres_env — connects to the app's parameterised database rather than
+  # the built-in demo defaults. Only emitted when the postgres module is present.
+  pgConn = lib.optionalString (config.portablevps ? postgres) ''
+    PGUSER=${config.portablevps.postgres.user}
+    PGDATABASE=${config.portablevps.postgres.database}
+  '';
 in
 {
   options.portablevps.secrets = {
@@ -57,7 +66,7 @@ in
         content = ''
           POSTGRES_PASSWORD=${config.sops.placeholder."postgres/password"}
           PGPASSWORD=${config.sops.placeholder."postgres/password"}
-        '';
+        '' + pgConn;
       };
 
       templates."portablevps/restic.env" = {
@@ -80,7 +89,7 @@ in
         text = ''
           POSTGRES_PASSWORD=demo-password
           PGPASSWORD=demo-password
-        '';
+        '' + pgConn;
       };
 
       "portablevps/restic.env" = {

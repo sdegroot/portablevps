@@ -71,6 +71,7 @@ mount_host_repo vm-a "$VM_A_SSH"
 mount_host_repo vm-b "$VM_B_SSH"
 
 exec task dr:test-clean \
+  CONFIG="${CONFIG:-local-vm}" \
   VM_A_SSH="$VM_A_SSH" \
   VM_B_SSH="$VM_B_SSH" \
   REMOTE_REPO="$REMOTE_REPO"
