@@ -15,6 +15,7 @@ in
     ../system/backups.nix
     ../networking/service-exposure.nix
     ../networking/proxy.nix
+    ../../apps
   ];
 
   portablevps.proxy = lib.mkIf proxyEnabled {
