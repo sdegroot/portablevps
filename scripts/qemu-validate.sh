@@ -5,6 +5,10 @@ set -euo pipefail
 VM_A_SSH="${VM_A_SSH:--i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2224 admin@127.0.0.1}"
 VM_B_SSH="${VM_B_SSH:--i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2225 admin@127.0.0.1}"
 REMOTE_REPO="${REMOTE_REPO:-/host}"
+# Directory holding the flake to apply. Defaults to the mount root (the tool's
+# own flake IS the shared dir). Set to a subdir (e.g. /host/epistola) when the
+# monorepo root is shared so a consumer flake can resolve its path: siblings.
+FLAKE_DIR="${FLAKE_DIR:-$REMOTE_REPO}"
 
 remote() {
   local target="$1"
@@ -40,16 +44,18 @@ mount_host_repo() {
     if ! findmnt '$REMOTE_REPO' >/dev/null 2>&1; then
       sudo mount -t 9p -o trans=virtio,version=9p2000.L hostshare '$REMOTE_REPO'
     fi
-    test -f '$REMOTE_REPO/flake.nix'
-    # The shared repo is the portablevps flake directory, which is not a git
-    # root, so nix would copy the whole tree into the store, including the
-    # multi-GB .local test scratch (VM images, ISO, MinIO data) and fill the
-    # guest disk. Mask .local with an empty bind mount so the flake copy stays
-    # lean. (.local is nothing the flake build needs.)
-    if [ -d '$REMOTE_REPO/.local' ] && ! findmnt '$REMOTE_REPO/.local' >/dev/null 2>&1; then
-      sudo mkdir -p /run/empty-local
-      sudo mount --bind /run/empty-local '$REMOTE_REPO/.local'
-    fi
+    test -f '$FLAKE_DIR/flake.nix'
+    # The shared repo is not a git root, so nix would copy the whole tree into
+    # the store, including the multi-GB .local test scratch (VM images, ISO,
+    # MinIO data) and fill the guest disk. Mask every .local (the mount root and
+    # one level down, e.g. epistola/.local + portablevps/.local when the monorepo
+    # root is shared) with an empty bind mount so the flake copy stays lean.
+    sudo mkdir -p /run/empty-local
+    for ld in '$REMOTE_REPO/.local' $REMOTE_REPO/*/.local; do
+      if [ -d \"\$ld\" ] && ! findmnt \"\$ld\" >/dev/null 2>&1; then
+        sudo mount --bind /run/empty-local \"\$ld\"
+      fi
+    done
   "
 }
 
@@ -74,4 +80,5 @@ exec task dr:test-clean \
   CONFIG="${CONFIG:-local-vm}" \
   VM_A_SSH="$VM_A_SSH" \
   VM_B_SSH="$VM_B_SSH" \
-  REMOTE_REPO="$REMOTE_REPO"
+  REMOTE_REPO="$REMOTE_REPO" \
+  FLAKE_DIR="$FLAKE_DIR"

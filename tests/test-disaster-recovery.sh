@@ -39,6 +39,11 @@ fi
 
 CONFIG="${CONFIG:-local-vm}"
 REMOTE_REPO="${REMOTE_REPO:-/home/admin/portablevps-nix-infra}"
+# Directory holding the flake to apply. Defaults to REMOTE_REPO (the tool's own
+# flake IS the shared dir). For a consumer whose flake references a sibling
+# (path:../portablevps), share the monorepo root as REMOTE_REPO and point
+# FLAKE_DIR at the consumer subdir, e.g. FLAKE_DIR=$REMOTE_REPO/epistola.
+FLAKE_DIR="${FLAKE_DIR:-$REMOTE_REPO}"
 MARKER="${MARKER:-fresh-server-restore-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
 INITIAL_MARKER="${INITIAL_MARKER:-fresh-server-full-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
 RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-s3:http://10.0.2.2:9000/portablevps-dr}"
@@ -90,10 +95,24 @@ echo "restic repository: $RESTIC_REPOSITORY"
 require_remote_tools "$VM_A_SSH"
 require_remote_tools "$VM_B_SSH"
 
+# Reset VM A's data so the target config's postgres initialises fresh with its
+# own database/user. Reused VMs may hold a previous run's cluster (postgres only
+# initdb's an empty data dir), which would otherwise reject the app's role. Clear
+# the *contents* and keep the dirs: nixos-rebuild switch does not re-run
+# systemd-tmpfiles, so a removed /data/postgres would leave postgres.service
+# skipped (ConditionPathIsDirectory unmet).
+echo "resetting VM A data for a clean ${CONFIG} install"
+remote "$VM_A_SSH" "
+  sudo systemctl stop apps.target >/dev/null 2>&1 || true
+  sudo mkdir -p /data/postgres /data/container-state
+  sudo find /data/postgres -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  sudo find /data/container-state -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  sudo rm -rf /var/lib/portablevps-backups/postgres-physical
+"
+
 echo "configuring VM A in normal mode"
-remote_repo "$VM_A_SSH" "sudo nixos-rebuild switch --flake .#${CONFIG}"
+remote "$VM_A_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_A_SSH" "sudo systemctl start apps.target"
-remote "$VM_A_SSH" "sudo rm -rf /var/lib/portablevps-backups/postgres-physical"
 
 echo "inserting initial marker on VM A"
 remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
@@ -132,7 +151,7 @@ fi
 echo "using shared restic repository directly: $RESTIC_REPOSITORY"
 
 echo "configuring VM B in restore mode"
-remote_repo "$VM_B_SSH" "sudo nixos-rebuild switch --flake .#${CONFIG}-restore"
+remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}-restore"
 remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started in restore mode' >&2; exit 1; fi"
 
 echo "restoring VM B before apps start"
@@ -140,7 +159,7 @@ remote_repo "$VM_B_SSH" "sudo env $REMOTE_ENV restore.sh"
 remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started during restore' >&2; exit 1; fi"
 
 echo "switching VM B to normal mode"
-remote_repo "$VM_B_SSH" "sudo nixos-rebuild switch --flake .#${CONFIG}"
+remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_B_SSH" "sudo systemctl start apps.target"
 
 echo "verifying restored PostgreSQL marker on VM B"
