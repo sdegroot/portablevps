@@ -108,9 +108,13 @@ let
   # server's backup/restore steps on a laptop. Defaults to the operator's likely
   # local arch; override `system` for a different VM architecture.
   mkLocalVm =
-    { self, servers, serverName, restoreMode, system ? "aarch64-linux" }:
+    { self, servers, providers ? { }, serverName, restoreMode }:
     let
       server = servers.${serverName};
+      # "local" is a provider like any other; its metadata carries the VM
+      # architecture and (for documentation) its capabilities.
+      localProvider = providers.local or { };
+      system = localProvider.system or "aarch64-linux";
     in
     mkHost {
       inherit self restoreMode system;
@@ -150,8 +154,8 @@ let
         serverNames);
       localVmConfigurations = lib.listToAttrs (lib.concatMap
         (serverName: [
-          { name = "${serverName}-local-vm"; value = mkLocalVm { inherit self servers serverName; restoreMode = false; }; }
-          { name = "${serverName}-local-vm-restore"; value = mkLocalVm { inherit self servers serverName; restoreMode = true; }; }
+          { name = "${serverName}-local-vm"; value = mkLocalVm { inherit self servers providers serverName; restoreMode = false; }; }
+          { name = "${serverName}-local-vm-restore"; value = mkLocalVm { inherit self servers providers serverName; restoreMode = true; }; }
         ])
         serverNames);
     in

@@ -3,11 +3,12 @@
 
 let
   cfg = config.portablevps.proxy;
-  # Local-VM / prototype hosts have no mesh, ACME, or sops-provided deSEC token,
-  # so the mesh-first proxy can't run there. Treat it as inert under prototype
-  # defaults: a server keeps its proxy config, but no Traefik is built locally.
-  prototype = config.portablevps.secrets.allowPrototypeDefaults or false;
   netbirdEnabled = config.portablevps.network.enable or false;
+  # This is a NetBird-first proxy: its internal routes bind the mesh interface
+  # and ACME uses the operator's DNS. Where there is no mesh (a local VM), it
+  # goes inert — the server keeps its proxy config, but no Traefik is built.
+  # (The proxy follows the mesh, not the secrets mode.)
+  proxyInert = !netbirdEnabled;
   netbirdName = config.portablevps.network.name or config.networking.hostName;
   netbirdInterface = config.portablevps.network.interface;
   stagingCaServer = "https://acme-staging-v02.api.letsencrypt.org/directory";
@@ -449,13 +450,13 @@ in
     {
       assertions = [
         {
-          assertion = prototype || cfg.enable || !proxyConfigured;
+          assertion = proxyInert || cfg.enable || !proxyConfigured;
           message = "portablevps.proxy options are configured but portablevps.proxy.enable is false. Set portablevps.proxy.enable = true or remove the proxy configuration.";
         }
       ];
     }
 
-    (lib.mkIf (cfg.enable && !prototype) (lib.mkMerge [
+    (lib.mkIf (cfg.enable && !proxyInert) (lib.mkMerge [
     {
       assertions = [
         {

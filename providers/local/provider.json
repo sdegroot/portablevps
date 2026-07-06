@@ -1,0 +1,9 @@
+{
+  "system": "aarch64-linux",
+  "platform": "local-vm",
+  "defaultTargetUser": "admin",
+  "mesh": false,
+  "backups": "local",
+  "secrets": "prototype",
+  "description": "Local QEMU VMs for backup/restore validation. No mesh, no public DNS/ACME; backs up to the local test S3. Consumed by lib.mkLocalVm (<server>-local-vm configs)."
+}
