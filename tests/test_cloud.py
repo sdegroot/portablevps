@@ -188,6 +188,61 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(install_cloud.call_args.kwargs["root_identity"], ".local/ssh/cloud-admin_ed25519")
         self.assertEqual(install_cloud.call_args.kwargs["disk"], "/dev/sda")
 
+    def test_repurpose_requires_host(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_repurpose(mock.Mock())
+        self.assertIn("HOST", str(raised.exception))
+
+    def test_repurpose_requires_destroy_confirmation(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": "203.0.113.60", "CONFIRM_DESTROY": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_repurpose(mock.Mock())
+        self.assertIn("CONFIRM_DESTROY", str(raised.exception))
+
+    def test_repurpose_rejects_reset_path_outside_data(self):
+        age_key = Path(self.tempdir.name) / "age-key.txt"
+        age_key.write_text("AGE-SECRET-KEY-1TEST\n", encoding="utf-8")
+        env = {
+            **self.server_env,
+            "SERVER": "test-vps",
+            "HOST": "203.0.113.60",
+            "CONFIRM_DESTROY": "203.0.113.60",
+            "RESET_PATHS": "/etc",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "resolve_age_key", return_value=str(age_key)):
+                with self.assertRaises(cloud.CloudError) as raised:
+                    cloud.command_repurpose(mock.Mock())
+        self.assertIn("/etc", str(raised.exception))
+
+    def test_repurpose_swaps_key_resets_then_switches(self):
+        age_key = Path(self.tempdir.name) / "age-key.txt"
+        age_key.write_text("AGE-SECRET-KEY-1TEST\n", encoding="utf-8")
+        env = {
+            **self.server_env,
+            "SERVER": "test-vps",
+            "HOST": "203.0.113.60",
+            "CONFIRM_DESTROY": "203.0.113.60",
+            "RESET_PATHS": "/data/postgres",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "resolve_age_key", return_value=str(age_key)):
+                with mock.patch.object(cloud, "admin_ssh") as admin_ssh:
+                    with mock.patch.object(cloud, "install_host_age_key") as install_key:
+                        with mock.patch.object(cloud, "switch_profile") as switch:
+                            cloud.command_repurpose(mock.Mock())
+
+        # The target server's host age key is shipped before switching.
+        self.assertTrue(install_key.called)
+        self.assertEqual(install_key.call_args.kwargs["age_key_path"], str(age_key))
+        # The data dir is cleared over admin ssh.
+        self.assertTrue(any("/data/postgres" in call.args[1] for call in admin_ssh.call_args_list))
+        # And the host is switched to the target server config.
+        self.assertEqual(switch.call_args.args[0].name, "test-vps")
+
     def test_bootstrap_admin_key_password_uses_sshpass(self):
         pub = Path(self.tempdir.name) / "admin.pub"
         pub.write_text("ssh-ed25519 AAA test\n", encoding="utf-8")

@@ -1143,6 +1143,84 @@ def switch_profile(
     )
 
 
+def install_host_age_key(host: str, *, admin_key: str, ssh_port: str, age_key_path: str) -> None:
+    """Ship a server's host age key to /etc/sops/age/keys.txt over admin+sudo,
+    so an in-place switch to that server's config can decrypt its secrets."""
+    key_path = repo_path(age_key_path)
+    if not key_path.is_file():
+        raise CloudError(f"error: missing host age key: {key_path}", 66)
+    content = key_path.read_text(encoding="utf-8")
+    remote = (
+        "set -eu; sudo mkdir -p /etc/sops/age; "
+        "sudo tee /etc/sops/age/keys.txt >/dev/null; "
+        "sudo chmod 0400 /etc/sops/age/keys.txt; "
+        "sudo chown root:root /etc/sops/age/keys.txt"
+    )
+    print(f"repurpose: installing {key_path.name} host age key on {host}", flush=True)
+    subprocess.run(
+        [*ssh_args(f"admin@{host}", port=ssh_port, identity=admin_key), remote],
+        input=content,
+        text=True,
+        check=True,
+    )
+
+
+def command_repurpose(_args: argparse.Namespace) -> None:
+    """Switch an already-portablevps-managed host to a DIFFERENT logical server,
+    in place, over the admin mesh SSH — no kexec/reinstall. Swaps the host age
+    key to the target server's, optionally clears data directories the new app
+    needs to initialise clean, then does a nixos-rebuild switch. NetBird and
+    machine state persist, so the peer keeps its address and is just renamed."""
+    server = selected_server()
+    host = env("HOST", "")
+    if not host:
+        raise CloudError("error: HOST is required", 64)
+    require_destroy_confirmation(host, env("CONFIRM_DESTROY", ""))
+    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    ssh_port = env("SSH_PORT", "22")
+    reset_paths = comma_list(env("RESET_PATHS", ""))
+    age_key = resolve_age_key(server.name)
+
+    if not repo_path(age_key).is_file():
+        raise CloudError(f"error: missing host age key for {server.name}: {repo_path(age_key)}", 66)
+    for path in reset_paths:
+        # A misplaced reset would wipe the system; keep it to app data roots.
+        if not (path.startswith("/data/") or path.startswith("/var/lib/")):
+            raise CloudError(f"error: refusing to reset a path outside /data or /var/lib: {path}", 64)
+
+    # Confirm admin reachability before touching anything.
+    admin_ssh(host, "true", port=ssh_port, admin_key=admin_key)
+
+    # Stop the app stack so its data directories are free before we swap identity.
+    print(f"repurpose: stopping apps.target on {host}", flush=True)
+    admin_ssh(host, "sudo systemctl stop apps.target || true", port=ssh_port, admin_key=admin_key)
+
+    # Swap the host age key so sops-nix can decrypt the target server's secrets
+    # on the next activation.
+    install_host_age_key(host, admin_key=admin_key, ssh_port=ssh_port, age_key_path=age_key)
+
+    # Clear data directories the new app must own from scratch (e.g. a postgres
+    # cluster whose database/user differ from the outgoing app's).
+    for path in reset_paths:
+        print(f"repurpose: clearing {path} on {host}", flush=True)
+        admin_ssh(
+            host,
+            f"sudo find {shlex.quote(path)} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +",
+            port=ssh_port,
+            admin_key=admin_key,
+        )
+
+    # In-place switch to the target server config (built on the remote so a
+    # different-arch operator can drive it).
+    print(f"repurpose: switching {host} to .#{server.name}", flush=True)
+    switch_profile(server, host, admin_key, ssh_port, flake_path=REPO_ROOT)
+
+    print(f"repurpose: {host} now runs .#{server.name}", flush=True)
+    print("next steps:", flush=True)
+    print(f"  - rename the NetBird peer to '{server.netbird_name}' in the console (in-place keeps the old name)", flush=True)
+    print(f"  - mise exec -- task cloud:netbird-dns-sync SERVER={server.name}  (repoint internal DNS)", flush=True)
+
+
 def curl_proxy(domain: str, address: str) -> str:
     return subprocess.check_output(
         [
@@ -1837,6 +1915,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     adopt = subcommands.add_parser("adopt", help="Bootstrap the admin key onto an existing host and reinstall it")
     adopt.set_defaults(func=command_adopt)
+
+    repurpose = subcommands.add_parser("repurpose", help="Switch an existing portablevps host to a different server config in place (no reinstall)")
+    repurpose.set_defaults(func=command_repurpose)
 
     lifecycle_preflight = subcommands.add_parser("lifecycle-preflight", help="Validate provider lifecycle credentials and local state")
     lifecycle_preflight.set_defaults(func=command_lifecycle_preflight)
