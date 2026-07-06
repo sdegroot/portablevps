@@ -94,10 +94,25 @@ let
   }
   // cfg.extraSecretEnv;
 
+  # Local-VM / prototype mode: no sops, no real host key. Render deterministic
+  # demo values instead of sops placeholders so the app boots for local
+  # backup/restore validation. The postgres password must match the postgres
+  # module's prototype default (demo-password) so authentik can connect.
+  prototype = config.portablevps.secrets.allowPrototypeDefaults;
+
+  demoSecret = key:
+    if key == cfg.postgres.passwordSecret then "demo-password"
+    else if key == cfg.secretKeySecret then lib.concatStrings (lib.genList (_: "0") 64)
+    else if key == cfg.bootstrapPasswordSecret then "demo-admin-password"
+    else "demo";
+
+  renderSecret = key:
+    if prototype then demoSecret key else config.sops.placeholder.${key};
+
   envContent =
     lib.concatStringsSep "\n" (
       (lib.mapAttrsToList (k: v: "${k}=${v}") plainEnv)
-      ++ (lib.mapAttrsToList (k: secret: "${k}=${config.sops.placeholder.${secret}}") secretEnv)
+      ++ (lib.mapAttrsToList (k: secret: "${k}=${renderSecret secret}") secretEnv)
     ) + "\n";
 in
 {
@@ -289,13 +304,23 @@ in
       '';
     };
 
-    # Declare every referenced sops secret (core + smtp + consumer extras).
-    sops.secrets = lib.genAttrs (lib.unique (lib.attrValues secretEnv)) (_: { });
+    # Normal mode: declare every referenced sops secret (core + smtp + consumer
+    # extras) and render the env file from sops. Prototype/local-VM mode: no
+    # sops — write the env file with demo values directly.
+    sops.secrets = lib.mkIf (!prototype)
+      (lib.genAttrs (lib.unique (lib.attrValues secretEnv)) (_: { }));
 
-    sops.templates."portablevps/authentik.env" = {
-      path = "/etc/portablevps/authentik.env";
+    sops.templates = lib.mkIf (!prototype) {
+      "portablevps/authentik.env" = {
+        path = "/etc/portablevps/authentik.env";
+        mode = "0400";
+        content = envContent;
+      };
+    };
+
+    environment.etc."portablevps/authentik.env" = lib.mkIf prototype {
       mode = "0400";
-      content = envContent;
+      text = envContent;
     };
 
     environment.etc."containers/systemd/authentik-server.container".text =
