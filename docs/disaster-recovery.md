@@ -92,6 +92,47 @@ usable previous generation can be booted.
     sudo systemctl start apps.target
     ```
 
+## Automated Local DR Test (any server)
+
+The steps above are the manual restore procedure. To validate a *specific
+server's* backup/restore automatically on your laptop — including its app
+(e.g. authentik's database + media survive) — use the two-VM local harness.
+It boots two throwaway QEMU VMs, installs the server, seeds a marker, and runs
+**the real `portablevps-backup.service`** (not `backup.sh` directly) followed by
+`restore.sh` on a fresh VM, then verifies the data survived.
+
+Local VMs are the `local` provider: no NetBird mesh, no public DNS/ACME, and
+backups go to a local test S3 (the QEMU MinIO), never the real bucket. Each
+`<server>` gets a `<server>-local-vm` / `<server>-local-vm-restore` config via
+`lib.mkFlake`.
+
+**The tool's own demo** (from `portablevps/`):
+
+```sh
+scripts/qemu-create-vm.sh vm-a                  # once: create the VM disks
+scripts/qemu-create-vm.sh vm-b                  # (first boot installs NixOS from an ISO)
+task qemu:boot-a                                # terminal 1
+task qemu:boot-b                                # terminal 2
+task validate:qemu                              # terminal 3 (CONFIG defaults to local-vm)
+```
+
+**A consumer server** (from the consumer repo, e.g. `epistola/`) — the flake
+references `path:../portablevps`, so the VMs share the monorepo root and the
+flake dir is the consumer subdir:
+
+```sh
+task dr:boot-a                                  # terminal 1
+task dr:boot-b                                  # terminal 2
+task dr:validate SERVER=<machine-name>          # terminal 3
+```
+
+`dr:validate` runs `validate:qemu CONFIG=<machine>-local-vm FLAKE_DIR=/host/epistola`.
+A green run ends with `PASS: fresh server restored PostgreSQL data from backup`.
+
+Because this drives the same systemd units, PATH, and repo self-init
+(`ExecStartPre = init-backup-repo.sh`) as a live host, it catches
+service-level backup regressions that invoking the scripts directly would miss.
+
 ## Cloud Provider Flow
 
 For provider VPSes, prefer a separate-host restore rehearsal. The source host
