@@ -36,6 +36,34 @@ in
       description = "Podman container name.";
     };
 
+    database = lib.mkOption {
+      type = lib.types.str;
+      default = "demo";
+      description = ''
+        Name of the database the container initialises on first boot
+        (POSTGRES_DB). Only takes effect on an empty data directory; changing
+        it on a populated cluster does not rename the existing database.
+      '';
+    };
+
+    user = lib.mkOption {
+      type = lib.types.str;
+      default = "demo";
+      description = ''
+        Superuser role the container creates on first boot (POSTGRES_USER),
+        owning ${"\${database}"}. Its password comes from the postgres/password secret.
+      '';
+    };
+
+    maxConnections = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 100;
+      description = ''
+        PostgreSQL max_connections. The default matches upstream; raise it for
+        apps that pool heavily (e.g. authentik without Redis wants 200).
+      '';
+    };
+
     backup.maxChainLength = lib.mkOption {
       type = lib.types.ints.positive;
       default = 24;
@@ -56,8 +84,34 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    environment.etc."containers/systemd/postgres.container".source =
-      ./postgres.container;
+    # Quadlet unit for the PostgreSQL 18 container, rendered from the options
+    # above so a consumer app can claim a dedicated database/user and tune
+    # max_connections.
+    environment.etc."containers/systemd/postgres.container".text = ''
+      [Unit]
+      Description=PostgreSQL 18 container (${cfg.database})
+      After=network-online.target
+      Wants=network-online.target
+      PartOf=apps.target
+      ConditionPathIsDirectory=${cfg.dataRoot}
+      ConditionPathExists=!/run/portablevps/restore-mode
+
+      [Container]
+      Image=docker.io/library/postgres:18
+      ContainerName=${cfg.containerName}
+      Environment=POSTGRES_USER=${cfg.user}
+      Environment=POSTGRES_DB=${cfg.database}
+      EnvironmentFile=/etc/portablevps/postgres.env
+      Volume=${cfg.dataRoot}:/var/lib/postgresql
+      PublishPort=127.0.0.1:5432:5432
+      Exec=-c summarize_wal=on -c max_connections=${toString cfg.maxConnections}
+
+      [Service]
+      Restart=always
+
+      [Install]
+      WantedBy=apps.target
+    '';
 
     systemd.tmpfiles.rules = [
       "d ${cfg.dataRoot} 0755 root root -"
