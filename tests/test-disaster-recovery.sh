@@ -87,6 +87,23 @@ require_remote_tools() {
   remote_repo "$target" "command -v sudo >/dev/null && command -v nixos-rebuild >/dev/null"
 }
 
+# Run the REAL production backup path — the systemd service (which self-inits the
+# repo via ExecStartPre) — rather than invoking backup.sh directly, so the test
+# exercises the same execution environment (service PATH, EnvironmentFile) as a
+# live host. Assert the postgres backup mode from the journal.
+run_backup() {
+  local target="$1" expected="$2"
+  remote "$target" "sudo systemctl start portablevps-backup.service"
+  local mode
+  mode="$(remote "$target" "sudo journalctl -u portablevps-backup.service -o cat --no-pager | grep -oE 'postgres backup mode: (full|incremental)' | tail -1")"
+  printf '%s\n' "$mode"
+  if ! grep -q "postgres backup mode: $expected" <<<"$mode"; then
+    echo "expected $expected backup, got: '$mode'" >&2
+    remote "$target" "sudo journalctl -u portablevps-backup.service -o cat --no-pager | tail -40" >&2
+    exit 1
+  fi
+}
+
 echo "test: fresh server can restore PostgreSQL data from backup"
 echo "initial marker: $INITIAL_MARKER"
 echo "marker: $MARKER"
@@ -118,18 +135,8 @@ echo "inserting initial marker on VM A"
 remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
 remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$INITIAL_MARKER'"
 
-echo "creating or reusing restic repository on VM A"
-remote "$VM_A_SSH" "if ! sudo env $REMOTE_ENV bash -lc 'source /etc/portablevps/restic.env; timeout 30s restic snapshots' >/dev/null 2>&1; then sudo env $REMOTE_ENV init-backup-repo.sh; fi"
-
-echo "creating full backup on VM A"
-full_backup_output="$(
-  remote_repo "$VM_A_SSH" "sudo env $REMOTE_ENV backup.sh"
-)"
-printf '%s\n' "$full_backup_output"
-if ! grep -q "postgres backup mode: full" <<<"$full_backup_output"; then
-  echo "expected first backup to be full" >&2
-  exit 1
-fi
+echo "creating full backup on VM A (portablevps-backup.service)"
+run_backup "$VM_A_SSH" full
 
 echo "inserting final marker on VM A"
 remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$MARKER'"
@@ -138,15 +145,8 @@ remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$MARKER'"
 echo "writing container file state on VM A"
 remote "$VM_A_SSH" "sudo mkdir -p /data/container-state/demo && printf '%s\n' '$MARKER' | sudo tee /data/container-state/demo/marker.txt >/dev/null"
 
-echo "creating incremental backup on VM A"
-incremental_backup_output="$(
-  remote_repo "$VM_A_SSH" "sudo env $REMOTE_ENV backup.sh"
-)"
-printf '%s\n' "$incremental_backup_output"
-if ! grep -q "postgres backup mode: incremental" <<<"$incremental_backup_output"; then
-  echo "expected second backup to be incremental" >&2
-  exit 1
-fi
+echo "creating incremental backup on VM A (portablevps-backup.service)"
+run_backup "$VM_A_SSH" incremental
 
 echo "using shared restic repository directly: $RESTIC_REPOSITORY"
 
@@ -155,7 +155,7 @@ remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CON
 remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started in restore mode' >&2; exit 1; fi"
 
 echo "restoring VM B before apps start"
-remote_repo "$VM_B_SSH" "sudo env $REMOTE_ENV restore.sh"
+remote "$VM_B_SSH" "sudo restore.sh"
 remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started during restore' >&2; exit 1; fi"
 
 echo "switching VM B to normal mode"

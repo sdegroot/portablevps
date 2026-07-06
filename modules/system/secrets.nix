@@ -35,6 +35,17 @@ in
       default = "/etc/sops/age/keys.txt";
       description = "Age identity used by sops-nix to decrypt host secrets.";
     };
+
+    localBackupRepository = lib.mkOption {
+      type = lib.types.str;
+      default = "s3:http://10.0.2.2:9000/portablevps-dr";
+      description = ''
+        restic repository used under prototype defaults (local VMs). Points at a
+        local test S3 (the QEMU host-gateway MinIO by default) so a local VM's
+        own backup service never touches the real backup bucket. This is the
+        "local provider" backup capability; override for a different local S3.
+      '';
+    };
   };
 
   config = {
@@ -95,7 +106,7 @@ in
       "portablevps/restic.env" = {
         mode = "0400";
         text = ''
-          RESTIC_REPOSITORY=${config.portablevps.backups.restic.repository}
+          RESTIC_REPOSITORY=${cfg.localBackupRepository}
           RESTIC_PASSWORD=dev-password
           AWS_ACCESS_KEY_ID=${config.portablevps.backups.restic.awsAccessKeyId}
           AWS_SECRET_ACCESS_KEY=portablevps-minio-password

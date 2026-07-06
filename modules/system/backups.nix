@@ -212,6 +212,10 @@ in
         EnvironmentFile = [
           "/etc/portablevps/restic.env"
         ];
+        # Self-initialise the restic repository on first run (idempotent), so
+        # backups just work on a freshly installed host without a manual
+        # `restic init` step — the same on cloud and local.
+        ExecStartPre = "/run/current-system/sw/bin/init-backup-repo.sh";
         ExecStart = "${pkgs.util-linux}/bin/flock -w 900 /run/lock/portablevps-backups.lock /run/current-system/sw/bin/backup.sh";
       };
     };
