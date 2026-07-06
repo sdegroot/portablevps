@@ -201,6 +201,12 @@ in
       description = "Run coordinated module-owned backup";
       after = lib.unique (lib.concatMap (component: component.afterServices) componentList);
       wants = lib.unique (lib.concatMap (component: component.wantsServices) componentList);
+      # backup.sh and each component hook use `#!/usr/bin/env bash` and call
+      # restic / the component tools (pg_basebackup, podman, …) bare, so the
+      # service PATH must carry them — the systemd default has neither bash nor
+      # these tools, which silently failed every timer run with status 127.
+      path = [ pkgs.bash pkgs.restic pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.findutils ]
+        ++ lib.unique (lib.concatMap (component: component.packages) componentList);
       serviceConfig = {
         Type = "oneshot";
         EnvironmentFile = [
