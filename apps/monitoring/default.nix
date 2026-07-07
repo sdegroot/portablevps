@@ -410,6 +410,9 @@ in
       } // lib.optionalAttrs grafanaOidcEnabled { ${oidc.clientSecretSecret} = { }; };
 
       sops.templates."portablevps/monitoring/alertmanager.yml" = {
+        # Alertmanager (uid 65534) reads this config itself (volume mount, not an
+        # EnvironmentFile), so it must be owned by the container's uid.
+        owner = "nobody";
         mode = "0400";
         content = builtins.replaceStrings
           [ "PLACEHOLDER_SMTP_USERNAME" "PLACEHOLDER_SMTP_PASSWORD" ]
@@ -427,7 +430,12 @@ in
 
     # Prototype/local mode: demo config so the stack boots without sops.
     (lib.mkIf prototype {
-      environment.etc."portablevps/monitoring/alertmanager.yml".text = alertmanagerConfig;
+      # Demo config (no real secrets) — world-readable so the alertmanager
+      # container (uid 65534) can read the volume-mounted file.
+      environment.etc."portablevps/monitoring/alertmanager.yml" = {
+        mode = "0444";
+        text = alertmanagerConfig;
+      };
       environment.etc."portablevps/monitoring/grafana.env".text =
         grafanaCommonEnv + "GF_SECURITY_ADMIN_PASSWORD=demo-admin\n";
     })
