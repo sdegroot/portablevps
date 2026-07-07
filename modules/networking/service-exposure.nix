@@ -79,7 +79,7 @@ let
           if [ -n "$address" ]; then
             exec ${pkgs.socat}/bin/socat \
               "TCP-LISTEN:${toString entry.exposure.listenPort},bind=$address,fork,reuseaddr" \
-              "TCP:${lib.escapeShellArg entry.exposure.targetHost}:${toString entry.exposure.targetPort}"
+              ${lib.escapeShellArg "TCP:${entry.exposure.targetHost}:${toString entry.exposure.targetPort}"}
           fi
           sleep 1
         done
