@@ -111,3 +111,8 @@ tasks:
     desc: 'Validate backup and restore end to end with the local QEMU VMs (CONFIG=<server>-local-vm for a specific server)'
     cmds:
       - CONFIG="{{default "local-vm" .CONFIG}}" FLAKE_DIR="{{default "" .FLAKE_DIR}}" VM_A_SSH="{{.VM_A_SSH}}" VM_B_SSH="{{.VM_B_SSH}}" REMOTE_REPO="{{.REMOTE_REPO}}" scripts/qemu-validate.sh
+
+  dr:run:
+    desc: 'One command: boot both local VMs, run the backup/restore validation, tear down (CONFIG defaults to local-vm)'
+    cmds:
+      - SHARE="$PWD" CONFIG="{{default "local-vm" .CONFIG}}" FLAKE_DIR="{{default "/host" .FLAKE_DIR}}" scripts/qemu-dr-run.sh
