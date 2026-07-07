@@ -6,7 +6,7 @@ datasources:
     type: victoriametrics-metrics-datasource
     uid: victoriametrics
     access: proxy
-    url: http://victoriametrics:8428
+    url: http://10.89.0.10:8428
     isDefault: true
     jsonData:
       httpMethod: POST
@@ -14,12 +14,12 @@ datasources:
     type: victoriametrics-logs-datasource
     uid: victorialogs
     access: proxy
-    url: http://victorialogs:9428
+    url: http://10.89.0.11:9428
   - name: Alertmanager
     type: alertmanager
     uid: alertmanager
     access: proxy
-    url: http://alertmanager:9093
+    url: http://10.89.0.14:9093
     jsonData:
       implementation: prometheus
       handleGrafanaManagedAlerts: false

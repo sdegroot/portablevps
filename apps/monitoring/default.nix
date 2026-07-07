@@ -250,6 +250,20 @@ in
         default = [ "victoriametrics-metrics-datasource 0.24.0" "victoriametrics-logs-datasource 0.27.1" ];
         description = "Datasource plugins installed at container start (GF_INSTALL_PLUGINS, comma-joined).";
       };
+      extraHosts = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = { "auth.int.epistola.io" = "100.85.212.44"; };
+        description = ''
+          Static host:ip entries added to the Grafana container (podman --add-host).
+          Grafana's server-side OIDC calls must resolve the authentik issuer, but
+          podman containers can't resolve NetBird mesh names: aardvark can't forward
+          to the host's systemd-resolved stub, and the NetBird resolver is firewalled
+          off the podman bridge. An /etc/hosts entry to the issuer's mesh IP resolves
+          it without disturbing container-name resolution (aardvark). Interim measure
+          — a split-DNS forwarder reachable from the bridge is the clean general fix.
+        '';
+      };
       oidc = {
         enable = lib.mkEnableOption "Authentik (generic OAuth) SSO for Grafana; the local admin login stays as break-glass";
         name = lib.mkOption { type = lib.types.str; default = "Authentik"; description = "OAuth provider display name."; };
@@ -358,6 +372,9 @@ in
         network = "${net}:ip=10.89.0.12";
         requires = [ "monitoring-network.service" ];
         after = [ "monitoring-network.service" "victoriametrics.service" "victorialogs.service" ];
+        # Static host entries so server-side OIDC (and any other mesh calls) can
+        # resolve mesh names the container's resolver can't (see grafana.extraHosts).
+        podmanArgs = lib.mapAttrsToList (h: ip: "--add-host=${h}:${ip}") cfg.grafana.extraHosts;
         environmentFile = grafanaEnvPath;
         publishPorts = publishLoopbackAnd 3000 3000;
         volumes = [
