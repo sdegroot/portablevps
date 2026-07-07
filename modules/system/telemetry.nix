@@ -2,9 +2,11 @@
 # metrics + logs to the monitoring server's OTLP gateway over the mesh. Enabled
 # per server by setting `portablevps.telemetry.endpoint` to the gateway URL.
 #
-# Replaces node_exporter (pull) with OTLP push — the monitoring stack ingests
-# OTLP, so there is nothing to scrape. The dedicated monitoring server does NOT
-# set an endpoint: its own gateway scrapes its host directly.
+# Runs the collector NATIVELY (not in a container) so its `journald` receiver can
+# read the systemd journal directly via journalctl — no rsyslog, no duplicated
+# /var/log/syslog file to grow and rotate. Replaces node_exporter (pull) with
+# OTLP push. The dedicated monitoring server does NOT set an endpoint: its own
+# gateway scrapes its host directly.
 { lib, config, pkgs, ... }:
 
 let
@@ -12,14 +14,11 @@ let
   enabled = cfg.endpoint != "";
   backupsPresent = (config.portablevps.backups.components or { }) != { };
 
-  # Resource attributes stamped on every metric/log. Emitted as JSON (valid
-  # YAML) to avoid heredoc-indentation pitfalls. service.name (the application)
-  # is added when set so metrics/logs can be differentiated by app, not just host.
+  # Resource attributes stamped on every metric/log. service.name (the
+  # application) is added when set so telemetry can be differentiated by app, not
+  # just host. host.name comes from the CONFIGURED machine name, not the OS
+  # hostname, so a repurposed/renamed box never reports under a stale name.
   resourceAttrs = [
-    # Stamp host.name from the CONFIGURED machine name, not the OS hostname:
-    # NixOS does not change the running hostname on a switch, so a repurposed/
-    # renamed box can otherwise report telemetry under a stale name. This keeps
-    # host_name aligned with the machine identity (and with the backup metric).
     { key = "host.name"; value = config.networking.hostName; action = "upsert"; }
     { key = "service.namespace"; value = cfg.serviceNamespace; action = "upsert"; }
     { key = "host.id"; from_attribute = "host.name"; action = "upsert"; }
@@ -27,62 +26,9 @@ let
     key = "service.name"; value = cfg.serviceName; action = "upsert";
   };
 
-  # Ship-only collector config. host.name is detected from the OS hostname
-  # (resourcedetection) and becomes the series' host_name label under the
-  # gateway's VictoriaMetrics usePrometheusNaming.
-  shipConfig = pkgs.writeText "otelcol-ship.yaml" ''
-    receivers:
-      hostmetrics:
-        collection_interval: ${cfg.scrapeInterval}
-        root_path: /host
-        scrapers:
-          cpu:
-          memory:
-          disk:
-          filesystem:
-          load:
-          network:
-          processes:
-      docker_stats:
-        endpoint: unix:///var/run/docker.sock
-        collection_interval: ${cfg.scrapeInterval}
-      filelog:
-        include:
-          - /var/log/syslog
-        start_at: end
-    processors:
-      batch:
-        timeout: 10s
-        send_batch_size: 1024
-      resourcedetection:
-        detectors: [system, env]
-        system:
-          hostname_sources: [os]
-        override: false
-      resource:
-        attributes: ${builtins.toJSON resourceAttrs}
-    exporters:
-      otlphttp:
-        endpoint: ${cfg.endpoint}
-    service:
-      telemetry:
-        logs:
-          level: info
-      pipelines:
-        metrics:
-          receivers: [hostmetrics, docker_stats]
-          processors: [batch, resourcedetection, resource]
-          exporters: [otlphttp]
-        logs:
-          receivers: [filelog]
-          processors: [batch, resourcedetection, resource]
-          exporters: [otlphttp]
-  '';
-
   # Best-effort push of a single gauge (value = now) to the gateway, stamping
   # host.name so it lands as a per-host series. Never fails its caller — the
-  # backup it reports on has already succeeded. Ported from the epistola-vps-infra
-  # backup role's restic-report-metric.
+  # backup it reports on has already succeeded.
   reportMetric = pkgs.writeShellScript "portablevps-report-metric" ''
     set -u
     metric="''${1:-}"
@@ -125,57 +71,86 @@ in
       default = "30s";
       description = "hostmetrics / docker_stats collection interval.";
     };
-
-    image = lib.mkOption {
-      type = lib.types.str;
-      default = "docker.io/otel/opentelemetry-collector-contrib:0.153.0";
-      description = "OpenTelemetry Collector (contrib) image.";
-    };
   };
 
   config = lib.mkIf enabled {
-    # rsyslog populates /var/log/syslog for the filelog receiver (the contrib
-    # image has no journalctl, so the journald receiver is not an option). NixOS's
-    # default rsyslog config writes no /var/log/syslog, so add the rule explicitly.
-    services.rsyslogd = {
+    services.opentelemetry-collector = {
       enable = true;
-      extraConfig = ''
-        *.*  -/var/log/syslog
-      '';
+      # contrib build for the docker_stats + journald receivers.
+      package = pkgs.opentelemetry-collector-contrib;
+      settings = {
+        receivers = {
+          hostmetrics = {
+            collection_interval = cfg.scrapeInterval;
+            scrapers = {
+              cpu = { };
+              memory = { };
+              disk = { };
+              filesystem = { };
+              load = { };
+              network = { };
+              processes = { };
+            };
+          };
+          docker_stats = {
+            endpoint = "unix:///run/podman/podman.sock";
+            collection_interval = cfg.scrapeInterval;
+            metrics = {
+              "container.cpu.usage.percpu".enabled = true;
+              "container.network.io.usage.tx_dropped".enabled = true;
+              "container.network.io.usage.rx_dropped".enabled = true;
+            };
+          };
+          # Read the systemd journal directly (journalctl) — no rsyslog / file.
+          journald = { };
+        };
+        processors = {
+          batch = { timeout = "10s"; send_batch_size = 1024; };
+          resourcedetection = {
+            detectors = [ "system" "env" ];
+            system.hostname_sources = [ "os" ];
+            override = false;
+          };
+          resource.attributes = resourceAttrs;
+        };
+        exporters.otlphttp.endpoint = cfg.endpoint;
+        service = {
+          telemetry.logs.level = "info";
+          pipelines = {
+            metrics = {
+              receivers = [ "hostmetrics" "docker_stats" ];
+              processors = [ "batch" "resourcedetection" "resource" ];
+              exporters = [ "otlphttp" ];
+            };
+            logs = {
+              receivers = [ "journald" ];
+              processors = [ "batch" "resourcedetection" "resource" ];
+              exporters = [ "otlphttp" ];
+            };
+          };
+        };
+      };
     };
 
-    environment.etc."containers/systemd/otelcol-ship.container".text = ''
-      [Unit]
-      Description=OpenTelemetry Collector (fleet metrics + logs shipper)
-      After=network-online.target podman.socket
-      Wants=network-online.target podman.socket
-
-      [Container]
-      Image=${cfg.image}
-      ContainerName=otelcol-ship
-      # Root + host namespaces: hostmetrics/process scrapers need the real
-      # /proc, and docker_stats + filelog read root-owned sources.
-      User=0
-      Network=host
-      PodmanArgs=--pid=host
-      Volume=/proc:/host/proc:ro
-      Volume=/sys:/host/sys:ro
-      Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
-      Volume=/var/log:/var/log:ro
-      Volume=${shipConfig}:/etc/otelcol/config.yaml:ro
-      Exec=--config=/etc/otelcol/config.yaml
-
-      [Service]
-      Restart=always
-      RestartSec=10
-
-      [Install]
-      WantedBy=multi-user.target default.target
-    '';
+    # The collector reads root-owned sources: /proc for host + process metrics,
+    # the podman API socket for container stats, and the journal via journalctl.
+    # Run it as root with journalctl on PATH, and relax the module's default
+    # hardening enough to see all processes.
+    systemd.services.opentelemetry-collector = {
+      path = [ pkgs.systemd ];
+      serviceConfig = {
+        DynamicUser = lib.mkForce false;
+        User = lib.mkForce "root";
+        Group = lib.mkForce "root";
+        ProtectProc = lib.mkForce "default";
+        ProcSubset = lib.mkForce "all";
+        PrivateUsers = lib.mkForce false;
+        PrivateDevices = lib.mkForce false;
+      };
+    };
 
     # Push the backup-success metric over OTLP after a successful run (the
-    # gateway's freshness/presence alerts watch it). ExecStartPost on the oneshot
-    # runs only when the backup itself succeeded.
+    # gateway's freshness/presence alerts watch it).
     systemd.services.portablevps-backup = lib.mkIf backupsPresent {
       serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_last_success_timestamp_seconds";
     };
