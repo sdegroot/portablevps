@@ -67,7 +67,6 @@ let
     '';
 
   # Static config mounted read-only from the Nix store.
-  gatewayConfig = ./otelcol-gateway.yaml;
   scrapeConfig = ./scrape.yml;
   grafanaProvisioning = ./grafana/provisioning;
   grafanaDashboards = ./grafana/dashboards;
@@ -213,7 +212,6 @@ in
       vmalert = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/vmalert:v1.144.0"; description = "vmalert image (keep the tag == victoriametrics)."; };
       alertmanager = lib.mkOption { type = lib.types.str; default = "docker.io/prom/alertmanager:v0.32.1"; description = "Alertmanager image."; };
       grafana = lib.mkOption { type = lib.types.str; default = "docker.io/grafana/grafana:13.0.1"; description = "Grafana image."; };
-      otelcol = lib.mkOption { type = lib.types.str; default = "docker.io/otel/opentelemetry-collector-contrib:0.153.0"; description = "OpenTelemetry Collector (contrib) image."; };
     };
 
     retention = {
@@ -269,16 +267,6 @@ in
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
-      # rsyslog populates /var/log/syslog for the otelcol filelog receiver (the
-      # contrib image has no journalctl, so journald receiver is not an option).
-      # NixOS's default rsyslog writes no /var/log/syslog, so add the rule.
-      services.rsyslogd = {
-        enable = true;
-        extraConfig = ''
-          *.*  -/var/log/syslog
-        '';
-      };
-
       # Shared podman bridge network with a pinned subnet so containers get
       # static IPs (10.89.0.10-14).
       environment.etc."containers/systemd/monitoring.network".text = ''
@@ -380,23 +368,77 @@ in
         timeoutStart = 180;
       };
 
-      # --- OpenTelemetry Collector (fleet OTLP gateway + host agent) -------------
-      environment.etc."containers/systemd/otelcol.container".text = mkContainer {
-        name = "otelcol";
-        image = cfg.images.otelcol;
-        ip = null;
-        uid = 0;
-        network = "host";
-        after = [ "podman.socket" "victoriametrics.service" "victorialogs.service" ];
-        podmanArgs = [ "--pid=host" ];
-        volumes = [
-          "/proc:/host/proc:ro"
-          "/sys:/host/sys:ro"
-          "/run/podman/podman.sock:/var/run/docker.sock:ro"
-          "/var/log:/var/log:ro"
-          "${gatewayConfig}:/etc/otelcol/config.yaml:ro"
-        ];
-        exec = "--config=/etc/otelcol/config.yaml";
+      # --- OpenTelemetry Collector: fleet OTLP gateway + this host's agent ------
+      # Native (not containerized) so the journald receiver reads the journal
+      # directly and podman_stats talks podman's native API — no rsyslog, no
+      # /var/log/syslog file, no docker_stats parse errors. Receives OTLP from the
+      # fleet, scrapes this host, and exports to VictoriaMetrics/Logs on loopback.
+      services.opentelemetry-collector = {
+        enable = true;
+        package = pkgs.opentelemetry-collector-contrib;
+        settings = {
+          receivers = {
+            otlp.protocols = {
+              grpc.endpoint = "0.0.0.0:4317";
+              http.endpoint = "0.0.0.0:4318";
+            };
+            hostmetrics = {
+              collection_interval = "30s";
+              scrapers = {
+                cpu = { }; memory = { }; disk = { }; filesystem = { };
+                load = { }; network = { }; processes = { };
+              };
+            };
+            podman_stats = { endpoint = "unix:///run/podman/podman.sock"; collection_interval = "30s"; };
+            journald = { };
+          };
+          processors = {
+            # fleet metrics can arrive as delta; VM wants cumulative.
+            deltatocumulative = { };
+            batch = { timeout = "10s"; send_batch_size = 1024; };
+            # override:false enriches THIS host's own telemetry without clobbering
+            # the host.name the fleet's collectors already stamped.
+            resourcedetection = { detectors = [ "system" "env" ]; system.hostname_sources = [ "os" ]; override = false; };
+            resource.attributes = [ { key = "host.id"; from_attribute = "host.name"; action = "upsert"; } ];
+          };
+          exporters = {
+            "otlphttp/victoriametrics" = {
+              metrics_endpoint = "http://127.0.0.1:8428/opentelemetry/v1/metrics";
+              encoding = "proto";
+              compression = "gzip";
+            };
+            "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/insert/opentelemetry/v1/logs";
+          };
+          service = {
+            telemetry = { logs.level = "info"; metrics.level = "none"; };
+            pipelines = {
+              metrics = {
+                receivers = [ "otlp" "hostmetrics" "podman_stats" ];
+                processors = [ "deltatocumulative" "batch" "resourcedetection" "resource" ];
+                exporters = [ "otlphttp/victoriametrics" ];
+              };
+              logs = {
+                receivers = [ "otlp" "journald" ];
+                processors = [ "batch" "resourcedetection" "resource" ];
+                exporters = [ "otlphttp/victorialogs" ];
+              };
+            };
+          };
+        };
+      };
+
+      systemd.services.opentelemetry-collector = {
+        after = [ "victoriametrics.service" "victorialogs.service" "podman.socket" ];
+        path = [ pkgs.systemd ];
+        serviceConfig = {
+          DynamicUser = lib.mkForce false;
+          User = lib.mkForce "root";
+          Group = lib.mkForce "root";
+          ProtectProc = lib.mkForce "default";
+          ProcSubset = lib.mkForce "all";
+          PrivateUsers = lib.mkForce false;
+          PrivateDevices = lib.mkForce false;
+        };
       };
     }
 
