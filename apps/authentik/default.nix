@@ -47,6 +47,18 @@ let
     EnvironmentFile=/etc/portablevps/authentik.env
     Volume=${mediaDir}:/media:Z
     Volume=${templatesDir}:/templates:Z
+    # authentik ships `ak healthcheck` (checks DB + broker connectivity); the
+    # upstream compose uses it for both server and worker. On failure podman
+    # kills the container so systemd's Restart=always revives a hung (not just
+    # crashed) process. StartPeriod covers first-boot migrations run by the
+    # worker. Killing (not podman-internal restart) is the correct action under
+    # systemd/Quadlet, which owns the restart.
+    HealthCmd=ak healthcheck
+    HealthStartPeriod=120s
+    HealthInterval=30s
+    HealthTimeout=30s
+    HealthRetries=3
+    HealthOnFailure=kill
     ${extraLines}
 
     [Service]
