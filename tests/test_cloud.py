@@ -245,6 +245,28 @@ class CloudTests(unittest.TestCase):
         # And the host is switched to the target server config.
         self.assertEqual(switch.call_args.args[0].name, "test-vps")
 
+    def test_deploy_requires_host(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_deploy(mock.Mock())
+        self.assertIn("HOST", str(raised.exception))
+
+    def test_deploy_checks_ssh_then_switches_in_place(self):
+        env = {**self.server_env, "SERVER": "test-vps", "HOST": "203.0.113.60"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "admin_ssh") as admin_ssh:
+                with mock.patch.object(cloud, "install_host_age_key") as install_key:
+                    with mock.patch.object(cloud, "switch_profile") as switch:
+                        cloud.command_deploy(mock.Mock())
+
+        # Reachability is checked before switching.
+        self.assertTrue(admin_ssh.called)
+        # Deploy is a plain in-place switch: no age-key swap, no data reset.
+        self.assertFalse(install_key.called)
+        self.assertEqual(switch.call_args.args[0].name, "test-vps")
+        self.assertEqual(switch.call_args.kwargs["flake_path"], cloud.REPO_ROOT)
+
     def test_bootstrap_admin_key_password_uses_sshpass(self):
         pub = Path(self.tempdir.name) / "admin.pub"
         pub.write_text("ssh-ed25519 AAA test\n", encoding="utf-8")

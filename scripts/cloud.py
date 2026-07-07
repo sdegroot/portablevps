@@ -1250,6 +1250,30 @@ def command_repurpose(_args: argparse.Namespace) -> None:
     print(f"  - mise exec -- task cloud:netbird-dns-sync SERVER={server.name}  (repoint internal DNS)", flush=True)
 
 
+def command_deploy(_args: argparse.Namespace) -> None:
+    """Deploy the current committed flake to an already-running, healthy host:
+    an in-place `nixos-rebuild switch` over the admin mesh SSH, built on the
+    remote. For routine config updates to a live server — no reinstall, and no
+    identity or data changes (unlike repurpose). Requires HOST, the running
+    host's reachable admin address (e.g. its mesh FQDN)."""
+    server = selected_server()
+    host = env("HOST", "")
+    if not host:
+        raise CloudError("error: HOST is required (the running host's admin address, e.g. its mesh FQDN)", 64)
+    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    ssh_port = env("SSH_PORT", "22")
+
+    # Confirm admin reachability before building and switching.
+    print(f"deploy: checking admin SSH to {host}", flush=True)
+    admin_ssh(host, "true", port=ssh_port, admin_key=admin_key)
+
+    # In-place switch to the same server config, built on the remote so a
+    # different-arch operator (e.g. an aarch64 laptop) can drive an x86_64 host.
+    print(f"deploy: switching {host} to .#{server.name} (built on the remote)", flush=True)
+    switch_profile(server, host, admin_key, ssh_port, flake_path=REPO_ROOT)
+    print(f"deploy: {host} now runs .#{server.name}", flush=True)
+
+
 def curl_proxy(domain: str, address: str) -> str:
     return subprocess.check_output(
         [
@@ -2005,6 +2029,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     repurpose = subcommands.add_parser("repurpose", help="Switch an existing portablevps host to a different server config in place (no reinstall)")
     repurpose.set_defaults(func=command_repurpose)
+
+    deploy = subcommands.add_parser("deploy", help="Deploy the latest committed config to a running server, in place (no reinstall)")
+    deploy.set_defaults(func=command_deploy)
 
     lifecycle_preflight = subcommands.add_parser("lifecycle-preflight", help="Validate provider lifecycle credentials and local state")
     lifecycle_preflight.set_defaults(func=command_lifecycle_preflight)
