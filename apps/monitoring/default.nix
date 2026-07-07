@@ -69,9 +69,52 @@ let
   # Static config mounted read-only from the Nix store.
   gatewayConfig = ./otelcol-gateway.yaml;
   scrapeConfig = ./scrape.yml;
-  rulesDir = ./rules;
   grafanaProvisioning = ./grafana/provisioning;
   grafanaDashboards = ./grafana/dashboards;
+
+  # Per-host presence alerts are generated from the fleet lists (one absent()
+  # alert per expected host, so a dark node keeps firing). Emitted as JSON —
+  # valid YAML — to sidestep indentation. Combined with the static rules
+  # (./rules/*.yml) into one directory mounted at /etc/alerts.
+  mkPresenceFile = name: group:
+    pkgs.writeText name (builtins.toJSON { groups = [ group ]; });
+
+  fleetPresenceFile = mkPresenceFile "fleet-presence.yml" {
+    name = "fleet-presence";
+    interval = "30s";
+    rules = map (host: {
+      alert = "NodeMetricsMissing";
+      expr = ''absent(system_cpu_time_seconds_total{host_name="${host}"})'';
+      "for" = "5m";
+      labels = { severity = "critical"; host_name = host; };
+      annotations = {
+        summary = "No metrics from ${host}";
+        description = "VictoriaMetrics has received no metrics from ${host} for over 5 minutes — the host is down, its otelcol stopped, or its OTLP endpoint is misconfigured.";
+      };
+    }) cfg.monitoredHosts;
+  };
+
+  backupPresenceFile = mkPresenceFile "backup-presence.yml" {
+    name = "backup-presence";
+    interval = "1m";
+    rules = map (host: {
+      alert = "BackupMetricAbsent";
+      expr = ''absent(portablevps_backup_last_success_timestamp_seconds{host_name="${host}"})'';
+      "for" = "90m";
+      labels = { severity = "critical"; host_name = host; };
+      annotations = {
+        summary = "No backup metric from ${host}";
+        description = "VictoriaMetrics has not seen portablevps_backup_last_success_timestamp_seconds for ${host} — either no restic backup has succeeded since deploy, or the reporter is broken.";
+      };
+    }) cfg.backupHosts;
+  };
+
+  alertsDir = pkgs.runCommand "portablevps-monitoring-rules" { } ''
+    mkdir -p "$out"
+    cp ${./rules}/*.yml "$out"/
+    ${lib.optionalString (cfg.monitoredHosts != [ ]) ''cp ${fleetPresenceFile} "$out/fleet-presence.yml"''}
+    ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupPresenceFile} "$out/backup-presence.yml"''}
+  '';
 
   # Alertmanager config carries the SMTP password, so in normal mode it is a
   # sops template rendered to a 0400 file; in prototype mode a demo file.
@@ -154,6 +197,18 @@ in
       port = lib.mkOption { type = lib.types.port; default = 587; description = "SMTP port (STARTTLS)."; };
       usernameSecret = lib.mkOption { type = lib.types.str; default = "monitoring/smtp-username"; description = "sops secret holding the SMTP username."; };
       passwordSecret = lib.mkOption { type = lib.types.str; default = "monitoring/smtp-password"; description = "sops secret holding the SMTP password."; };
+    };
+
+    monitoredHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "host.name each fleet server stamps on its telemetry. One NodeMetricsMissing (absent) alert is generated per host, so a dark node keeps firing instead of silently ageing out.";
+    };
+
+    backupHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Hosts expected to push a backup-success metric. One BackupMetricAbsent alert generated per host (catches a reporter broken since deploy, which a staleness rule cannot).";
     };
 
     alertEmailFrom = lib.mkOption { type = lib.types.str; default = "alerts@epistola.io"; description = "Alert email From address."; };
@@ -249,7 +304,7 @@ in
         requires = [ "monitoring-network.service" ];
         after = [ "monitoring-network.service" "victoriametrics.service" "alertmanager.service" ];
         publishPorts = publishLoopbackAnd 8880 8880;
-        volumes = [ "${rulesDir}:/etc/alerts:ro" ];
+        volumes = [ "${alertsDir}:/etc/alerts:ro" ];
         exec = "-httpListenAddr=:8880 -datasource.url=http://victoriametrics:8428 -remoteWrite.url=http://victoriametrics:8428 -remoteRead.url=http://victoriametrics:8428 -notifier.url=http://alertmanager:9093 -rule=/etc/alerts/*.yml -evaluationInterval=30s";
         timeoutStart = 60;
       };

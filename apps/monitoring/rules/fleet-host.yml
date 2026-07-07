@@ -1,0 +1,57 @@
+# Fleet host alerts. Metric names are the OTLP hostmetrics under VictoriaMetrics'
+# usePrometheusNaming. {{ ... }} is Go templating evaluated by vmalert/Alertmanager.
+#
+# "A host stopped reporting" lives in the generated fleet-presence rules
+# (absent()-per-expected-host, which keeps firing while a known node is dark).
+groups:
+  - name: fleet-host
+    interval: 30s
+    rules:
+      - alert: DiskAlmostFull
+        expr: |
+          sum by (host_name, mountpoint) (system_filesystem_usage_bytes{state="used"})
+            / sum by (host_name, mountpoint) (system_filesystem_usage_bytes)
+            > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk almost full on {{ $labels.host_name }} ({{ $labels.mountpoint }})"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host_name }} is {{ $value | humanizePercentage }} full."
+
+      - alert: DiskCritical
+        expr: |
+          sum by (host_name, mountpoint) (system_filesystem_usage_bytes{state="used"})
+            / sum by (host_name, mountpoint) (system_filesystem_usage_bytes)
+            > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk critically full on {{ $labels.host_name }} ({{ $labels.mountpoint }})"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host_name }} is {{ $value | humanizePercentage }} full."
+
+      - alert: MemoryHigh
+        expr: |
+          sum by (host_name) (system_memory_usage_bytes{state="used"})
+            / sum by (host_name) (system_memory_usage_bytes)
+            > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.host_name }}"
+          description: "Used memory on {{ $labels.host_name }} is {{ $value | humanizePercentage }} of total."
+
+      - alert: CPUHigh
+        expr: |
+          1 - (
+            sum by (host_name) (rate(system_cpu_time_seconds_total{state="idle"}[5m]))
+            / sum by (host_name) (rate(system_cpu_time_seconds_total[5m]))
+          ) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained high CPU on {{ $labels.host_name }}"
+          description: "CPU utilization on {{ $labels.host_name }} has been above 90% for 15m (currently {{ $value | humanizePercentage }})."

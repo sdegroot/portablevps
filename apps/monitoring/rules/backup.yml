@@ -1,0 +1,50 @@
+# Backup freshness alerts. Fed by portablevps_backup_last_success_timestamp_seconds,
+# which each backup host pushes to the OTLP gateway on a successful restic run
+# (see modules/system/telemetry.nix). The metric carries a host_name label, so
+# these per-series rules fire one alert per stale host with no host list needed.
+# {{ ... }} is Go templating evaluated by vmalert/Alertmanager (this file is
+# mounted verbatim, not Nix-interpolated).
+#
+# "Backup metric NEVER seen for an expected host" is handled by the generated
+# backup-presence rules instead — a staleness rule can't catch that (no series to
+# age). This file covers "the series exists but is going stale".
+groups:
+  - name: backup-freshness
+    interval: 1m
+    rules:
+      - alert: BackupStale
+        expr: time() - portablevps_backup_last_success_timestamp_seconds > 6 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup falling behind on {{ $labels.host_name }}"
+          description: >-
+            No successful restic backup on {{ $labels.host_name }} for {{ $value | humanizeDuration }}
+            (schedule is hourly). Check portablevps-backup.timer / .service on the host.
+
+      - alert: BackupStaleCritical
+        expr: time() - portablevps_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup stale on {{ $labels.host_name }}"
+          description: >-
+            No successful restic backup on {{ $labels.host_name }} for {{ $value | humanizeDuration }}.
+            The offsite recovery point is aging out — investigate now.
+
+      # A backup you have never restored is hope, not a backup. A restore drill
+      # stamps portablevps_backup_restore_drill_timestamp_seconds on a clean
+      # restore; this fires when the last drill is older than ~a quarter + grace.
+      # It only arms AFTER the first drill (no series → nothing to compare).
+      - alert: RestoreDrillStale
+        expr: time() - portablevps_backup_restore_drill_timestamp_seconds > 100 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restore drill overdue on {{ $labels.host_name }}"
+          description: >-
+            The last successful restore drill on {{ $labels.host_name }} was {{ $value | humanizeDuration }}
+            ago (target: quarterly).
