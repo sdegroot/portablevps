@@ -1,0 +1,97 @@
+{
+  "uid": "fleet-backups",
+  "title": "Fleet — Backups",
+  "description": "Backup freshness per host/app, from portablevps_backup_last_success_timestamp_seconds (pushed over OTLP after each successful backup). Thresholds mirror the BackupStale alert rules (warn >6h, critical >26h).",
+  "tags": ["monitoring", "otlp", "fleet", "backups"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+        "definition": "label_values(portablevps_backup_last_success_timestamp_seconds, host_name)",
+        "query": "label_values(portablevps_backup_last_success_timestamp_seconds, host_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Time since last successful backup",
+      "type": "stat",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 21600 },
+              { "color": "red", "value": 93600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "instant": true,
+          "expr": "time() - portablevps_backup_last_success_timestamp_seconds{host_name=~\"$host\"}",
+          "legendFormat": "{{host_name}} ({{service_name}})"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Backup age over time",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 21600 },
+              { "color": "red", "value": 93600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "time() - portablevps_backup_last_success_timestamp_seconds{host_name=~\"$host\"}",
+          "legendFormat": "{{host_name}} ({{service_name}})"
+        }
+      ]
+    }
+  ]
+}

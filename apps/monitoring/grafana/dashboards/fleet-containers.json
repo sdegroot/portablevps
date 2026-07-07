@@ -1,0 +1,119 @@
+{
+  "uid": "fleet-containers",
+  "title": "Fleet — Containers",
+  "description": "Per-container resource usage from the podman_stats receiver. Metrics carry container_name, host_name, and service_name (the app), so containers can be sliced by box or by application.",
+  "tags": ["monitoring", "otlp", "fleet", "containers"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+        "definition": "label_values(container_memory_usage_total_bytes, host_name)",
+        "query": "label_values(container_memory_usage_total_bytes, host_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {}
+      },
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+        "definition": "label_values(container_memory_usage_total_bytes{host_name=~\"$host\"}, container_name)",
+        "query": "label_values(container_memory_usage_total_bytes{host_name=~\"$host\"}, container_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU (cores)",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name, container_name) (rate(container_cpu_usage_seconds_total{host_name=~\"$host\", container_name=~\"$container\"}[5m]))",
+          "legendFormat": "{{container_name}} ({{host_name}})"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Memory usage",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "container_memory_usage_total_bytes{host_name=~\"$host\", container_name=~\"$container\"}",
+          "legendFormat": "{{container_name}} ({{host_name}})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Network I/O",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name, container_name) (rate(container_network_io_usage_rx_bytes_total{host_name=~\"$host\", container_name=~\"$container\"}[5m]))",
+          "legendFormat": "{{container_name}} rx"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name, container_name) (rate(container_network_io_usage_tx_bytes_total{host_name=~\"$host\", container_name=~\"$container\"}[5m]))",
+          "legendFormat": "{{container_name}} tx"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Block I/O",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name, container_name) (rate(container_blockio_io_service_bytes_recursive_read_total{host_name=~\"$host\", container_name=~\"$container\"}[5m]))",
+          "legendFormat": "{{container_name}} read"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name, container_name) (rate(container_blockio_io_service_bytes_recursive_write_total{host_name=~\"$host\", container_name=~\"$container\"}[5m]))",
+          "legendFormat": "{{container_name}} write"
+        }
+      ]
+    }
+  ]
+}
