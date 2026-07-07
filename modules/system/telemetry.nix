@@ -92,20 +92,13 @@ in
               processes = { };
             };
           };
-          docker_stats = {
-            endpoint = "unix:///run/podman/podman.sock";
-            collection_interval = cfg.scrapeInterval;
-            # podman's docker-compat stats endpoint is slower than dockerd's and
-            # negotiates a lower API version; give it headroom and pin the version
-            # so the scrape doesn't cancel mid-stream ("context canceled").
-            timeout = "20s";
-            api_version = "1.40";
-            metrics = {
-              "container.cpu.usage.percpu".enabled = true;
-              "container.network.io.usage.tx_dropped".enabled = true;
-              "container.network.io.usage.rx_dropped".enabled = true;
-            };
-          };
+          # NOTE: no docker_stats receiver. The contrib docker_stats receiver
+          # can't reliably parse podman's docker-compat containerStats response
+          # ("Could not parse docker containerStats" / "context canceled"), so
+          # per-container metrics are dropped rather than shipped noisily. Host
+          # metrics + logs cover the fleet; revisit with a podman-native metrics
+          # source if per-container stats are needed.
+
           # Read the systemd journal directly (journalctl) — no rsyslog / file.
           journald = { };
         };
@@ -128,7 +121,7 @@ in
           };
           pipelines = {
             metrics = {
-              receivers = [ "hostmetrics" "docker_stats" ];
+              receivers = [ "hostmetrics" ];
               processors = [ "batch" "resourcedetection" "resource" ];
               exporters = [ "otlphttp" ];
             };
