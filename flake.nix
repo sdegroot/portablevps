@@ -39,7 +39,7 @@
       nixosModules = {
         base = ./modules/system/base.nix;
         backups = ./modules/system/backups.nix;
-        monitoring = ./modules/system/monitoring.nix;
+        telemetry = ./modules/system/telemetry.nix;
         restoreMode = ./modules/system/restore-mode.nix;
         secrets = ./modules/system/secrets.nix;
         deployment = ./modules/system/deployment.nix;

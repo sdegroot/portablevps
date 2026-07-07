@@ -11,7 +11,7 @@
     ../modules/system/backups.nix
     ../modules/networking/service-exposure.nix
     ../modules/networking/proxy.nix
-    ../modules/system/monitoring.nix
+    ../modules/system/telemetry.nix
     ../modules/system/scripts.nix
     ../modules/platforms/qemu-test-access.nix
   ];

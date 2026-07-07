@@ -15,7 +15,7 @@
     ../modules/system/base.nix
     ../modules/platforms/local-zfs-data.nix
     ../modules/networking/network.nix
-    ../modules/system/monitoring.nix
+    ../modules/system/telemetry.nix
     ../modules/system/scripts.nix
     ../modules/platforms/qemu-test-access.nix
   ];

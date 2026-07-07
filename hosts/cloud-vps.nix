@@ -10,7 +10,7 @@ in
     ../modules/platforms/cloud-vps.nix
     ../modules/networking/break-glass-ssh.nix
     ../modules/networking/network.nix
-    ../modules/system/monitoring.nix
+    ../modules/system/telemetry.nix
     ../modules/system/scripts.nix
   ];
 
