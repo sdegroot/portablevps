@@ -366,6 +366,21 @@ in
         default = 0;
         description = "Seconds Traefik waits before checking DNS-01 TXT propagation.";
       };
+
+      dnsResolvers = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "9.9.9.9:53" "1.1.1.1:53" ];
+        description = ''
+          Nameservers lego uses for ACME DNS-01 zone discovery and propagation
+          checks. Defaults to public resolvers so the challenge is resolved
+          against public authoritative DNS, not the host's system resolver.
+          Essential on hosts where NetBird split-DNS routes the managed zone
+          (e.g. int.epistola.io) to the mesh resolver: that resolver only knows
+          peer names and returns REFUSED for `_acme-challenge` lookups, which
+          otherwise fails issuance ("could not find zone"). Set to [] to use the
+          system resolver.
+        '';
+      };
     };
 
     dns = {
@@ -496,6 +511,8 @@ in
                 provider = cfg.acme.dnsProvider;
               } // lib.optionalAttrs (cfg.acme.propagationDelayBeforeChecks > 0) {
                 propagation.delayBeforeChecks = cfg.acme.propagationDelayBeforeChecks;
+              } // lib.optionalAttrs (cfg.acme.dnsResolvers != [ ]) {
+                resolvers = cfg.acme.dnsResolvers;
               };
             } // lib.optionalAttrs (acmeCaServer != "") {
               caServer = acmeCaServer;
