@@ -30,8 +30,8 @@
   # requires a one-time reboot (or full network cycle) per host to clear the stale
   # iptables chains left by the old driver.
   virtualisation.containers.containersConf.settings.network.firewall_driver = "nftables";
-
-  environment.systemPackages = with pkgs; [
-    podman
-  ];
+  # NB: `virtualisation.podman.enable` already installs the (extraPackages-wrapped)
+  # podman into systemPackages. Do NOT add `pkgs.podman` here — a second, unwrapped
+  # podman would shadow it on PATH and break CLI `podman run --network …` (netavark
+  # would not find `nft`).
 }
