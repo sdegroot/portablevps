@@ -29,6 +29,12 @@
   # host's iptables-nft firewall (both on the nf_tables kernel backend). Switching
   # requires a one-time reboot (or full network cycle) per host to clear the stale
   # iptables chains left by the old driver.
+  #
+  # See docs/adr/0002-netavark-nftables-firewall-driver.md for the full rationale
+  # and tradeoffs. Two exit ramps if this becomes a liability: (1) if a nixpkgs
+  # bump breaks the `nft`-on-PATH assumption above, switch to an explicit netavark
+  # override; (2) if break-glass-ssh ever moves off iptables/ipset, unify the host
+  # on `networking.nftables.enable` and delete this special-casing.
   virtualisation.containers.containersConf.settings.network.firewall_driver = "nftables";
   # NB: `virtualisation.podman.enable` already installs the (extraPackages-wrapped)
   # podman into systemPackages. Do NOT add `pkgs.podman` here — a second, unwrapped
