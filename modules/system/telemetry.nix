@@ -16,6 +16,11 @@ let
   # YAML) to avoid heredoc-indentation pitfalls. service.name (the application)
   # is added when set so metrics/logs can be differentiated by app, not just host.
   resourceAttrs = [
+    # Stamp host.name from the CONFIGURED machine name, not the OS hostname:
+    # NixOS does not change the running hostname on a switch, so a repurposed/
+    # renamed box can otherwise report telemetry under a stale name. This keeps
+    # host_name aligned with the machine identity (and with the backup metric).
+    { key = "host.name"; value = config.networking.hostName; action = "upsert"; }
     { key = "service.namespace"; value = cfg.serviceNamespace; action = "upsert"; }
     { key = "host.id"; from_attribute = "host.name"; action = "upsert"; }
   ] ++ lib.optional (cfg.serviceName != "") {

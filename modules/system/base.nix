@@ -32,6 +32,25 @@ in
   };
 
   config = {
+    # nixos-rebuild switch writes /etc/hostname but does not re-apply the running
+    # kernel hostname (systemd sets it from /etc/hostname only at boot), so a
+    # repurposed/renamed box otherwise keeps a stale live hostname until reboot —
+    # which leaks into telemetry (host.name), logs, and prompts. Apply it on every
+    # activation so the running hostname always matches the machine identity.
+    system.activationScripts.applyRunningHostname =
+      "${pkgs.coreutils}/bin/printf '%s' ${lib.escapeShellArg config.networking.hostName} > /proc/sys/kernel/hostname";
+
+    # NetBird serves peer-name DNS (<peer>.epistola.int) from its embedded
+    # resolver, but on Linux it needs systemd-resolved to register that split-DNS
+    # domain. Without it, servers can't resolve mesh names and fall through to
+    # public DNS. Enabling resolved lets NetBird wire up peer resolution.
+    services.resolved = {
+      enable = true;
+      # Insurance: if the DHCP-provided upstream isn't picked up, resolved still
+      # has working public resolvers so ACME / egress DNS never breaks.
+      fallbackDns = [ "1.1.1.1" "9.9.9.9" ];
+    };
+
     services.openssh = {
       enable = true;
       openFirewall = false;
