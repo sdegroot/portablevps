@@ -1,0 +1,22 @@
+# VictoriaMetrics self-scrape of the monitoring stack — the only classic pull
+# config, purely to produce up{job=...} for the ComponentDown alert (OTLP ingest
+# is push-based and has no `up`). Targets are reached by container name over the
+# `monitoring` podman network.
+global:
+  scrape_interval: 30s
+scrape_configs:
+  - job_name: victoriametrics
+    static_configs:
+      - targets: ["victoriametrics:8428"]
+  - job_name: victorialogs
+    static_configs:
+      - targets: ["victorialogs:9428"]
+  - job_name: vmalert
+    static_configs:
+      - targets: ["vmalert:8880"]
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]

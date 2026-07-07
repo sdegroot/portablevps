@@ -1,0 +1,28 @@
+# The monitoring stack watching itself. `up` comes from VictoriaMetrics'
+# self-scrape (scrape.yml) — OTLP ingest is push-based and has no `up`.
+groups:
+  - name: monitoring-stack
+    interval: 30s
+    rules:
+      - alert: ComponentDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Monitoring component {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has failed its self-scrape for 2m."
+      - alert: VmalertRulesReloadFailed
+        expr: vmalert_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vmalert failed to reload its rules"
+      - alert: AlertmanagerConfigReloadFailed
+        expr: alertmanager_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager failed to reload its config"

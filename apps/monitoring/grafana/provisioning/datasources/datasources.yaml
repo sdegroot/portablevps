@@ -1,0 +1,25 @@
+# Grafana datasources, provisioned as code. The VictoriaMetrics datasource
+# plugins are installed at container start via GF_INSTALL_PLUGINS.
+apiVersion: 1
+datasources:
+  - name: VictoriaMetrics
+    type: victoriametrics-metrics-datasource
+    uid: victoriametrics
+    access: proxy
+    url: http://victoriametrics:8428
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+  - name: VictoriaLogs
+    type: victoriametrics-logs-datasource
+    uid: victorialogs
+    access: proxy
+    url: http://victorialogs:9428
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
