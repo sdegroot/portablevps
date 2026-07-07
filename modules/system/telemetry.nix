@@ -12,6 +12,16 @@ let
   enabled = cfg.endpoint != "";
   backupsPresent = (config.portablevps.backups.components or { }) != { };
 
+  # Resource attributes stamped on every metric/log. Emitted as JSON (valid
+  # YAML) to avoid heredoc-indentation pitfalls. service.name (the application)
+  # is added when set so metrics/logs can be differentiated by app, not just host.
+  resourceAttrs = [
+    { key = "service.namespace"; value = cfg.serviceNamespace; action = "upsert"; }
+    { key = "host.id"; from_attribute = "host.name"; action = "upsert"; }
+  ] ++ lib.optional (cfg.serviceName != "") {
+    key = "service.name"; value = cfg.serviceName; action = "upsert";
+  };
+
   # Ship-only collector config. host.name is detected from the OS hostname
   # (resourcedetection) and becomes the series' host_name label under the
   # gateway's VictoriaMetrics usePrometheusNaming.
@@ -45,13 +55,7 @@ let
           hostname_sources: [os]
         override: false
       resource:
-        attributes:
-          - key: service.namespace
-            value: ${cfg.serviceNamespace}
-            action: upsert
-          - key: host.id
-            from_attribute: host.name
-            action: upsert
+        attributes: ${builtins.toJSON resourceAttrs}
     exporters:
       otlphttp:
         endpoint: ${cfg.endpoint}
@@ -81,7 +85,7 @@ let
     now_ns="$(${pkgs.coreutils}/bin/date +%s)000000000"
     ts="$(${pkgs.coreutils}/bin/date +%s)"
     host=${lib.escapeShellArg config.networking.hostName}
-    payload='{"resourceMetrics":[{"resource":{"attributes":[{"key":"host.name","value":{"stringValue":"'"$host"'"}},{"key":"service.namespace","value":{"stringValue":"${cfg.serviceNamespace}"}}]},"scopeMetrics":[{"metrics":[{"name":"'"$metric"'","gauge":{"dataPoints":[{"timeUnixNano":"'"$now_ns"'","asDouble":'"$ts"'}]}}]}]}]}'
+    payload='{"resourceMetrics":[{"resource":{"attributes":[{"key":"host.name","value":{"stringValue":"'"$host"'"}},{"key":"service.namespace","value":{"stringValue":"${cfg.serviceNamespace}"}}${lib.optionalString (cfg.serviceName != "") '',{"key":"service.name","value":{"stringValue":"${cfg.serviceName}"}}''}]},"scopeMetrics":[{"metrics":[{"name":"'"$metric"'","gauge":{"dataPoints":[{"timeUnixNano":"'"$now_ns"'","asDouble":'"$ts"'}]}}]}]}]}'
     ${pkgs.curl}/bin/curl -sf --max-time 10 \
       -H 'Content-Type: application/json' \
       --data "$payload" \
@@ -102,7 +106,13 @@ in
     serviceNamespace = lib.mkOption {
       type = lib.types.str;
       default = "portablevps";
-      description = "service.namespace stamped on this host's telemetry.";
+      description = "service.namespace stamped on this host's telemetry (the fleet/domain).";
+    };
+
+    serviceName = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = "service.name stamped on this host's telemetry — the application it runs (e.g. authentik), so metrics and logs can be differentiated by app in addition to host.name.";
     };
 
     scrapeInterval = lib.mkOption {
