@@ -1164,8 +1164,9 @@ def switch_profile(
             f"admin@{host}",
             "--build-host",
             f"admin@{host}",
-            "--use-remote-sudo",
-            "--fast",
+            # Modern nixos-rebuild flag names (were --use-remote-sudo / --fast).
+            "--elevate=sudo",
+            "--no-reexec",
         ],
         cwd=REPO_ROOT,
         env_vars={"NIX_SSHOPTS": nix_ssh_opts(admin_key, ssh_port)},
