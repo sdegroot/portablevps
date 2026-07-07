@@ -66,6 +66,12 @@ let
     (name: component: component // { inherit name; })
     components;
 
+  # A server with no backup components (e.g. a monitoring box) declares nothing
+  # to back up, so the scheduled backup/maintenance timers stay disarmed. The
+  # option is still declared here because core modules (deployment/secrets) wire
+  # restic settings on every host.
+  hasComponents = componentList != [ ];
+
   hookFile = hookDirName: hookOptionName: component:
     let
       orderName = "${toString component.order}-${component.name}";
@@ -221,7 +227,7 @@ in
     };
 
     systemd.timers.portablevps-backup = {
-      wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+      wantedBy = lib.optional (hasComponents && !config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "hourly";
         Persistent = true;
@@ -255,7 +261,7 @@ in
     };
 
     systemd.timers.portablevps-backup-maintenance = {
-      wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+      wantedBy = lib.optional (hasComponents && !config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "weekly";
         RandomizedDelaySec = "1h";

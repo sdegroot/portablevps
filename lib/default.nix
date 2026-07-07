@@ -51,6 +51,7 @@ let
   # profile defined in the consumer repository.
   builtinProfiles = {
     single-instance-app = toolRoot + "/modules/profiles/single-instance-app.nix";
+    monitoring-server = toolRoot + "/modules/profiles/monitoring-server.nix";
   };
 
   resolveProfile = profile:
