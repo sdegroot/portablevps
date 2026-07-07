@@ -603,12 +603,15 @@ class CloudTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False):
             with mock.patch.object(cloud, "wait_admin_ssh") as wait_admin_ssh:
                 with mock.patch.object(cloud, "copy_repo_to_temp") as copy_repo:
-                    with mock.patch.object(cloud, "switch_profile") as switch_profile:
-                        with mock.patch.object(cloud, "curl_proxy", return_value="portablevps proxy test ok") as curl_proxy:
-                            cloud.command_proxy_smoke_test(mock.Mock())
+                    with mock.patch.object(cloud, "vendor_path_inputs") as vendor:
+                        with mock.patch.object(cloud, "switch_profile") as switch_profile:
+                            with mock.patch.object(cloud, "curl_proxy", return_value="portablevps proxy test ok") as curl_proxy:
+                                cloud.command_proxy_smoke_test(mock.Mock())
 
         wait_admin_ssh.assert_called_once()
         copy_repo.assert_called_once()
+        # The copied flake is made self-contained before the pure-mode switch.
+        vendor.assert_called_once()
         switch_profile.assert_called_once()
         curl_proxy.assert_called_once_with("proxy-test.portablevps.int", "100.85.5.203")
 

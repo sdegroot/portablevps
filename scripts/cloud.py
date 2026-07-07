@@ -1411,6 +1411,9 @@ def command_proxy_smoke_test(_args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory() as temp:
         tmpdir = Path(temp)
         base = copy_repo_to_temp(tmpdir)
+        # switch_profile evaluates the copied flake in pure mode; make it
+        # self-contained so a monorepo consumer's path:../<tool> input resolves.
+        vendor_path_inputs(base, tmpdir)
         write_proxy_smoke_override(base, domain=domain, visibility=visibility)
         print(f"switch: enabling temporary proxy smoke-test route on {host}", flush=True)
         switch_profile(deployment, host, admin_key, ssh_port, flake_path=base)
