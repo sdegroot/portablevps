@@ -15,6 +15,12 @@ let
     PGUSER=${config.portablevps.postgres.user}
     PGDATABASE=${config.portablevps.postgres.database}
   '';
+
+  # A server only carries Postgres / restic secrets if it actually runs those.
+  # A monitoring box (no postgres module, no backup components) has neither, so
+  # requiring them in its sops file would fail sops-install-secrets.
+  hasPostgres = config.portablevps ? postgres;
+  hasBackupComponents = (config.portablevps.backups.components or { }) != { };
 in
 {
   options.portablevps.secrets = {
@@ -62,58 +68,67 @@ in
       }
     ];
 
-    sops = lib.mkIf useSops {
-      defaultSopsFile = secretsFile;
-      age.keyFile = cfg.ageKeyFile;
+    sops = lib.mkIf useSops (lib.mkMerge [
+      {
+        defaultSopsFile = secretsFile;
+        age.keyFile = cfg.ageKeyFile;
+      }
 
-      secrets."postgres/password" = { };
-      secrets."restic/password" = { };
-      secrets."restic/aws-access-key-id" = { };
-      secrets."restic/aws-secret-access-key" = { };
+      (lib.mkIf hasPostgres {
+        secrets."postgres/password" = { };
+        templates."portablevps/postgres.env" = {
+          path = "/etc/portablevps/postgres.env";
+          mode = "0400";
+          content = ''
+            POSTGRES_PASSWORD=${config.sops.placeholder."postgres/password"}
+            PGPASSWORD=${config.sops.placeholder."postgres/password"}
+          '' + pgConn;
+        };
+      })
 
-      templates."portablevps/postgres.env" = {
-        path = "/etc/portablevps/postgres.env";
-        mode = "0400";
-        content = ''
-          POSTGRES_PASSWORD=${config.sops.placeholder."postgres/password"}
-          PGPASSWORD=${config.sops.placeholder."postgres/password"}
-        '' + pgConn;
-      };
+      (lib.mkIf hasBackupComponents {
+        secrets."restic/password" = { };
+        secrets."restic/aws-access-key-id" = { };
+        secrets."restic/aws-secret-access-key" = { };
+        templates."portablevps/restic.env" = {
+          path = "/etc/portablevps/restic.env";
+          mode = "0400";
+          content = ''
+            RESTIC_REPOSITORY=${config.portablevps.backups.restic.repository}
+            RESTIC_PASSWORD=${config.sops.placeholder."restic/password"}
+            AWS_ACCESS_KEY_ID=${config.sops.placeholder."restic/aws-access-key-id"}
+            AWS_SECRET_ACCESS_KEY=${config.sops.placeholder."restic/aws-secret-access-key"}
+            AWS_DEFAULT_REGION=nl-ams
+            AWS_REGION=nl-ams
+          '';
+        };
+      })
+    ]);
 
-      templates."portablevps/restic.env" = {
-        path = "/etc/portablevps/restic.env";
-        mode = "0400";
-        content = ''
-          RESTIC_REPOSITORY=${config.portablevps.backups.restic.repository}
-          RESTIC_PASSWORD=${config.sops.placeholder."restic/password"}
-          AWS_ACCESS_KEY_ID=${config.sops.placeholder."restic/aws-access-key-id"}
-          AWS_SECRET_ACCESS_KEY=${config.sops.placeholder."restic/aws-secret-access-key"}
-          AWS_DEFAULT_REGION=nl-ams
-          AWS_REGION=nl-ams
-        '';
-      };
-    };
+    environment.etc = lib.mkIf cfg.allowPrototypeDefaults (lib.mkMerge [
+      (lib.mkIf hasPostgres {
+        "portablevps/postgres.env" = {
+          mode = "0400";
+          text = ''
+            POSTGRES_PASSWORD=demo-password
+            PGPASSWORD=demo-password
+          '' + pgConn;
+        };
+      })
 
-    environment.etc = lib.mkIf cfg.allowPrototypeDefaults {
-      "portablevps/postgres.env" = {
-        mode = "0400";
-        text = ''
-          POSTGRES_PASSWORD=demo-password
-          PGPASSWORD=demo-password
-        '' + pgConn;
-      };
-
-      "portablevps/restic.env" = {
-        mode = "0400";
-        text = ''
-          RESTIC_REPOSITORY=${cfg.localBackupRepository}
-          RESTIC_PASSWORD=dev-password
-          AWS_ACCESS_KEY_ID=${config.portablevps.backups.restic.awsAccessKeyId}
-          AWS_SECRET_ACCESS_KEY=portablevps-minio-password
-          AWS_DEFAULT_REGION=us-east-1
-          AWS_REGION=us-east-1
-        '';
-      };
-    };
+      (lib.mkIf hasBackupComponents {
+        "portablevps/restic.env" = {
+          mode = "0400";
+          text = ''
+            RESTIC_REPOSITORY=${cfg.localBackupRepository}
+            RESTIC_PASSWORD=dev-password
+            AWS_ACCESS_KEY_ID=${config.portablevps.backups.restic.awsAccessKeyId}
+            AWS_SECRET_ACCESS_KEY=portablevps-minio-password
+            AWS_DEFAULT_REGION=us-east-1
+            AWS_REGION=us-east-1
+          '';
+        };
+      })
+    ]);
   };
 }
