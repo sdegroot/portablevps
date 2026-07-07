@@ -271,7 +271,13 @@ in
     {
       # rsyslog populates /var/log/syslog for the otelcol filelog receiver (the
       # contrib image has no journalctl, so journald receiver is not an option).
-      services.rsyslogd.enable = true;
+      # NixOS's default rsyslog writes no /var/log/syslog, so add the rule.
+      services.rsyslogd = {
+        enable = true;
+        extraConfig = ''
+          *.*  -/var/log/syslog
+        '';
+      };
 
       # Shared podman bridge network with a pinned subnet so containers get
       # static IPs (10.89.0.10-14).

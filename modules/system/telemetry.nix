@@ -135,8 +135,14 @@ in
 
   config = lib.mkIf enabled {
     # rsyslog populates /var/log/syslog for the filelog receiver (the contrib
-    # image has no journalctl, so the journald receiver is not an option).
-    services.rsyslogd.enable = true;
+    # image has no journalctl, so the journald receiver is not an option). NixOS's
+    # default rsyslog config writes no /var/log/syslog, so add the rule explicitly.
+    services.rsyslogd = {
+      enable = true;
+      extraConfig = ''
+        *.*  -/var/log/syslog
+      '';
+    };
 
     environment.etc."containers/systemd/otelcol-ship.container".text = ''
       [Unit]
