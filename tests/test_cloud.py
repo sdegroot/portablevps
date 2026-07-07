@@ -1,6 +1,8 @@
 """Unit tests for the host-side cloud orchestration CLI helpers."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -309,6 +311,69 @@ class CloudTests(unittest.TestCase):
 
         groups.assert_called_once_with("tok", ["portablevps-servers", "test-vps"])
         self.assertEqual(add.call_count, 2)
+
+    def test_netbird_ensure_setup_key_reconciles_drifted_auto_groups(self):
+        calls = []
+
+        def fake(method, path, *, token, payload=None):
+            calls.append((method, path, payload))
+            if method == "GET" and path == "/api/setup-keys":
+                return [{"id": "k1", "name": "portablevps-test-vps", "revoked": False,
+                         "valid": True, "auto_groups": ["g1"]}]
+            return {}
+
+        with mock.patch.object(cloud, "netbird_request", side_effect=fake):
+            value, created = cloud.netbird_ensure_setup_key("tok", "portablevps-test-vps", ["g1", "g2"])
+
+        self.assertEqual((value, created), ("", False))
+        put = [c for c in calls if c[0] == "PUT"]
+        self.assertEqual(len(put), 1)
+        self.assertEqual(put[0][1], "/api/setup-keys/k1")
+        self.assertEqual(put[0][2]["auto_groups"], ["g1", "g2"])
+
+    def test_netbird_ensure_setup_key_leaves_matching_groups_untouched(self):
+        def fake(method, path, *, token, payload=None):
+            if method == "GET" and path == "/api/setup-keys":
+                return [{"id": "k1", "name": "portablevps-test-vps", "revoked": False,
+                         "valid": True, "auto_groups": ["g2", "g1"]}]
+            raise AssertionError(("unexpected", method, path))
+
+        with mock.patch.object(cloud, "netbird_request", side_effect=fake):
+            value, created = cloud.netbird_ensure_setup_key("tok", "portablevps-test-vps", ["g1", "g2"])
+
+        self.assertEqual((value, created), ("", False))
+
+    def test_netbird_ensure_setup_key_creates_bounded_key(self):
+        def fake(method, path, *, token, payload=None):
+            if method == "GET" and path == "/api/setup-keys":
+                return []
+            if method == "POST" and path == "/api/setup-keys":
+                self.assertEqual(payload["usage_limit"], cloud.NETBIRD_SETUP_KEY_USAGE_LIMIT)
+                self.assertEqual(payload["expires_in"], cloud.NETBIRD_SETUP_KEY_EXPIRES_IN_SECONDS)
+                self.assertNotEqual(payload["usage_limit"], 0)
+                self.assertEqual(payload["auto_groups"], ["g1"])
+                return {"key": "fresh-setup-key"}
+            raise AssertionError(("unexpected", method, path))
+
+        with mock.patch.object(cloud, "netbird_request", side_effect=fake):
+            value, created = cloud.netbird_ensure_setup_key("tok", "portablevps-test-vps", ["g1"])
+
+        self.assertEqual((value, created), ("fresh-setup-key", True))
+
+    def test_netbird_sync_stores_created_key_without_printing_plaintext(self):
+        env = {**self.server_env, "SERVER": "test-vps", "NETBIRD_API_TOKEN": "tok"}
+        secret = "super-secret-setup-key-value"
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "netbird_ensure_groups", return_value={"portablevps-servers": "g1"}):
+                with mock.patch.object(cloud, "netbird_ensure_setup_key", return_value=(secret, True)):
+                    with mock.patch.object(cloud, "store_server_secret_via_sops") as store:
+                        with mock.patch.object(cloud, "netbird_find_peer", return_value=None):
+                            with contextlib.redirect_stdout(buf):
+                                cloud.command_netbird_sync(mock.Mock())
+
+        store.assert_called_once_with("test-vps", cloud.NETBIRD_SETUP_KEY_SECRET_INDEX, secret)
+        self.assertNotIn(secret, buf.getvalue())
 
     def test_netbird_policy_sync_requires_token(self):
         with mock.patch.dict(os.environ, {**self.server_env, "NETBIRD_API_TOKEN": ""}, clear=False):

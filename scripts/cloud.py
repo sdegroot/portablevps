@@ -1542,14 +1542,39 @@ def netbird_managed_setup_key_name(server_name: str) -> str:
     return f"portablevps-{server_name}"
 
 
+# Bound the managed setup key rather than issuing an unlimited, year-long one.
+# The key auto-groups any peer that joins with it, so an unlimited key is a
+# broad standing credential. These bounds are safe because a key that has
+# expired or exhausted its uses reports valid=false, so the next
+# `cloud:netbird-sync` transparently regenerates and re-stores it — and a
+# DR/repurpose flow always runs sync before a host joins.
+NETBIRD_SETUP_KEY_USAGE_LIMIT = 10
+NETBIRD_SETUP_KEY_EXPIRES_IN_SECONDS = 90 * 24 * 60 * 60  # 90 days
+
+
+def netbird_setup_key_auto_groups(key: dict) -> list[str]:
+    return [str(g) for g in key.get("auto_groups", [])]
+
+
 def netbird_ensure_setup_key(token: str, name: str, group_ids: list[str]) -> tuple[str, bool]:
-    """Ensure a reusable, non-revoked setup key with the given auto-groups
-    exists. Returns (plaintext_key_or_empty, created). The plaintext value is
-    only available when the key is newly created."""
+    """Ensure a reusable, non-revoked, still-valid setup key with the given
+    auto-groups exists. Returns (plaintext_key_or_empty, created); the plaintext
+    is only available when the key is newly created. If a live key already
+    exists but its auto-groups have drifted from group_ids, reconcile them in
+    place so later joins land in the currently declared groups."""
+    desired = sorted(set(str(g) for g in group_ids))
     keys = netbird_request("GET", "/api/setup-keys", token=token)
     if isinstance(keys, list):
         for key in keys:
             if str(key.get("name", "")) == name and not key.get("revoked", False) and key.get("valid", True):
+                key_id = str(key.get("id", ""))
+                if key_id and sorted(set(netbird_setup_key_auto_groups(key))) != desired:
+                    netbird_request(
+                        "PUT",
+                        f"/api/setup-keys/{key_id}",
+                        token=token,
+                        payload={"name": name, "auto_groups": list(group_ids), "revoked": False},
+                    )
                 return "", False
     created = netbird_request(
         "POST",
@@ -1558,15 +1583,44 @@ def netbird_ensure_setup_key(token: str, name: str, group_ids: list[str]) -> tup
         payload={
             "name": name,
             "type": "reusable",
-            "expires_in": 31536000,
-            "auto_groups": group_ids,
-            "usage_limit": 0,
+            "expires_in": NETBIRD_SETUP_KEY_EXPIRES_IN_SECONDS,
+            "auto_groups": list(group_ids),
+            "usage_limit": NETBIRD_SETUP_KEY_USAGE_LIMIT,
             "ephemeral": False,
         },
     )
     if not isinstance(created, dict) or not created.get("key"):
         raise CloudError(f"error: failed to create NetBird setup key {name}", 70)
     return str(created["key"]), True
+
+
+# Default sops index for the NetBird setup key, matching netbird.nix's
+# setupKeySecret default of "netbird/setup-key".
+NETBIRD_SETUP_KEY_SECRET_INDEX = '["netbird"]["setup-key"]'
+
+
+def store_server_secret_via_sops(server_name: str, index: str, value: str) -> None:
+    """Write a secret into the server's sops file without ever exposing it in a
+    process listing (sops --value-stdin) or shell history. Requires the operator
+    age identity (SOPS_AGE_KEY_FILE, defaulting to the shared operator key)."""
+    secrets_file = repo_path(f"secrets/{server_name}.yaml")
+    if not secrets_file.is_file():
+        raise CloudError(f"error: cannot store secret: secrets file not found: {secrets_file}", 66)
+    sops_env = dict(os.environ)
+    if not sops_env.get("SOPS_AGE_KEY_FILE"):
+        sops_env["SOPS_AGE_KEY_FILE"] = str(repo_path(".local/sops/age-key.txt"))
+    try:
+        subprocess.run(
+            ["sops", "set", "--value-stdin", str(secrets_file), index],
+            input=json.dumps(value),
+            text=True,
+            check=True,
+            env=sops_env,
+        )
+    except FileNotFoundError as exc:
+        raise CloudError("error: sops not found; cannot store the secret", 69) from exc
+    except subprocess.CalledProcessError as exc:
+        raise CloudError(f"error: sops failed to store the secret (exit {exc.returncode})", 70) from exc
 
 
 def command_netbird_sync(_args: argparse.Namespace) -> None:
@@ -1585,11 +1639,13 @@ def command_netbird_sync(_args: argparse.Namespace) -> None:
     key_name = netbird_managed_setup_key_name(server.name)
     key_value, created = netbird_ensure_setup_key(token, key_name, list(group_ids.values()))
     if created:
-        print(f"created reusable setup key {key_name} with auto-groups {', '.join(groups)}", flush=True)
-        print("store it in this server's secrets:", flush=True)
-        print(f"  mise exec -- task secrets:set SERVER={server.name} KEY='[\"netbird\"][\"setup-key\"]' VALUE={key_value}", flush=True)
+        # Store the plaintext key straight into sops via stdin — never echoed to
+        # the terminal or passed on a command line — so it cannot leak into
+        # scrollback, shell history, or a process listing.
+        store_server_secret_via_sops(server.name, NETBIRD_SETUP_KEY_SECRET_INDEX, key_value)
+        print(f"created reusable setup key {key_name} (auto-groups {', '.join(groups)}) and stored it in secrets/{server.name}.yaml", flush=True)
     else:
-        print(f"setup key {key_name} already exists (auto-groups unchanged)", flush=True)
+        print(f"setup key {key_name} already exists (auto-groups reconciled)", flush=True)
 
     peer = netbird_find_peer(token, server.netbird_name)
     if peer is None:
