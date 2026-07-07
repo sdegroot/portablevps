@@ -104,6 +104,53 @@ run_backup() {
   fi
 }
 
+# Seed a marker into every non-postgres backup path the running config declares.
+# The backup coordinator materialises each component's paths at
+# /etc/portablevps/backups/paths.d/<component>, so this exercises each app's
+# registered file state (e.g. authentik's media + custom-templates) generically,
+# rather than a single hardcoded demo path. The postgres component's path is the
+# physical-backup scratch directory, which is covered by the PostgreSQL marker.
+seed_component_markers() {
+  local target="$1" marker="$2"
+  remote "$target" "
+    set -eu
+    for f in /etc/portablevps/backups/paths.d/*; do
+      [ -e \"\$f\" ] || continue
+      if [ \"\$(basename \"\$f\")\" = postgres ]; then continue; fi
+      while IFS= read -r p; do
+        [ -n \"\$p\" ] || continue
+        sudo mkdir -p \"\$p\"
+        printf '%s\n' '$marker' | sudo tee \"\$p/dr-marker.txt\" >/dev/null
+      done < \"\$f\"
+    done
+  "
+}
+
+# Assert every seeded marker survived the restore. Reads the same manifest on the
+# restored host (both VMs run the same config, so the declared paths match).
+verify_component_markers() {
+  local target="$1" marker="$2"
+  remote "$target" "
+    set -eu
+    rc=0
+    for f in /etc/portablevps/backups/paths.d/*; do
+      [ -e \"\$f\" ] || continue
+      if [ \"\$(basename \"\$f\")\" = postgres ]; then continue; fi
+      while IFS= read -r p; do
+        [ -n \"\$p\" ] || continue
+        got=\"\$(sudo cat \"\$p/dr-marker.txt\" 2>/dev/null || true)\"
+        if [ \"\$got\" != '$marker' ]; then
+          echo \"FAIL: dr-marker in \$p is '\$got', expected '$marker'\" >&2
+          rc=1
+        else
+          echo \"ok: \$p/dr-marker.txt survived restore\"
+        fi
+      done < \"\$f\"
+    done
+    exit \$rc
+  "
+}
+
 echo "test: fresh server can restore PostgreSQL data from backup"
 echo "initial marker: $INITIAL_MARKER"
 echo "marker: $MARKER"
@@ -145,6 +192,9 @@ remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$MARKER'"
 echo "writing container file state on VM A"
 remote "$VM_A_SSH" "sudo mkdir -p /data/container-state/demo && printf '%s\n' '$MARKER' | sudo tee /data/container-state/demo/marker.txt >/dev/null"
 
+echo "seeding a marker into every app-registered backup path on VM A"
+seed_component_markers "$VM_A_SSH" "$MARKER"
+
 echo "creating incremental backup on VM A (portablevps-backup.service)"
 run_backup "$VM_A_SSH" incremental
 
@@ -167,5 +217,8 @@ remote_repo "$VM_B_SSH" "sudo verify-test-data.sh '$MARKER'"
 
 echo "verifying restored container file state on VM B"
 remote "$VM_B_SSH" "test \"\$(sudo cat /data/container-state/demo/marker.txt)\" = '$MARKER'"
+
+echo "verifying every app-registered backup path was restored on VM B"
+verify_component_markers "$VM_B_SSH" "$MARKER"
 
 echo "PASS: fresh server restored PostgreSQL data from backup"
