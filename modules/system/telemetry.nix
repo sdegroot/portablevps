@@ -115,7 +115,12 @@ in
         };
         exporters.otlphttp.endpoint = cfg.endpoint;
         service = {
-          telemetry.logs.level = "info";
+          telemetry = {
+            logs.level = "info";
+            # Disable the collector's own :8888 Prometheus self-metrics endpoint —
+            # nothing scrapes it, and it otherwise contends for the port.
+            metrics.level = "none";
+          };
           pipelines = {
             metrics = {
               receivers = [ "hostmetrics" "docker_stats" ];
