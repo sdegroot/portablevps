@@ -11,15 +11,18 @@
     };
   };
 
-  # Use netavark's nftables firewall driver instead of the (default) iptables one.
-  # The iptables driver hand-creates per-network `NETAVARK-<hash>` chains and does
-  # not reliably clean them up on container teardown; restarting a single container
-  # on a custom bridge network then fails with "iptables: Chain already exists" as
-  # netavark's on-disk state diverges from the live chains (which previously forced
-  # a full reboot to recover). The nftables driver manages a single self-contained
-  # `netavark` nft table applied atomically, so restarts are idempotent and never
-  # strand chains. This is also podman's own direction for the default driver.
-  virtualisation.containers.containersConf.settings.network.firewall_driver = "nftables";
+  # NOTE ON RESTARTS: netavark uses its default `iptables` firewall driver, which
+  # hand-creates per-network `NETAVARK-<hash>` chains and does not reliably clean
+  # them up on container teardown. Restarting a single container on a custom bridge
+  # network can then fail with "iptables: Chain already exists" as netavark's
+  # on-disk state diverges from the live chains, recoverable only by cycling the
+  # whole network (stop all containers + the *-network unit, then start) or a reboot.
+  # The `nftables` driver would make restarts idempotent, but nixpkgs' netavark is
+  # built referencing iptables only (no `nft` in its closure), and enabling it via
+  # `networking.nftables.enable` conflicts with the iptables/ipset break-glass-ssh
+  # module. Proper fix (deferred): a netavark override that bundles nftables so the
+  # driver can be switched without touching the host firewall backend. Until then,
+  # prefer a full-stack recycle over single-container restarts (see apps/monitoring).
 
   environment.systemPackages = with pkgs; [
     podman
