@@ -92,12 +92,13 @@ in
               processes = { };
             };
           };
-          # NOTE: no docker_stats receiver. The contrib docker_stats receiver
-          # can't reliably parse podman's docker-compat containerStats response
-          # ("Could not parse docker containerStats" / "context canceled"), so
-          # per-container metrics are dropped rather than shipped noisily. Host
-          # metrics + logs cover the fleet; revisit with a podman-native metrics
-          # source if per-container stats are needed.
+          # Per-container metrics via the podman-NATIVE receiver (talks podman's
+          # own API), not docker_stats — the docker-compat containerStats format
+          # doesn't parse reliably ("Could not parse docker containerStats").
+          podman_stats = {
+            endpoint = "unix:///run/podman/podman.sock";
+            collection_interval = cfg.scrapeInterval;
+          };
 
           # Read the systemd journal directly (journalctl) — no rsyslog / file.
           journald = { };
@@ -121,7 +122,7 @@ in
           };
           pipelines = {
             metrics = {
-              receivers = [ "hostmetrics" ];
+              receivers = [ "hostmetrics" "podman_stats" ];
               processors = [ "batch" "resourcedetection" "resource" ];
               exporters = [ "otlphttp" ];
             };
