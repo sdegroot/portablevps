@@ -676,8 +676,6 @@ def install_cloud(
     admin_pubkey: str,
     age_key: str,
     kexec_flags: str,
-    override_hostname: str = "",
-    override_netbird_name: str = "",
 ) -> None:
     if not target:
         raise CloudError("error: TARGET is required", 64)
@@ -708,12 +706,9 @@ def install_cloud(
         base = copy_repo_to_temp(tmpdir)
         # nixos-anywhere evaluates on the target; make the flake self-contained.
         vendor_path_inputs(base, tmpdir)
-        override_lines = [f'  portablevps.cloud.diskDevice = "{disk}";']
-        if override_hostname:
-            override_lines.append(f'  networking.hostName = "{override_hostname}";')
-        if override_netbird_name:
-            override_lines.append(f'  portablevps.network.name = "{override_netbird_name}";')
-        write_override_file(base, override_lines)
+        # A cloud host takes its own static machine name from its server config;
+        # only the install-time disk device is injected here.
+        write_override_file(base, [f'  portablevps.cloud.diskDevice = "{disk}";'])
         target_age_dir = tmpdir / "extra-files/etc/sops/age"
         target_age_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo_path(age_key), target_age_dir / "keys.txt")
@@ -770,8 +765,6 @@ def command_install(_args: argparse.Namespace) -> None:
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
         age_key=resolve_age_key(deployment.name),
         kexec_flags=kexec_extra_flags(provider),
-        override_hostname=env("INSTALL_HOSTNAME", ""),
-        override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
     )
 
 
@@ -858,8 +851,6 @@ def command_adopt(_args: argparse.Namespace) -> None:
         admin_pubkey=admin_pubkey,
         age_key=resolve_age_key(server.name),
         kexec_flags=kexec_extra_flags(provider),
-        override_hostname=env("INSTALL_HOSTNAME", ""),
-        override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
     )
 
 
@@ -986,8 +977,6 @@ def command_install_created(_args: argparse.Namespace) -> None:
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
         age_key=resolve_age_key(server.name),
         kexec_flags=kexec_extra_flags(provider),
-        override_hostname=env("INSTALL_HOSTNAME", ""),
-        override_netbird_name=env("INSTALL_NETBIRD_NAME", ""),
     )
 
 
@@ -1057,31 +1046,11 @@ def marker_file(deployment: Deployment, source_host: str) -> Path:
     return REPO_ROOT / ".local/cloud-restore" / f"{deployment.name}-{safe_file_name(source_host)}.marker"
 
 
-def restore_host_name(deployment: Deployment, restore_host: str) -> str:
-    return safe_nixos_name(f"{deployment.name}-restore-{restore_host}")
-
-
-def restore_netbird_name(deployment: Deployment, restore_host: str) -> str:
-    return safe_nixos_name(f"{deployment.name}-restore-{restore_host}")
-
-
 def write_override_file(base: Path, body_lines: list[str]) -> None:
     """Write cloud-override.nix at the consumer flake root inside a copied
     tree. mkFlake injects this file into every cloud host when present."""
     lines = ["{ ... }:", "", "{"] + body_lines + ["}"]
     (base / "cloud-override.nix").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def write_cloud_identity_override(base: Path, *, override_hostname: str, override_netbird_name: str) -> None:
-    if not override_hostname and not override_netbird_name:
-        return
-
-    override_lines = []
-    if override_hostname:
-        override_lines.append(f'  networking.hostName = "{override_hostname}";')
-    if override_netbird_name:
-        override_lines.append(f'  portablevps.network.name = "{override_netbird_name}";')
-    write_override_file(base, override_lines)
 
 
 def write_proxy_smoke_override(base: Path, *, domain: str, visibility: str) -> None:
@@ -1117,28 +1086,16 @@ def switch_normal_profile(
     admin_key: str,
     finalize_normal: str,
     ssh_port: str = "22",
-    *,
-    override_hostname: str = "",
-    override_netbird_name: str = "",
 ) -> None:
     if finalize_normal not in {"1", "true", "yes"}:
         print("finalize: skipping normal profile switch", flush=True)
         return
 
+    # The host keeps its own static machine name across restore, so this is a
+    # plain in-place switch from the restore profile to the normal one — no
+    # temporary-identity override, no flake copy.
     print(f"finalize: switching restored host to .#{deployment.name}", flush=True)
-    with tempfile.TemporaryDirectory() as temp:
-        tmpdir = Path(temp)
-        flake_path = REPO_ROOT
-        if override_hostname or override_netbird_name:
-            base = copy_repo_to_temp(tmpdir)
-            write_cloud_identity_override(
-                base,
-                override_hostname=override_hostname,
-                override_netbird_name=override_netbird_name,
-            )
-            flake_path = base
-
-        switch_profile(deployment, host, admin_key, ssh_port, flake_path=flake_path)
+    switch_profile(deployment, host, admin_key, ssh_port, flake_path=REPO_ROOT)
 
 
 def switch_profile(
@@ -1862,14 +1819,9 @@ def command_restore_test(_args: argparse.Namespace) -> None:
     if not disk:
         raise CloudError("error: could not detect install disk; set DISK=/dev/...", 66)
 
-    use_restore_overrides = restore_host != source_host or bool(env("RESTORE_HOSTNAME", "") or env("RESTORE_NETBIRD_NAME", ""))
-    override_hostname = ""
-    override_netbird_name = ""
-    if use_restore_overrides:
-        override_hostname = env("RESTORE_HOSTNAME", restore_host_name(deployment, restore_host))
-        override_netbird_name = env("RESTORE_NETBIRD_NAME", restore_netbird_name(deployment, restore_host))
-        print(f"restore identity: hostname={override_hostname} netbird={override_netbird_name}", flush=True)
-
+    # The restore host is rebuilt as this server's own static machine identity
+    # (the host-loss / replacement case). With machine-based naming there is no
+    # temporary identity to assign and later rename.
     install_cloud(
         deployment,
         provider,
@@ -1882,8 +1834,6 @@ def command_restore_test(_args: argparse.Namespace) -> None:
         admin_pubkey=env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"),
         age_key=resolve_age_key(deployment.name),
         kexec_flags=kexec_extra_flags(provider),
-        override_hostname=override_hostname,
-        override_netbird_name=override_netbird_name,
     )
     wait_admin_ssh(restore_host, port=ssh_port, admin_key=admin_key)
     admin_ssh(restore_host, "sudo restore.sh", port=ssh_port, admin_key=admin_key)
@@ -1893,8 +1843,6 @@ def command_restore_test(_args: argparse.Namespace) -> None:
         admin_key,
         env("FINALIZE_NORMAL", "true"),
         ssh_port=ssh_port,
-        override_hostname=override_hostname,
-        override_netbird_name=override_netbird_name,
     )
     wait_admin_ssh(restore_host, port=ssh_port, admin_key=admin_key)
     admin_ssh(restore_host, "sudo systemctl start apps.target", port=ssh_port, admin_key=admin_key)
@@ -1972,7 +1920,7 @@ def command_promote_candidate(_args: argparse.Namespace) -> None:
         if marker_path.is_file():
             marker = marker_path.read_text(encoding="utf-8").strip()
 
-    print(f"promote: switching {candidate_host} to stable .#{server.name} identity", flush=True)
+    print(f"promote: finalizing {candidate_host} on the normal .#{server.name} profile", flush=True)
     wait_admin_ssh(candidate_host, port=ssh_port, admin_key=admin_key)
     switch_normal_profile(
         server,

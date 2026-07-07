@@ -28,9 +28,6 @@ Optional:
   ROOT_IDENTITY     SSH private key for the root/rescue target.
   KEXEC_EXTRA_FLAGS Extra nixos-anywhere kexec flags.
   CLOUD_ADMIN_KEY   SSH private key for the installed admin user.
-  RESTORE_HOSTNAME  Hostname override for the restore host.
-  RESTORE_NETBIRD_NAME
-                    Netbird peer-name override for the restore host.
   FINALIZE_NORMAL   Switch restored host to normal profile. Default: true.
   MARKER            Explicit marker to verify during restore.
   DEPLOYMENT        Compatibility alias for SERVER.

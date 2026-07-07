@@ -135,17 +135,29 @@ service-level backup regressions that invoking the scripts directly would miss.
 
 ## Cloud Provider Flow
 
-For provider VPSes, prefer a separate-host restore rehearsal. The source host
-keeps running, writes a backup, and a disposable restore host is rebuilt from
-that backup.
+This flow rebuilds a **lost or retired** machine onto a replacement host. With
+machine-based naming a server's name is its permanent identity (hostname +
+NetBird peer + secrets), so the replacement is rebuilt as that **same** name —
+there is no temporary identity to assign and later rename. Because it reclaims
+the machine's name and NetBird peer, the original must be **offline** first, or
+the two collide on the mesh.
+
+> Moving a *live* service to a new box with no downtime is a different
+> operation: provision a **new** machine (`<provider>-<region>-<date><letter>`,
+> its own name), deploy the app, restore its service data, then flip the service
+> CNAME to the new machine and retire the old one. That path never renames a
+> machine.
+
+First, capture a fresh backup from the source (or use the last good one if the
+source is already lost):
 
 ```sh
 mise exec -- task cloud:restore-rehearsal PHASE=prepare \
   SERVER=test-vps SOURCE_HOST=1.2.3.4
 ```
 
-After the backup completes, boot the disposable restore host into provider
-rescue mode and run:
+Then, with the source stopped, boot the replacement host into provider rescue
+mode and run:
 
 ```sh
 mise exec -- task cloud:restore-candidate \
@@ -154,35 +166,25 @@ mise exec -- task cloud:restore-candidate \
   CONFIRM_DESTROY=5.6.7.8
 ```
 
-The restore phase wipes the restore host disk, installs the restore profile,
-restores from restic, switches the host back to the normal server profile,
-starts `apps.target`, and verifies the marker from the prepare phase.
-
-Restore rehearsals use a unique hostname and Netbird peer name derived from the
-restore host by default. Override them when needed:
-
-```sh
-mise exec -- task cloud:restore-rehearsal PHASE=restore \
-  SERVER=test-vps SOURCE_HOST=1.2.3.4 RESTORE_HOST=5.6.7.8 \
-  RESTORE_HOSTNAME=portablevps-restore-a \
-  RESTORE_NETBIRD_NAME=portablevps-restore-a \
-  ROOT_IDENTITY=.local/ssh/cloud-admin_ed25519 \
-  CONFIRM_DESTROY=5.6.7.8
-```
+The restore phase wipes the replacement disk, installs the restore profile as
+`test-vps`'s own identity, restores from restic, switches the host to the normal
+server profile, starts `apps.target`, and verifies the marker from the prepare
+phase.
 
 The older same-VPS destructive test remains available through
 `cloud:restore-test` with `HOST=...`. Use it when only one disposable VPS is
 available, not as the preferred production rehearsal.
 
-Promote a validated candidate only after the source is stopped:
+Finalize the promoted replacement once the source is confirmed offline:
 
 ```sh
 mise exec -- task cloud:promote-candidate SERVER=test-vps \
   CANDIDATE_HOST=5.6.7.8 SOURCE_OFFLINE=1 CONFIRM_PROMOTE=test-vps
 ```
 
-This switches the candidate to the stable `.#test-vps` identity. It is the
-manual cutover point for a provider migration.
+The replacement already carries `test-vps`'s identity, so this finalizes it on
+the normal `.#test-vps` profile and records it as the active host. It is the
+manual cutover point for a host replacement.
 
 The Hetzner + Scaleway path has been validated end to end with restic snapshot
 `35deb21a` and PostgreSQL marker `recovery-20260624T083053Z-7810`.

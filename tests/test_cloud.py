@@ -502,18 +502,6 @@ class CloudTests(unittest.TestCase):
             "portablevps-hetzner-restore-203-0-113-10",
         )
 
-    def test_restore_rehearsal_default_names_are_derived_from_restore_host(self):
-        deployment = cloud.Deployment("test-vps", {"provider": "hetzner"})
-
-        self.assertEqual(
-            cloud.restore_host_name(deployment, "203.0.113.10"),
-            "test-vps-restore-203-0-113-10",
-        )
-        self.assertEqual(
-            cloud.restore_netbird_name(deployment, "203.0.113.10"),
-            "test-vps-restore-203-0-113-10",
-        )
-
     def test_resolve_age_key_prefers_explicit_env(self):
         with mock.patch.dict(os.environ, {"SOPS_AGE_KEY_FILE": "/custom/key.txt"}, clear=False):
             self.assertEqual(cloud.resolve_age_key("test-vps"), "/custom/key.txt")
@@ -571,43 +559,23 @@ class CloudTests(unittest.TestCase):
 
         run.assert_not_called()
 
-    def test_switch_normal_profile_uses_temp_flake_for_identity_overrides(self):
-        original_tempdir = tempfile.TemporaryDirectory
-        with tempfile.TemporaryDirectory() as temp:
-            temp_path = Path(temp)
+    def test_switch_normal_profile_is_a_plain_in_place_switch(self):
+        # With machine-based naming the finalize is a plain switch to the host's
+        # own config from REPO_ROOT — no flake copy, no identity override.
+        with mock.patch.object(cloud, "copy_repo_to_temp") as copy_repo:
+            with mock.patch.object(cloud, "run") as run:
+                cloud.switch_normal_profile(
+                    cloud.Deployment("test-vps", {"provider": "hetzner"}),
+                    "203.0.113.1",
+                    ".local/key",
+                    "true",
+                )
 
-            def fake_tempdir():
-                return original_tempdir(dir=temp_path)
-
-            with mock.patch.object(cloud.tempfile, "TemporaryDirectory", side_effect=fake_tempdir):
-                with mock.patch.object(cloud, "copy_repo_to_temp") as copy_repo:
-                    with mock.patch.object(cloud, "run") as run:
-                        cloud.switch_normal_profile(
-                            cloud.Deployment("test-vps", {"provider": "hetzner"}),
-                            "203.0.113.1",
-                            ".local/key",
-                            "true",
-                            override_hostname="restore-a",
-                            override_netbird_name="restore-peer-a",
-                        )
-
-                    copy_repo.assert_called_once()
-                    run.assert_called_once()
-                    flake_arg_index = run.call_args.args[0].index("--flake") + 1
-                    self.assertIn("#test-vps", run.call_args.args[0][flake_arg_index])
-
-    def test_write_cloud_identity_override(self):
-        with tempfile.TemporaryDirectory() as temp:
-            tmpdir = Path(temp)
-            cloud.write_cloud_identity_override(
-                tmpdir,
-                override_hostname="restore-a",
-                override_netbird_name="restore-peer-a",
-            )
-            override_text = (tmpdir / "cloud-override.nix").read_text(encoding="utf-8")
-
-        self.assertIn('networking.hostName = "restore-a";', override_text)
-        self.assertIn('portablevps.network.name = "restore-peer-a";', override_text)
+        copy_repo.assert_not_called()
+        run.assert_called_once()
+        flake_arg_index = run.call_args.args[0].index("--flake") + 1
+        self.assertIn("#test-vps", run.call_args.args[0][flake_arg_index])
+        self.assertIn(str(REPO_ROOT), run.call_args.args[0][flake_arg_index])
 
     def test_write_proxy_smoke_override(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -798,7 +766,9 @@ class CloudTests(unittest.TestCase):
 
         self.assertIn("203.0.113.20", str(raised.exception))
 
-    def test_restore_phase_installs_restore_host_with_unique_identity(self):
+    def test_restore_phase_installs_restore_host_as_its_own_identity(self):
+        # The restore host is rebuilt as the server's own static machine name;
+        # no temporary identity override is passed to install_cloud.
         env = {
             **self.server_env,
             "PHASE": "restore",
@@ -821,65 +791,8 @@ class CloudTests(unittest.TestCase):
                                         cloud.command_restore_test(mock.Mock())
 
         install_cloud.assert_called_once()
-        self.assertEqual(
-            install_cloud.call_args.kwargs["override_hostname"],
-            "test-vps-restore-203-0-113-20",
-        )
-        self.assertEqual(
-            install_cloud.call_args.kwargs["override_netbird_name"],
-            "test-vps-restore-203-0-113-20",
-        )
-
-    def test_restore_phase_keeps_same_host_flow_without_identity_override(self):
-        env = {
-            **self.server_env,
-            "PHASE": "restore",
-            "SERVER": "test-vps",
-            "HOST": "203.0.113.20",
-            "CONFIRM_DESTROY": "203.0.113.20",
-            "MARKER": "marker",
-            "FINALIZE_NORMAL": "false",
-        }
-
-        with mock.patch.dict(os.environ, env, clear=False):
-            with mock.patch.object(cloud, "ssh"):
-                with mock.patch.object(cloud, "list_disks"):
-                    with mock.patch.object(cloud, "detect_disk", return_value="/dev/sda"):
-                        with mock.patch.object(cloud, "install_cloud") as install_cloud:
-                            with mock.patch.object(cloud, "wait_admin_ssh"):
-                                with mock.patch.object(cloud, "admin_ssh"):
-                                    with mock.patch.object(cloud, "wait_postgres"):
-                                        cloud.command_restore_test(mock.Mock())
-
-        self.assertEqual(install_cloud.call_args.kwargs["override_hostname"], "")
-        self.assertEqual(install_cloud.call_args.kwargs["override_netbird_name"], "")
-
-    def test_restore_phase_accepts_explicit_identity_overrides(self):
-        env = {
-            **self.server_env,
-            "PHASE": "restore",
-            "SERVER": "test-vps",
-            "SOURCE_HOST": "198.51.100.10",
-            "RESTORE_HOST": "203.0.113.20",
-            "RESTORE_HOSTNAME": "restore-a",
-            "RESTORE_NETBIRD_NAME": "restore-peer-a",
-            "CONFIRM_DESTROY": "203.0.113.20",
-            "MARKER": "marker",
-            "FINALIZE_NORMAL": "false",
-        }
-
-        with mock.patch.dict(os.environ, env, clear=False):
-            with mock.patch.object(cloud, "ssh"):
-                with mock.patch.object(cloud, "list_disks"):
-                    with mock.patch.object(cloud, "detect_disk", return_value="/dev/sda"):
-                        with mock.patch.object(cloud, "install_cloud") as install_cloud:
-                            with mock.patch.object(cloud, "wait_admin_ssh"):
-                                with mock.patch.object(cloud, "admin_ssh"):
-                                    with mock.patch.object(cloud, "wait_postgres"):
-                                        cloud.command_restore_test(mock.Mock())
-
-        self.assertEqual(install_cloud.call_args.kwargs["override_hostname"], "restore-a")
-        self.assertEqual(install_cloud.call_args.kwargs["override_netbird_name"], "restore-peer-a")
+        self.assertNotIn("override_hostname", install_cloud.call_args.kwargs)
+        self.assertNotIn("override_netbird_name", install_cloud.call_args.kwargs)
 
     def test_restore_candidate_defaults_to_restore_phase(self):
         env = {
