@@ -95,6 +95,11 @@ in
           docker_stats = {
             endpoint = "unix:///run/podman/podman.sock";
             collection_interval = cfg.scrapeInterval;
+            # podman's docker-compat stats endpoint is slower than dockerd's and
+            # negotiates a lower API version; give it headroom and pin the version
+            # so the scrape doesn't cancel mid-stream ("context canceled").
+            timeout = "20s";
+            api_version = "1.40";
             metrics = {
               "container.cpu.usage.percpu".enabled = true;
               "container.network.io.usage.tx_dropped".enabled = true;
