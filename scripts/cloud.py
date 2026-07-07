@@ -416,7 +416,36 @@ def require_promote_confirmation(server: Server, confirm_promote: str) -> None:
         raise CloudError(f"error: refusing to promote without CONFIRM_PROMOTE={server.name}", 64)
 
 
-def ssh_args(target: str, *, port: str, identity: str = "") -> list[str]:
+def known_hosts_file() -> Path:
+    """Operator-local known_hosts used for host-key verification of already
+    installed hosts (TOFU). Kept under .local (git-ignored) alongside the admin
+    key. Created on first use so ssh can pin a key with accept-new."""
+    path = repo_path(".local/known_hosts")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ssh_args(target: str, *, port: str, identity: str = "", verify: bool = False) -> list[str]:
+    # First-contact operations (rescue/kexec install, bootstrapping the admin
+    # key) legitimately cannot know the host key yet, so they stay permissive.
+    # Ongoing operations against an already-installed host set verify=True:
+    # accept-new pins the key on first sight into a persistent known_hosts and
+    # alarms if it ever changes, so a MITM cannot silently intercept later
+    # sessions (including the one that ships the host age private key).
+    if verify:
+        host_key_opts = [
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"UserKnownHostsFile={known_hosts_file()}",
+        ]
+    else:
+        host_key_opts = [
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
     args = [
         "ssh",
         "-p",
@@ -425,10 +454,7 @@ def ssh_args(target: str, *, port: str, identity: str = "") -> list[str]:
         "BatchMode=yes",
         "-o",
         "ConnectTimeout=10",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
+        *host_key_opts,
     ]
     if identity:
         args.extend(["-i", str(repo_path(identity)), "-o", "IdentitiesOnly=yes"])
@@ -436,20 +462,20 @@ def ssh_args(target: str, *, port: str, identity: str = "") -> list[str]:
     return args
 
 
-def ssh(target: str, command: str, *, port: str, identity: str = "") -> subprocess.CompletedProcess[str]:
-    return run([*ssh_args(target, port=port, identity=identity), command])
+def ssh(target: str, command: str, *, port: str, identity: str = "", verify: bool = False) -> subprocess.CompletedProcess[str]:
+    return run([*ssh_args(target, port=port, identity=identity, verify=verify), command])
 
 
-def ssh_capture(target: str, command: str, *, port: str, identity: str = "") -> str:
-    return capture([*ssh_args(target, port=port, identity=identity), command])
+def ssh_capture(target: str, command: str, *, port: str, identity: str = "", verify: bool = False) -> str:
+    return capture([*ssh_args(target, port=port, identity=identity, verify=verify), command])
 
 
 def admin_ssh(host: str, command: str, *, port: str, admin_key: str) -> subprocess.CompletedProcess[str]:
-    return ssh(f"admin@{host}", command, port=port, identity=admin_key)
+    return ssh(f"admin@{host}", command, port=port, identity=admin_key, verify=True)
 
 
 def admin_capture(host: str, command: str, *, port: str, admin_key: str) -> str:
-    return ssh_capture(f"admin@{host}", command, port=port, identity=admin_key)
+    return ssh_capture(f"admin@{host}", command, port=port, identity=admin_key, verify=True)
 
 
 def wait_admin_ssh(host: str, *, port: str, admin_key: str) -> None:
@@ -1073,12 +1099,15 @@ def write_proxy_smoke_override(base: Path, *, domain: str, visibility: str) -> N
 
 
 def nix_ssh_opts(admin_key: str, ssh_port: str) -> str:
+    # Used for nixos-rebuild --target-host/--build-host admin@host, i.e. an
+    # already-installed host: verify the host key (TOFU) like the other admin
+    # operations rather than blindly trusting it.
     return (
         f"-i {repo_path(admin_key)} "
         "-o IdentitiesOnly=yes "
         f"-p {ssh_port} "
-        "-o StrictHostKeyChecking=no "
-        "-o UserKnownHostsFile=/dev/null"
+        "-o StrictHostKeyChecking=accept-new "
+        f"-o UserKnownHostsFile={known_hosts_file()}"
     )
 
 
@@ -1158,7 +1187,7 @@ def install_host_age_key(host: str, *, admin_key: str, ssh_port: str, age_key_pa
     )
     print(f"repurpose: installing {key_path.name} host age key on {host}", flush=True)
     subprocess.run(
-        [*ssh_args(f"admin@{host}", port=ssh_port, identity=admin_key), remote],
+        [*ssh_args(f"admin@{host}", port=ssh_port, identity=admin_key, verify=True), remote],
         input=content,
         text=True,
         check=True,
