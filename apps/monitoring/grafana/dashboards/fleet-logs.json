@@ -1,0 +1,45 @@
+{
+  "uid": "fleet-logs",
+  "title": "Fleet — Logs",
+  "description": "Starter logs view backed by VictoriaLogs (LogsQL). Edit the query in Explore or here. Logs arrive via the otelcol gateway's OTLP receiver.",
+  "tags": ["monitoring", "otlp", "logs"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "query",
+        "label": "LogsQL",
+        "type": "textbox",
+        "query": "*",
+        "current": { "text": "*", "value": "*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Logs",
+      "type": "logs",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 22, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+          "expr": "$query"
+        }
+      ]
+    }
+  ]
+}

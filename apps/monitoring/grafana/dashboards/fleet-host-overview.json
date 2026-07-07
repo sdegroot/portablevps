@@ -1,0 +1,94 @@
+{
+  "uid": "fleet-host-overview",
+  "title": "Fleet — Host Overview",
+  "description": "Starter dashboard. VictoriaMetrics runs with -opentelemetry.usePrometheusNaming=true, so OTLP hostmetrics use Prometheus names (e.g. system.cpu.time → system_cpu_time_seconds_total) and resource attributes become labels (host.name → host_name).",
+  "tags": ["monitoring", "otlp", "fleet"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+        "definition": "label_values(host_name)",
+        "query": "label_values(host_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU utilization (non-idle)",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name) (rate(system_cpu_time_seconds_total{host_name=~\"$host\", state!=\"idle\"}[5m])) / sum by (host_name) (rate(system_cpu_time_seconds_total{host_name=~\"$host\"}[5m]))",
+          "legendFormat": "{{host_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Memory used",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name) (system_memory_usage_bytes{host_name=~\"$host\", state=\"used\"})",
+          "legendFormat": "{{host_name}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Filesystem used %",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name) (system_filesystem_usage_bytes{host_name=~\"$host\", state=\"used\"}) / sum by (host_name) (system_filesystem_usage_bytes{host_name=~\"$host\"})",
+          "legendFormat": "{{host_name}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Network received",
+      "type": "timeseries",
+      "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-metrics-datasource", "uid": "victoriametrics" },
+          "expr": "sum by (host_name) (rate(system_network_io_bytes_total{host_name=~\"$host\", direction=\"receive\"}[5m]))",
+          "legendFormat": "{{host_name}}"
+        }
+      ]
+    }
+  ]
+}

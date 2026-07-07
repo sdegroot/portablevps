@@ -158,6 +158,35 @@ let
     then "/etc/portablevps/monitoring/grafana.env"
     else config.sops.templates."portablevps/monitoring/grafana.env".path;
 
+  oidc = cfg.grafana.oidc;
+  # OIDC is wired only in normal mode with an issuer set — it needs authentik
+  # reachable and a real client secret, neither of which exists in a local VM.
+  grafanaOidcEnabled = (!prototype) && oidc.enable && oidc.issuerBaseUrl != "";
+
+  grafanaCommonEnv = ''
+    GF_SERVER_ROOT_URL=${cfg.grafana.rootUrl}
+    GF_SECURITY_ADMIN_USER=admin
+    GF_USERS_ALLOW_SIGN_UP=false
+    GF_AUTH_ANONYMOUS_ENABLED=false
+    GF_ANALYTICS_REPORTING_ENABLED=false
+    GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    GF_INSTALL_PLUGINS=${lib.concatStringsSep "," cfg.grafana.plugins}
+  '';
+
+  grafanaOidcEnv = clientSecret: ''
+    GF_AUTH_GENERIC_OAUTH_ENABLED=true
+    GF_AUTH_GENERIC_OAUTH_NAME=${oidc.name}
+    GF_AUTH_GENERIC_OAUTH_CLIENT_ID=${oidc.clientId}
+    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=${clientSecret}
+    GF_AUTH_GENERIC_OAUTH_SCOPES=openid email profile
+    GF_AUTH_GENERIC_OAUTH_AUTH_URL=${oidc.issuerBaseUrl}/application/o/authorize/
+    GF_AUTH_GENERIC_OAUTH_TOKEN_URL=${oidc.issuerBaseUrl}/application/o/token/
+    GF_AUTH_GENERIC_OAUTH_API_URL=${oidc.issuerBaseUrl}/application/o/userinfo/
+    GF_AUTH_GENERIC_OAUTH_USE_PKCE=true
+    GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+    GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=${oidc.roleAttributePath}
+  '';
+
   publishLoopbackAnd = port: containerPort: [
     "127.0.0.1:${toString port}:${toString containerPort}"
   ];
@@ -218,6 +247,23 @@ in
     grafana = {
       rootUrl = lib.mkOption { type = lib.types.str; default = "https://grafana.int.epistola.io"; description = "GF_SERVER_ROOT_URL (the mesh proxy name)."; };
       adminPasswordSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-admin-password"; description = "sops secret for the break-glass local admin password."; };
+      plugins = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "victoriametrics-metrics-datasource 0.24.0" "victoriametrics-logs-datasource 0.27.1" ];
+        description = "Datasource plugins installed at container start (GF_INSTALL_PLUGINS, comma-joined).";
+      };
+      oidc = {
+        enable = lib.mkEnableOption "Authentik (generic OAuth) SSO for Grafana; the local admin login stays as break-glass";
+        name = lib.mkOption { type = lib.types.str; default = "Authentik"; description = "OAuth provider display name."; };
+        clientId = lib.mkOption { type = lib.types.str; default = "grafana"; description = "OAuth client id."; };
+        clientSecretSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-oauth-secret"; description = "sops secret holding the OAuth client secret."; };
+        issuerBaseUrl = lib.mkOption { type = lib.types.str; default = ""; description = "authentik base URL, e.g. https://auth.epistola.app; the authorize/token/userinfo URLs derive from it."; };
+        roleAttributePath = lib.mkOption {
+          type = lib.types.str;
+          default = "(contains(groups, 'epistola_employees') || ends_with(email, '@epistola.app')) && 'Editor' || 'Viewer'";
+          description = "JMESPath mapping OIDC claims to a Grafana org role.";
+        };
+      };
     };
   };
 
@@ -357,9 +403,11 @@ in
     # Secret-backed config (normal mode): render Alertmanager config + Grafana
     # env through sops so the SMTP password / admin password never hit the store.
     (lib.mkIf (!prototype) {
-      sops.secrets.${cfg.smtp.usernameSecret} = { };
-      sops.secrets.${cfg.smtp.passwordSecret} = { };
-      sops.secrets.${cfg.grafana.adminPasswordSecret} = { };
+      sops.secrets = {
+        ${cfg.smtp.usernameSecret} = { };
+        ${cfg.smtp.passwordSecret} = { };
+        ${cfg.grafana.adminPasswordSecret} = { };
+      } // lib.optionalAttrs grafanaOidcEnabled { ${oidc.clientSecretSecret} = { }; };
 
       sops.templates."portablevps/monitoring/alertmanager.yml" = {
         mode = "0400";
@@ -371,28 +419,17 @@ in
 
       sops.templates."portablevps/monitoring/grafana.env" = {
         mode = "0400";
-        content = ''
-          GF_SERVER_ROOT_URL=${cfg.grafana.rootUrl}
-          GF_SECURITY_ADMIN_USER=admin
-          GF_SECURITY_ADMIN_PASSWORD=${config.sops.placeholder.${cfg.grafana.adminPasswordSecret}}
-          GF_USERS_ALLOW_SIGN_UP=false
-          GF_AUTH_ANONYMOUS_ENABLED=false
-          GF_ANALYTICS_REPORTING_ENABLED=false
-          GF_ANALYTICS_CHECK_FOR_UPDATES=false
-        '';
+        content = grafanaCommonEnv
+          + "GF_SECURITY_ADMIN_PASSWORD=${config.sops.placeholder.${cfg.grafana.adminPasswordSecret}}\n"
+          + lib.optionalString grafanaOidcEnabled (grafanaOidcEnv config.sops.placeholder.${oidc.clientSecretSecret});
       };
     })
 
     # Prototype/local mode: demo config so the stack boots without sops.
     (lib.mkIf prototype {
       environment.etc."portablevps/monitoring/alertmanager.yml".text = alertmanagerConfig;
-      environment.etc."portablevps/monitoring/grafana.env".text = ''
-        GF_SERVER_ROOT_URL=${cfg.grafana.rootUrl}
-        GF_SECURITY_ADMIN_USER=admin
-        GF_SECURITY_ADMIN_PASSWORD=demo-admin
-        GF_USERS_ALLOW_SIGN_UP=false
-        GF_AUTH_ANONYMOUS_ENABLED=false
-      '';
+      environment.etc."portablevps/monitoring/grafana.env".text =
+        grafanaCommonEnv + "GF_SECURITY_ADMIN_PASSWORD=demo-admin\n";
     })
   ]);
 }
