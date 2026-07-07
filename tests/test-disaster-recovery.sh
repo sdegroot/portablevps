@@ -168,6 +168,13 @@ require_remote_tools "$VM_B_SSH"
 echo "resetting VM A data for a clean ${CONFIG} install"
 remote "$VM_A_SSH" "
   sudo systemctl stop apps.target >/dev/null 2>&1 || true
+  # 'systemctl stop apps.target' propagates a stop to its PartOf members but
+  # returns without waiting for those container units to finish stopping, so the
+  # app containers can still be 'deactivating' (and writing) here. Wiping their
+  # data immediately then races a live container into 'Directory not empty' ->
+  # 'PostgreSQL is not ready'. Wait for the app containers to actually exit first
+  # (generic: no per-app knowledge, just 'no app containers left').
+  for _ in \$(seq 1 30); do [ -z \"\$(sudo podman ps -q)\" ] && break; sleep 1; done
   sudo mkdir -p /data/postgres /data/container-state
   sudo find /data/postgres -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   sudo find /data/container-state -mindepth 1 -maxdepth 1 -exec rm -rf {} +
