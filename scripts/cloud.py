@@ -1228,8 +1228,26 @@ def command_deploy(_args: argparse.Namespace) -> None:
     # In-place switch to the same server config, built on the remote so a
     # different-arch operator (e.g. an aarch64 laptop) can drive an x86_64 host.
     print(f"deploy: switching {host} to .#{server.name} (built on the remote)", flush=True)
-    switch_profile(server, host, admin_key, ssh_port, flake_path=REPO_ROOT)
+    try:
+        switch_profile(server, host, admin_key, ssh_port, flake_path=REPO_ROOT)
+    except BaseException:
+        _report_deploy_outcome(host, "failure", admin_key=admin_key, ssh_port=ssh_port)
+        raise
+    _report_deploy_outcome(host, "success", admin_key=admin_key, ssh_port=ssh_port)
     print(f"deploy: {host} now runs .#{server.name}", flush=True)
+
+
+def _report_deploy_outcome(host: str, outcome: str, *, admin_key: str, ssh_port: str) -> None:
+    """Best-effort: publish this deploy's outcome to the telemetry gateway via the
+    host's own reporter unit (which knows its endpoint). Same signal the unattended
+    pull-upgrade emits, so DeployFailing covers any upgrade path. The unit only
+    exists where the telemetry shipper is enabled; never let reporting mask the
+    deploy result."""
+    unit = f"portablevps-deploy-report-{outcome}.service"
+    try:
+        admin_ssh(host, f"sudo systemctl start {unit} || true", port=ssh_port, admin_key=admin_key)
+    except Exception:
+        pass
 
 
 def curl_proxy(domain: str, address: str) -> str:

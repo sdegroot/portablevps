@@ -1,0 +1,28 @@
+# Deploy-failure alert. ANY system deploy — the unattended pull
+# (system.autoUpgrade / nixos-upgrade) or an operator cloud:deploy — reports its
+# outcome to the gateway (see modules/system/telemetry.nix + scripts/cloud.py) as
+# two host_name-labelled gauges: portablevps_deploy_last_success_timestamp_seconds
+# and ..._last_failure_timestamp_seconds. This fires when a host's MOST RECENT
+# deploy failed (failure newer than success) — promptly, and clears on the next
+# success.
+#
+# It needs both series, so it can't flag a box that has ONLY ever failed since it
+# began reporting (caught at deploy/verify time instead). A totally-silent
+# scheduled upgrader (timer not running at all → neither metric) is likewise not
+# covered — add a schedule-freshness rule if that becomes a concern.
+groups:
+  - name: deploy-health
+    interval: 1m
+    rules:
+      - alert: DeployFailing
+        expr: portablevps_deploy_last_failure_timestamp_seconds > portablevps_deploy_last_success_timestamp_seconds
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deploy failing on {{ $labels.host_name }}"
+          description: >-
+            The most recent system deploy on {{ $labels.host_name }} failed — the box is stuck on its
+            last generation (a failed build/fetch/activation never switches). Covers both the unattended
+            self-upgrade and operator cloud:deploy. Reason in journalctl -u nixos-upgrade (self-upgrade)
+            or the deploy output.

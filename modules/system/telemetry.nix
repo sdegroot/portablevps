@@ -159,12 +159,34 @@ in
       serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_last_success_timestamp_seconds";
     };
 
-    # Same for pull-based self-upgrade: stamp a success timestamp after a
-    # successful nixos-upgrade run so the gateway can alert when self-upgrade
-    # silently stops succeeding (fetch/auth or build failures never switch, so
-    # they would otherwise go unnoticed — the box just quietly stops updating).
+    # Publish deploy outcomes so failures are noticed. ANY system deploy — the
+    # unattended pull (system.autoUpgrade / nixos-upgrade) OR an operator
+    # cloud:deploy — reports success or failure through these two units, which
+    # stamp a host_name-labelled timestamp on the gateway. The gateway's
+    # DeployFailing rule fires when a host's most recent deploy failed. journald
+    # carries the reason. (Reusable units so any caller can report — the operator
+    # deploy triggers them over SSH; see scripts/cloud.py.)
+    systemd.services.portablevps-deploy-report-success = {
+      description = "Report a successful system deploy to the telemetry gateway";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${reportMetric} portablevps_deploy_last_success_timestamp_seconds";
+      };
+    };
+    systemd.services.portablevps-deploy-report-failure = {
+      description = "Report a failed system deploy to the telemetry gateway";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${reportMetric} portablevps_deploy_last_failure_timestamp_seconds";
+      };
+    };
+
+    # The unattended pull-upgrade reports its own outcome: success after a clean
+    # switch, failure the moment the run fails (it's unattended, so publish
+    # immediately rather than waiting for a success metric to go stale).
     systemd.services.nixos-upgrade = lib.mkIf config.portablevps.autoUpgrade.enable {
-      serviceConfig.ExecStartPost = "${reportMetric} portablevps_autoupgrade_last_success_timestamp_seconds";
+      serviceConfig.ExecStartPost = "${pkgs.systemd}/bin/systemctl start portablevps-deploy-report-success.service";
+      onFailure = [ "portablevps-deploy-report-failure.service" ];
     };
   };
 }

@@ -66,10 +66,13 @@ tools; and its magic rollback largely overlaps what break-glass SSH + `nixos-reb
   nix as an `access-tokens` entry). A token — not an SSH deploy key — because deploy keys
   are un-expiring, per-repo SSH credentials outside org token governance and are disabled at
   the org level; a fine-grained token is centrally visible, revocable, and expiring.
-- **Failure visibility:** a successful self-upgrade stamps
-  `portablevps_autoupgrade_last_success_timestamp_seconds` over OTLP; the gateway's
-  `AutoUpgradeStale` rule alerts when it goes stale, so a silently-failing upgrade (fetch/
-  build failures never switch) is noticed instead of the box quietly ceasing to update.
+- **Failure visibility (any deploy):** every system deploy — the unattended pull *and* an
+  operator `cloud:deploy` — reports its outcome to the gateway via shared
+  `portablevps-deploy-report-{success,failure}` units
+  (`portablevps_deploy_last_{success,failure}_timestamp_seconds`, host-labelled). The
+  gateway's `DeployFailing` rule fires when a host's most recent deploy failed, so a
+  silently-failing upgrade (fetch/build/activation failures never switch) is noticed instead
+  of the box quietly ceasing to update.
 - **Companion (website repo):** on release, CI bumps the pinned image in the infra repo;
   the box applies it on the next tick and the quadlet restart-on-change step
   (`modules/runtime/podman.nix`) rolls the container.

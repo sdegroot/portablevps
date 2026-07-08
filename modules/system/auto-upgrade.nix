@@ -23,10 +23,11 @@
 # Safety posture: a failed BUILD never switches (the box stays put and retries on
 # the next tick — self-correcting once a good commit lands); a builds-fine-but-
 # breaks change relies on the image HEALTHCHECK + a `git revert` (no automatic
-# runtime rollback). A persistently-failing upgrade is otherwise silent, so on a
-# successful run the telemetry shipper stamps
-# `portablevps_autoupgrade_last_success_timestamp_seconds` and the gateway alerts
-# when it goes stale (see modules/system/telemetry.nix + apps/monitoring/rules).
+# runtime rollback). An unattended run is otherwise silent, so it reports its
+# outcome to the telemetry gateway (success/failure) via the shared deploy-report
+# units — the same signal an operator cloud:deploy emits — and the gateway's
+# DeployFailing rule fires when a host's most recent deploy failed (see
+# modules/system/telemetry.nix + apps/monitoring/rules/deploy.yml).
 # Disabled during a disaster-recovery restore (build-time and via the marker).
 { lib, config, pkgs, ... }:
 
