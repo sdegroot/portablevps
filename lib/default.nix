@@ -10,11 +10,13 @@ let
 
   # Always-applied system modules. Every portablevps host gets restore mode,
   # secrets wiring, and the logical-server identity, regardless of platform.
+  # auto-upgrade is available fleet-wide but disabled unless a host opts in.
   coreModules = [
     sops-nix.nixosModules.sops
     (toolRoot + "/modules/system/deployment.nix")
     (toolRoot + "/modules/system/restore-mode.nix")
     (toolRoot + "/modules/system/secrets.nix")
+    (toolRoot + "/modules/system/auto-upgrade.nix")
   ];
 
   mkHost =
