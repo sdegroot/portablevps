@@ -462,11 +462,12 @@ mise exec -- task cloud:restore-candidate \
 
 The restore phase waits for the rebuilt host, runs `restore.sh`, switches the
 host back to the normal server profile, starts `apps.target`, and verifies the
-marker created during prepare. The source host keeps running during this
-rehearsal. Restore hosts get unique hostname and Netbird peer-name overrides by
-default so they do not collide with the source. For a provider migration, keep
-the restore candidate on temporary identity until validation, then change the
-server's active placement and perform the final cutover deliberately.
+marker created during prepare. This flow rebuilds the replacement as the same
+server identity: hostname, NetBird peer name, and sops secret set all match the
+configured machine. The old source must therefore be offline before a candidate
+is promoted or used as the replacement, otherwise both hosts collide on the mesh.
+For a live move with overlap, provision a new machine identity, restore data
+there, cut traffic over deliberately, then retire the old machine.
 
 After the restored candidate has been validated and the old source is stopped
 or otherwise unable to serve traffic, promote the candidate to the stable server
@@ -628,20 +629,24 @@ sudo verify-test-data.sh
 
 ## Monitoring
 
-Every host runs node_exporter on port 9100, reachable only over the NetBird
-interface. Monitoring itself is the job of a separate server that scrapes all
-peers through NetBird; application servers only expose metrics. The scheduled
-backup writes textfile metrics to
-`/var/lib/portablevps-metrics/textfile/portablevps-backup.prom`:
+Monitoring is push-based. App hosts enable an OpenTelemetry collector when
+`portablevps.telemetry.endpoint` is set; the collector sends host metrics,
+Podman stats, and journald logs to the monitoring server's OTLP gateway over
+NetBird. The monitoring server runs VictoriaMetrics, VictoriaLogs, vmalert,
+Alertmanager, and Grafana. Its fleet is declared with
+`portablevps.apps.monitoring.monitoredHosts` and `backupHosts`.
 
-- `portablevps_backup_last_run_timestamp_seconds`
-- `portablevps_backup_last_success_timestamp_seconds`
-- `portablevps_backup_last_run_failed`
+Portablevps also emits custom operational metrics through the same gateway:
 
-Alert on `portablevps_backup_last_run_failed == 1` for immediate failures and on
-`time() - portablevps_backup_last_success_timestamp_seconds` exceeding a few
-timer intervals for silent staleness, which also catches a dead timer or an
-unreachable host.
+- `portablevps_backup_last_success_timestamp_seconds` after a successful backup.
+- `portablevps_deploy_last_success_timestamp_seconds` and
+  `portablevps_deploy_last_failure_timestamp_seconds` after deploy attempts.
+- `portablevps_backup_restore_drill_timestamp_seconds` after
+  `cloud:restore-candidate` restores a host and verifies the prepared marker.
+
+The alert rules watch for failed deploys, stale backups, and stale restore
+drills. A stale backup also catches a dead timer or a host that stopped
+reporting.
 
 ## Backups
 
@@ -779,14 +784,14 @@ then restore file state and module-owned service state:
 sudo restore.sh
 ```
 
-`restore.sh` refuses to run unless `portablevps.restoreMode=true` or `apps.target` is
-inactive. Restore safety checks, path cleanup, and post-restore reconstruction
-come from module-registered restore components. The PostgreSQL component refuses
-to restore while the `postgres-demo` container is running, uses
-`pg_combinebackup` to reconstruct a synthetic full backup from the
+`restore.sh` refuses to run unless `portablevps.restoreMode=true` or
+`apps.target` is inactive. Restore safety checks, path cleanup, and post-restore
+reconstruction come from module-registered restore components. The PostgreSQL
+component refuses to restore while the configured PostgreSQL container is
+running, uses `pg_combinebackup` to reconstruct a synthetic full backup from the
 full/incremental chain, then writes that data directory into
-`/data/postgres/18/docker` before normal app startup. Restic restores
-`/data/container-state` directly from the same snapshot.
+`/data/postgres/18/docker` before normal app startup. Restic restores every
+app-registered backup path directly from the same snapshot.
 
 After restore, switch to normal mode and verify the database marker:
 
@@ -832,7 +837,8 @@ mise exec -- task validate:qemu
 
 This waits for both VMs, mounts the host repository at `/host` if needed,
 resets local MinIO, creates a full backup plus an incremental backup from VM A,
-restores into VM B, and verifies PostgreSQL plus `/data/container-state`.
+restores into VM B, and verifies PostgreSQL plus every app-registered backup
+path declared in the coordinator manifest.
 
 It proves:
 
@@ -840,7 +846,7 @@ It proves:
 - VM B applies restore mode before restore.
 - `apps.target` stays inactive during restore.
 - `/data/postgres` is non-empty after restore.
-- `/data/container-state` files are restored.
+- App-registered backup paths are restored.
 - PostgreSQL starts only after switching VM B to normal mode.
 - The marker inserted on VM A is present on VM B.
 

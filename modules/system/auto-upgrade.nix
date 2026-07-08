@@ -79,10 +79,10 @@ in
     };
   };
 
-  # Disabled during restore: gated at build time on portablevps.restoreMode (the
-  # -restore config variant), and at runtime via the marker file so a live
-  # disaster-recovery restore is never fought by a self-upgrade.
-  config = lib.mkIf (cfg.enable && !config.portablevps.restoreMode) (lib.mkMerge [
+  # Disabled during restore and prototype/local-VM mode: restore must never be
+  # fought by a self-upgrade, and local VMs deliberately run without sops
+  # secrets, so token-backed private flake fetches cannot be configured there.
+  config = lib.mkIf (cfg.enable && !config.portablevps.restoreMode && !config.portablevps.secrets.allowPrototypeDefaults) (lib.mkMerge [
     {
       system.autoUpgrade = {
         enable = true;

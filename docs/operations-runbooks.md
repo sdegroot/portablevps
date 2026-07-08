@@ -10,9 +10,10 @@ cases where no usable generation can be booted.
 Netbird uses the explicit `portablevps.netbird.name` value as the peer hostname. Cloud
 servers set that value in `servers/<server>.nix`.
 
-Current logical server names:
-
-- `test-vps`: Hetzner-backed test server
+Server names are declared by each consumer flake in its `servers/*.nix` files
+and are intentionally stable. A replacement host for the same machine reuses
+the same name, NetBird peer, and secret set; a live move with overlap should use
+a new machine name and cut service traffic over separately.
 
 Check Netbird on a host:
 
@@ -539,9 +540,11 @@ mise exec -- task cloud:restore-candidate \
   CONFIRM_DESTROY=5.6.7.8
 ```
 
-`CONFIRM_DESTROY` must match the restore host. The source host should remain
-running during rehearsal. The restore host uses temporary identity until it is
-promoted.
+`CONFIRM_DESTROY` must match the restore host. The candidate is installed as the
+same stable server identity, so the old source must be offline before the
+candidate is promoted or used as the replacement. For a live move with overlap,
+provision a new machine identity and perform a service-level cutover instead of
+reusing the old machine name.
 
 ```sh
 mise exec -- task cloud:promote-candidate SERVER=test-vps \

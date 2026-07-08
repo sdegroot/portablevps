@@ -791,11 +791,17 @@ class CloudTests(unittest.TestCase):
                             with mock.patch.object(cloud, "wait_admin_ssh"):
                                 with mock.patch.object(cloud, "admin_ssh"):
                                     with mock.patch.object(cloud, "wait_postgres"):
-                                        cloud.command_restore_test(mock.Mock())
+                                        with mock.patch.object(cloud, "_report_restore_drill") as report_restore:
+                                            cloud.command_restore_test(mock.Mock())
 
         install_cloud.assert_called_once()
         self.assertNotIn("override_hostname", install_cloud.call_args.kwargs)
         self.assertNotIn("override_netbird_name", install_cloud.call_args.kwargs)
+        report_restore.assert_called_once_with(
+            "203.0.113.20",
+            admin_key=".local/ssh/cloud-admin_ed25519",
+            ssh_port="22",
+        )
 
     def test_restore_candidate_defaults_to_restore_phase(self):
         env = {

@@ -274,7 +274,7 @@ bucket.
 ## Critical Rules
 
 - Do not start `apps.target` before restore is complete.
-- Do not restore while the `postgres-demo` container is running.
+- Do not restore while the configured PostgreSQL container is running.
 - Keep backups outside the server being destroyed.
 - Keep restic `lock/*` objects deletable, or backups and restores can block on
   stale locks.

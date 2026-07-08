@@ -159,6 +159,17 @@ in
       serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_last_success_timestamp_seconds";
     };
 
+    # A successful restore drill is only stamped by the operator restore flow
+    # after it has restored data and verified the marker on the rebuilt host.
+    # The gateway's RestoreDrillStale rule watches this metric.
+    systemd.services.portablevps-backup-restore-drill-report = {
+      description = "Report a successful backup restore drill to the telemetry gateway";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${reportMetric} portablevps_backup_restore_drill_timestamp_seconds";
+      };
+    };
+
     # Publish deploy outcomes so failures are noticed. ANY system deploy — the
     # unattended pull (system.autoUpgrade / nixos-upgrade) OR an operator
     # cloud:deploy — reports success or failure through these two units, which

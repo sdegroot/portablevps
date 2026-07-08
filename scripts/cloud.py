@@ -1250,6 +1250,19 @@ def _report_deploy_outcome(host: str, outcome: str, *, admin_key: str, ssh_port:
         pass
 
 
+def _report_restore_drill(host: str, *, admin_key: str, ssh_port: str) -> None:
+    """Best-effort: stamp a restore drill after data verification succeeds."""
+    try:
+        admin_ssh(
+            host,
+            "sudo systemctl start portablevps-backup-restore-drill-report.service || true",
+            port=ssh_port,
+            admin_key=admin_key,
+        )
+    except Exception:
+        pass
+
+
 def curl_proxy(domain: str, address: str) -> str:
     return subprocess.check_output(
         [
@@ -1869,6 +1882,7 @@ def command_restore_test(_args: argparse.Namespace) -> None:
     admin_ssh(restore_host, "sudo systemctl start apps.target", port=ssh_port, admin_key=admin_key)
     wait_postgres(restore_host, port=ssh_port, admin_key=admin_key)
     admin_ssh(restore_host, f"sudo verify-test-data.sh {sh_quote(marker)}", port=ssh_port, admin_key=admin_key)
+    _report_restore_drill(restore_host, admin_key=admin_key, ssh_port=ssh_port)
     print(
         f"PASS: restored {provider.name} source {source_host} onto {restore_host} and verified marker: {marker}",
         flush=True,
