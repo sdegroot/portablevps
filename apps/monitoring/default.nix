@@ -28,6 +28,23 @@ let
 
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
 
+  # logRefusedConnections is off (base.nix), so instead of per-packet log spam we
+  # push the cumulative refused-packet COUNT as a metric. It reads the packet
+  # counter on the NixOS firewall's refuse jump (`nixos-fw -> nixos-fw-log-refuse`),
+  # which exists regardless of logging, and pushes it to this box's own collector
+  # as a monotonic counter — rate()/increase() then gives refused-packets/sec, and
+  # a spike is a scan/attack. (iptables counters reset on firewall reload/reboot;
+  # counter semantics handle that.)
+  firewallMetricScript = pkgs.writeShellScript "portablevps-firewall-metric" ''
+    set -u
+    count="$(${pkgs.iptables}/bin/iptables -nvxL nixos-fw 2>/dev/null | ${pkgs.gawk}/bin/awk '/nixos-fw-log-refuse/ {print $1; exit}')"
+    count="''${count:-0}"
+    now_ns="$(${pkgs.coreutils}/bin/date +%s)000000000"
+    host=${lib.escapeShellArg config.networking.hostName}
+    payload='{"resourceMetrics":[{"resource":{"attributes":[{"key":"host.name","value":{"stringValue":"'"$host"'"}}]},"scopeMetrics":[{"metrics":[{"name":"portablevps_firewall_refused_packets_total","sum":{"aggregationTemporality":2,"isMonotonic":true,"dataPoints":[{"timeUnixNano":"'"$now_ns"'","asInt":"'"$count"'"}]}}]}]}]}'
+    ${pkgs.curl}/bin/curl -sf --max-time 10 -H 'Content-Type: application/json' --data "$payload" "http://127.0.0.1:4318/v1/metrics" >/dev/null 2>&1 || true
+  '';
+
   # A stack container on the shared podman network with a static bridge IP
   # (keeps netavark's published-port DNAT stable across recreates).
   mkContainer = { name, image, ip, uid, publishPorts ? [ ], volumes ? [ ]
@@ -467,6 +484,22 @@ in
           PrivateUsers = lib.mkForce false;
           PrivateDevices = lib.mkForce false;
         };
+      };
+
+      # Periodically push the firewall refused-packet count as a metric (see
+      # firewallMetricScript). Replaces the per-packet refuse logging disabled in
+      # base.nix. Runs as root (needs iptables) and pushes to the local collector.
+      systemd.services.portablevps-firewall-metric = {
+        description = "Push firewall refused-packet count to the local OTLP collector";
+        after = [ "opentelemetry-collector.service" "firewall.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = firewallMetricScript;
+        };
+      };
+      systemd.timers.portablevps-firewall-metric = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = { OnBootSec = "2min"; OnUnitActiveSec = "30s"; };
       };
     }
 

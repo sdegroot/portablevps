@@ -63,6 +63,13 @@ in
     networking.firewall = {
       enable = true;
       allowedTCPPorts = cfg.allowedTCPPorts;
+      # Public-IP boxes get constant internet port-scan traffic the firewall
+      # already drops; logging each refused connection floods the logs (and their
+      # storage) with non-actionable noise. Don't log them — the refused-packet
+      # COUNT is exposed as a metric instead (drops/sec is what you actually want
+      # to graph/alert on, not per-packet lines). See the monitoring app's
+      # firewall-refused metric.
+      logRefusedConnections = false;
     };
 
     security.sudo = {
