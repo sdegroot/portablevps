@@ -50,4 +50,57 @@
   # driver netavark shared the firewall's chains, so this didn't arise.) Trusting the
   # bridges lets container->host traffic (DNS + published-port loopbacks) through.
   networking.firewall.trustedInterfaces = [ "podman+" ];
+
+  # Restart quadlet containers whose definition changed on `nixos-rebuild switch`.
+  #
+  # Quadlet containers are GENERATED units: podman's systemd generator reads
+  # /etc/containers/systemd/*.container at daemon-reload and synthesizes the
+  # <name>.service. They live outside NixOS's managed-unit set, so switch updates
+  # the .container file but never restarts the running container — a bumped image
+  # tag or changed env silently has no effect until a manual restart or reboot.
+  #
+  # This activation step closes that gap: it hashes each rendered .container and,
+  # when one changes, `try-restart`s that unit (only the changed ones bounce).
+  # `try-restart` never STARTS a container, so restore-mode / apps.target gating
+  # and first-boot ordering are respected. The FIRST run on any box only seeds the
+  # hashes (no restarts), so rolling this out doesn't bounce already-running
+  # containers; only genuine subsequent changes trigger a restart.
+  #
+  # TODO: consider migrating the quadlet apps to the `quadlet-nix` module, which
+  # manages them as tracked NixOS units (restart-on-change built in), retiring
+  # this step. Deferred for now: young/unversioned dependency, ~single
+  # maintainer, and restart-on-change isn't confirmed in its docs — worth an ADR
+  # + a spike before adopting it under the whole fleet's container runtime.
+  system.activationScripts.restartChangedQuadlets = {
+    deps = [ "etc" ];
+    text = ''
+      stateDir=/var/lib/portablevps/quadlet-hashes
+      # First run (state dir absent): seed hashes only, never restart.
+      seed=0
+      [ -d "$stateDir" ] || seed=1
+      ${pkgs.coreutils}/bin/mkdir -p "$stateDir"
+      changed=""
+      for unit in /etc/containers/systemd/*.container; do
+        [ -e "$unit" ] || continue
+        name="$(${pkgs.coreutils}/bin/basename "$unit" .container)"
+        new="$(${pkgs.coreutils}/bin/sha256sum "$unit" | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
+        hashFile="$stateDir/$name"
+        old=""
+        [ -f "$hashFile" ] && old="$(${pkgs.coreutils}/bin/cat "$hashFile")"
+        if [ "$new" != "$old" ]; then
+          ${pkgs.coreutils}/bin/printf '%s' "$new" > "$hashFile"
+          [ "$seed" = "0" ] && changed="$changed $name.service"
+        fi
+      done
+      if [ -n "$changed" ]; then
+        # Regenerate the .service units from the new .container files, then bounce
+        # only the changed units that are currently running.
+        ${pkgs.systemd}/bin/systemctl daemon-reload
+        for svc in $changed; do
+          echo "portablevps: quadlet $svc definition changed -> try-restart"
+          ${pkgs.systemd}/bin/systemctl try-restart "$svc" || true
+        done
+      fi
+    '';
+  };
 }
