@@ -52,6 +52,7 @@ let
   builtinProfiles = {
     single-instance-app = toolRoot + "/modules/profiles/single-instance-app.nix";
     monitoring-server = toolRoot + "/modules/profiles/monitoring-server.nix";
+    web-app = toolRoot + "/modules/profiles/web-app.nix";
   };
 
   resolveProfile = profile:

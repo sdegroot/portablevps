@@ -7,5 +7,6 @@
   imports = [
     ./authentik
     ./monitoring
+    ./website
   ];
 }
