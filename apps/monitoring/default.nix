@@ -431,7 +431,11 @@ in
               encoding = "proto";
               compression = "gzip";
             };
-            "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/insert/opentelemetry/v1/logs";
+            # The journald receiver lands the log text in a `MESSAGE` field, not the
+            # OTLP body, so VictoriaLogs' canonical `_msg` stays empty ("missing _msg
+            # field") and full-text search misses these lines. Tell VictoriaLogs to
+            # use MESSAGE as _msg on ingestion — keeps every other journal field.
+            "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/insert/opentelemetry/v1/logs?_msg_field=MESSAGE";
           };
           service = {
             telemetry = { logs.level = "info"; metrics.level = "none"; };
