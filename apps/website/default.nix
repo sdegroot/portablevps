@@ -6,10 +6,17 @@
 # in object storage / a CDN, not on the box. The image is pinned (an immutable
 # tag) in the consumer's server def so git is the source of truth for what runs.
 #
-# Private registries: set `pullAuthSecret` to a sops key holding the base64
-# `username:token` for the registry; the module renders a podman authfile and
-# pulls with it. In prototype/local-VM mode (no sops) the authfile is skipped.
-{ config, lib, ... }:
+# Private registries: set `pullAuthUser` (the registry username — not a secret)
+# and `pullAuthSecret` (a sops key holding ONLY the pull token/password). The
+# module base64-encodes `user:token` into a podman authfile at start and pulls
+# with it. Keeping the username out of the secret avoids the easy mistake of
+# storing a bare token with no `user:` prefix. In prototype/local-VM mode (no
+# sops) the authfile is skipped.
+#
+# ghcr.io note: the Container registry only accepts a *classic* PAT with the
+# `read:packages` scope — fine-grained tokens have no packages permission and are
+# rejected. The username is not validated by ghcr (any non-empty value works).
+{ config, lib, pkgs, ... }:
 
 let
   cfg = config.portablevps.apps.website;
@@ -20,9 +27,6 @@ let
   useAuth = cfg.pullAuthSecret != null && !prototype;
 
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
-
-  healthCmd =
-    "node -e \"require('http').get('http://127.0.0.1:${toString cfg.port}/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\"";
 in
 {
   options.portablevps.apps.website = {
@@ -46,15 +50,28 @@ in
       description = "Podman container/unit name.";
     };
 
+    pullAuthUser = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "epistola-bot";
+      description = ''
+        Registry username paired with `pullAuthSecret` (NOT a secret — it is an
+        identifier, so it lives in config, not sops). For ghcr.io any non-empty
+        value works (ghcr authenticates by the token); use the bot account name
+        for clarity. Required when `pullAuthSecret` is set.
+      '';
+    };
+
     pullAuthSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "website/ghcr-pull-auth";
       description = ''
-        Optional sops key holding the base64 of `username:token` for the image's
-        registry (compute once: `printf '%s' 'USER:TOKEN' | base64`). Rendered
-        into a podman authfile so a private image can be pulled. Leave null for a
-        public image.
+        Optional sops key holding ONLY the pull token/password for the image's
+        registry (for ghcr.io: a classic PAT with the `read:packages` scope — no
+        username, no `user:` prefix). The module pairs it with `pullAuthUser`,
+        base64-encodes `user:token`, and renders a podman authfile so a private
+        image can be pulled. Leave null for a public image.
       '';
     };
 
@@ -85,12 +102,8 @@ in
         Environment=NODE_ENV=production
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
         ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
-        HealthCmd=${healthCmd}
-        HealthStartPeriod=30s
-        HealthInterval=30s
-        HealthTimeout=10s
-        HealthRetries=3
-        HealthOnFailure=kill
+        # No HealthCmd here: when the image ships its own HEALTHCHECK, podman uses
+        # it automatically. Restart=always covers a crashed container meanwhile.
 
         [Service]
         Restart=always
@@ -101,16 +114,34 @@ in
       '';
     }
 
-    # Private-registry pull auth: render a podman authfile from the sops secret.
+    # Private-registry pull auth: the sops secret holds ONLY the token; a oneshot
+    # combines it with the (non-secret) username and base64-encodes `user:token`
+    # into a podman authfile before the container. (podman's auth.json wants
+    # base64(user:token); encoding here means the operator never pre-encodes and
+    # can't store a bare token with no `user:` prefix.)
     (lib.mkIf useAuth {
+      assertions = [{
+        assertion = cfg.pullAuthUser != null;
+        message = "portablevps.apps.website: pullAuthUser must be set when pullAuthSecret is set (the registry username, e.g. the bot account name).";
+      }];
       sops.secrets.${cfg.pullAuthSecret} = { };
-      sops.templates."portablevps/website-registry-auth.json" = {
-        content = builtins.toJSON {
-          auths.${registry}.auth = config.sops.placeholder.${cfg.pullAuthSecret};
+      systemd.services."${cfg.containerName}-registry-auth" = {
+        description = "Render the ${cfg.containerName} podman registry authfile from sops";
+        before = [ "${cfg.containerName}.service" ];
+        requiredBy = [ "${cfg.containerName}.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
         };
-        path = authFile;
-        owner = "root";
-        mode = "0400";
+        script = ''
+          set -eu
+          token="$(${pkgs.coreutils}/bin/tr -d '\n' < ${config.sops.secrets.${cfg.pullAuthSecret}.path})"
+          auth="$(${pkgs.coreutils}/bin/printf '%s:%s' ${lib.escapeShellArg cfg.pullAuthUser} "$token" \
+            | ${pkgs.coreutils}/bin/base64 -w0)"
+          umask 077
+          ${pkgs.coreutils}/bin/install -Dm0400 /dev/null ${authFile}
+          printf '{"auths":{"${registry}":{"auth":"%s"}}}' "$auth" > ${authFile}
+        '';
       };
     })
   ]);
