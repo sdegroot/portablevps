@@ -158,5 +158,13 @@ in
     systemd.services.portablevps-backup = lib.mkIf backupsPresent {
       serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_last_success_timestamp_seconds";
     };
+
+    # Same for pull-based self-upgrade: stamp a success timestamp after a
+    # successful nixos-upgrade run so the gateway can alert when self-upgrade
+    # silently stops succeeding (fetch/auth or build failures never switch, so
+    # they would otherwise go unnoticed — the box just quietly stops updating).
+    systemd.services.nixos-upgrade = lib.mkIf config.portablevps.autoUpgrade.enable {
+      serviceConfig.ExecStartPost = "${reportMetric} portablevps_autoupgrade_last_success_timestamp_seconds";
+    };
   };
 }

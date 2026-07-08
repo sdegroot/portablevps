@@ -62,7 +62,14 @@ tools; and its magic rollback largely overlaps what break-glass SSH + `nixos-reb
 - **Auto-update via pull:** the reusable `portablevps.autoUpgrade` module wraps the
   built-in `system.autoUpgrade`; a box rebuilds **itself** from the committed flake on a
   timer. Opt-in per box (website first), tracking `main`, fetching the private repo with a
-  **read-only SSH deploy key** held in the box's own sops.
+  **read-only fine-grained PAT** (`Contents: Read-only`, in the box's own sops, passed to
+  nix as an `access-tokens` entry). A token — not an SSH deploy key — because deploy keys
+  are un-expiring, per-repo SSH credentials outside org token governance and are disabled at
+  the org level; a fine-grained token is centrally visible, revocable, and expiring.
+- **Failure visibility:** a successful self-upgrade stamps
+  `portablevps_autoupgrade_last_success_timestamp_seconds` over OTLP; the gateway's
+  `AutoUpgradeStale` rule alerts when it goes stale, so a silently-failing upgrade (fetch/
+  build failures never switch) is noticed instead of the box quietly ceasing to update.
 - **Companion (website repo):** on release, CI bumps the pinned image in the infra repo;
   the box applies it on the next tick and the quadlet restart-on-change step
   (`modules/runtime/podman.nix`) rolls the container.
@@ -81,7 +88,13 @@ tools; and its magic rollback largely overlaps what break-glass SSH + `nixos-reb
 - **Don't `cloud:deploy` *uncommitted* changes to an autoUpgrade box** — the next tick
   reverts them to the committed state (git is the source of truth).
 - **New dependency surface:** the infra repo must be hosted on a private remote, and each
-  opted-in box holds a read-only, repo-scoped deploy key (no expiry) in sops.
+  opted-in box holds a read-only, repo-scoped fine-grained PAT in sops. The token **expires**
+  (fine-grained max ~1 year) so it needs rotation — the trade for the governance the org
+  wants (deploy keys, which never expire, are disabled there).
+- **Retry / self-heal:** the nixos-upgrade timer keeps retrying every tick with no backoff;
+  a failed build is safe (no switch) and self-corrects once a good commit lands, and a bad
+  commit that still lets the box fetch is healed by committing a revert (the box converges on
+  the next tick). Only a change that severs the box's own fetch path needs break-glass.
 - deploy-rs's operational quirks (darwin flags, `confirmTimeout` tuning, false rollbacks)
   are gone.
 
