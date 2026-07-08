@@ -40,4 +40,14 @@
   # podman into systemPackages. Do NOT add `pkgs.podman` here — a second, unwrapped
   # podman would shadow it on PATH and break CLI `podman run --network …` (netavark
   # would not find `nft`).
+
+  # Trust the podman bridges so containers can reach their gateway — in particular
+  # the built-in DNS (aardvark-dns) at gateway:53. A consequence of the nftables
+  # driver above: netavark's accept rules live in its own nft table, but the NixOS
+  # host firewall (a separate table) default-drops the untrusted `podman*` bridge
+  # interface, and in nftables a drop in any table wins — so container->gateway:53
+  # is dropped and container name resolution silently fails. (Under the old iptables
+  # driver netavark shared the firewall's chains, so this didn't arise.) Trusting the
+  # bridges lets container->host traffic (DNS + published-port loopbacks) through.
+  networking.firewall.trustedInterfaces = [ "podman+" ];
 }
