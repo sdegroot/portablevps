@@ -26,6 +26,20 @@ let
   dataDir = cfg.dataDir;
   net = cfg.podmanNetwork;
 
+  # The bridge gateway hosts a dnsmasq forwarder (aardvark DNS is disabled on this
+  # network): it forwards to systemd-resolved (127.0.0.53) so containers get the
+  # host's full split-DNS (NetBird mesh names + public), which they otherwise can't
+  # reach — resolved's stub is a loopback address invisible inside the container
+  # netns. Container names resolve from static host-records below.
+  gatewayIp = "10.89.0.1";
+  containerIps = {
+    victoriametrics = "10.89.0.10";
+    victorialogs = "10.89.0.11";
+    grafana = "10.89.0.12";
+    vmalert = "10.89.0.13";
+    alertmanager = "10.89.0.14";
+  };
+
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
 
   # A stack container on the shared podman network with a static bridge IP
@@ -38,7 +52,9 @@ let
       afterUnits = [ "network-online.target" ] ++ after;
       publishLines = map (p: "PublishPort=${p}") publishPorts;
       volumeLines = map (v: "Volume=${v}") volumes;
-      podmanArgLines = map (a: "PodmanArgs=${a}") podmanArgs;
+      # Point every container at the bridge-gateway dnsmasq forwarder (aardvark is
+      # disabled on this network), so mesh + public names resolve.
+      podmanArgLines = map (a: "PodmanArgs=${a}") ([ "--dns=${gatewayIp}" ] ++ podmanArgs);
     in
     ''
       [Unit]
@@ -288,7 +304,32 @@ in
         NetworkName=monitoring
         Subnet=10.89.0.0/24
         Gateway=10.89.0.1
+        DisableDNS=true
       '';
+
+      # Container DNS forwarder. aardvark is disabled on the monitoring network
+      # (DisableDNS above), so dnsmasq owns the bridge gateway (10.89.0.1:53) and
+      # is what every container points at (--dns in mkContainer). It answers the
+      # stack's own container names from static host-records, and forwards
+      # everything else to systemd-resolved (127.0.0.53) — which resolves NetBird
+      # mesh names + public. Containers can't reach resolved's loopback stub
+      # directly (it's invisible across the container netns boundary), so this
+      # bridge-gateway forwarder is how they get the host's full split-DNS.
+      services.dnsmasq = {
+        enable = true;
+        resolveLocalQueries = false; # don't register as the host's own resolver
+        settings = {
+          listen-address = gatewayIp;
+          bind-dynamic = true; # bind when the podman bridge appears
+          no-resolv = true;
+          server = [ "127.0.0.53" ];
+          host-record = lib.mapAttrsToList (n: ip: "${n},${ip}") containerIps;
+        };
+      };
+      systemd.services.dnsmasq = {
+        after = [ "monitoring-network.service" ];
+        wants = [ "monitoring-network.service" ];
+      };
 
       # Writable data directories, owned by each container's non-root uid.
       systemd.tmpfiles.rules = [
