@@ -184,6 +184,10 @@ remote "$VM_A_SSH" "
 echo "configuring VM A in normal mode"
 remote "$VM_A_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_A_SSH" "sudo systemctl start apps.target"
+# The scheduled timers are enabled in normal mode. Disable them for this
+# controlled sequence so a Persistent= true timer cannot race the manual
+# full/incremental backups and make journal-mode assertions non-deterministic.
+remote "$VM_A_SSH" "sudo systemctl stop portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true"
 
 echo "inserting initial marker on VM A"
 remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
