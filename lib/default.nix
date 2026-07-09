@@ -53,6 +53,7 @@ let
   # profile defined in the consumer repository.
   builtinProfiles = {
     idle = toolRoot + "/modules/profiles/idle.nix";
+    forgejo-runner = toolRoot + "/modules/profiles/forgejo-runner.nix";
     single-instance-app = toolRoot + "/modules/profiles/single-instance-app.nix";
     monitoring-server = toolRoot + "/modules/profiles/monitoring-server.nix";
     web-app = toolRoot + "/modules/profiles/web-app.nix";

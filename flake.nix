@@ -54,6 +54,7 @@
         serviceExposure = ./modules/networking/service-exposure.nix;
         breakGlassSsh = ./modules/networking/break-glass-ssh.nix;
         cloudVps = ./modules/platforms/cloud-vps.nix;
+        forgejoRunner = ./modules/profiles/forgejo-runner.nix;
         singleInstanceApp = ./modules/profiles/single-instance-app.nix;
       };
 

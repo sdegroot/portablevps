@@ -68,6 +68,17 @@ let
         default = { };
         description = "Extra Traefik HTTP router configuration.";
       };
+
+      deniedPathPrefixes = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "/admin" "/api/v1/admin" ];
+        description = ''
+          Path prefixes shadowed by a higher-priority router that uses
+          Traefik's noop internal service. This is intended for public routes
+          that should expose the same backend with selected surfaces hidden.
+        '';
+      };
     };
   };
 
@@ -107,6 +118,9 @@ let
     lib.concatStringsSep " || " (map (name: "Host(`${name}`)") names);
 
   hostSniRule = domain: "HostSNI(`${domain}`)";
+
+  pathPrefixRule = prefixes:
+    lib.concatStringsSep " || " (map (prefix: "PathPrefix(`${prefix}`)") prefixes);
 
   testHttpServices = lib.optionalAttrs cfg.testBackend.enable {
     proxy-test = {
@@ -164,6 +178,24 @@ let
         };
       } // service.extraRouterConfig)
     httpServicesConfig;
+
+  httpDenyRouters = lib.listToAttrs (lib.flatten (lib.mapAttrsToList
+    (name: service:
+      lib.optional (service.deniedPathPrefixes != [ ]) {
+        name = "${name}-denied-paths";
+        value = {
+          rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule service.deniedPathPrefixes})";
+          entryPoints = [ cfg.entryPointName ];
+          service = "noop@internal";
+          priority = 10000;
+          tls = {
+            options = "default";
+          } // lib.optionalAttrs cfg.acme.enable {
+            certResolver = acmeResolverName;
+          };
+        };
+      })
+    httpServicesConfig));
 
   httpServices = lib.mapAttrs
     (_name: service: {
@@ -521,7 +553,7 @@ in
         ];
         dynamicConfigOptions = lib.mkIf hasRoutes {
           http = lib.mkIf (httpServicesConfig != { }) {
-            routers = httpRouters;
+            routers = httpRouters // httpDenyRouters;
             services = httpServices;
           };
           tcp = lib.mkIf (cfg.tcp.services != { }) {
