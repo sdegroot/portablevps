@@ -268,12 +268,6 @@ in
         Network=host
         EnvironmentFile=${envPath}
         Volume=${dataRoot}:/data:Z
-        HealthCmd=wget -q --spider http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/healthz
-        HealthStartPeriod=60s
-        HealthInterval=30s
-        HealthTimeout=10s
-        HealthRetries=3
-        HealthOnFailure=kill
 
         [Service]
         Restart=always
