@@ -69,6 +69,7 @@ let
     ) + "\n";
 
   oauthEnabled = cfg.oidc.enable && cfg.oidc.issuerBaseUrl != "";
+  forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
 in
 {
   options.portablevps.apps.forgejo = {
@@ -298,30 +299,30 @@ in
         script = ''
           set -eu
           for _ in $(seq 1 120); do
-            if podman exec forgejo forgejo admin user list >/dev/null 2>&1; then
+            if ${forgejoCli} admin user list >/dev/null 2>&1; then
               break
             fi
             sleep 1
           done
 
           admin_password="$(${pkgs.coreutils}/bin/tr -d '\n' < ${if prototype then pkgs.writeText "forgejo-demo-admin-password" (demoSecret cfg.admin.passwordSecret) else config.sops.secrets.${cfg.admin.passwordSecret}.path})"
-          if ! podman exec forgejo forgejo admin user list | grep -Fq -- ${lib.escapeShellArg cfg.admin.username}; then
-            podman exec forgejo forgejo admin user create \
+          if ! ${forgejoCli} admin user list | grep -Fq -- ${lib.escapeShellArg cfg.admin.username}; then
+            ${forgejoCli} admin user create \
               --admin \
               --username ${lib.escapeShellArg cfg.admin.username} \
               --password "$admin_password" \
               --email ${lib.escapeShellArg cfg.admin.email} \
               --must-change-password=false || true
           else
-            podman exec forgejo forgejo admin user change-password \
+            ${forgejoCli} admin user change-password \
               --username ${lib.escapeShellArg cfg.admin.username} \
               --password "$admin_password" || true
           fi
         '' + lib.optionalString oauthEnabled ''
 
           oauth_secret="$(${pkgs.coreutils}/bin/tr -d '\n' < ${if prototype then pkgs.writeText "forgejo-demo-oauth-secret" (demoSecret cfg.oidc.clientSecretSecret) else config.sops.secrets.${cfg.oidc.clientSecretSecret}.path})"
-          if ! podman exec forgejo forgejo admin auth list | grep -Fq ${lib.escapeShellArg cfg.oidc.name}; then
-            podman exec forgejo forgejo admin auth add-oauth \
+          if ! ${forgejoCli} admin auth list | grep -Fq ${lib.escapeShellArg cfg.oidc.name}; then
+            ${forgejoCli} admin auth add-oauth \
               --name ${lib.escapeShellArg cfg.oidc.name} \
               --provider ${lib.escapeShellArg cfg.oidc.provider} \
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
