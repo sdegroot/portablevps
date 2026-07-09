@@ -181,10 +181,10 @@ let
 
   httpDenyRouters = lib.listToAttrs (lib.flatten (lib.mapAttrsToList
     (name: service:
-      lib.optional (service.deniedPathPrefixes != [ ]) {
+      lib.optional ((service.deniedPathPrefixes or [ ]) != [ ]) {
         name = "${name}-denied-paths";
         value = {
-          rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule service.deniedPathPrefixes})";
+          rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule (service.deniedPathPrefixes or [ ])})";
           entryPoints = [ cfg.entryPointName ];
           service = "noop@internal";
           priority = 10000;
