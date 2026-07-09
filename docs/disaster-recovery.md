@@ -146,7 +146,10 @@ the two collide on the mesh.
 > operation: provision a **new** machine (`<provider>-<region>-<date><letter>`,
 > its own name), deploy the app, restore its service data, then flip the service
 > CNAME to the new machine and retire the old one. That path never renames a
-> machine.
+> machine. Use `task cloud:migrate-service` for that case; it switches the
+> target to restore mode, pre-warms TLS, takes a final source backup, stops the
+> source, restores the target, verifies the marker, and syncs NetBird DNS. See
+> `docs/operations-runbooks.md#service-migration`.
 
 First, capture a fresh backup from the source (or use the last good one if the
 source is already lost):

@@ -556,6 +556,68 @@ Promotion also updates local lifecycle state: the promoted host becomes the
 still be deleted with `task cloud:delete SERVER=... ROLE=candidate
 CONFIRM_DELETE=<provider-server-id>` once traffic has been repointed.
 
+## Service Migration
+
+Use this to move a live service to a different already-provisioned machine
+identity. This is not a host replacement: the target keeps its own hostname,
+NetBird peer, sops age key, and secrets file. The service moves because both
+server configs point at the same service-keyed backup repository and the service
+DNS record is repointed after restore.
+
+Prerequisites:
+
+- The target server config already runs the service and declares the same
+  `backupRepository` as the source service.
+- The target server has all required sops secrets. Shared proxy credentials such
+  as `traefik/acme-env` must match the working fleet credential when the same
+  delegated DNS provider is used.
+- The target is reachable over admin SSH and can build its normal and
+  `-restore` profiles.
+- NetBird DNS credentials are available if the command should repoint internal
+  service DNS automatically.
+
+Run:
+
+```sh
+mise exec -- task cloud:migrate-service \
+  SOURCE_SERVER=old-service-host \
+  TARGET_SERVER=new-service-host \
+  SOURCE_HOST=old-service-host.example.internal \
+  TARGET_HOST=new-service-host.example.internal
+```
+
+The command performs the cutover in this order:
+
+1. Switch the target to `.#<target>-restore`.
+2. Verify restore mode is active and app/PostgreSQL units are not running.
+3. Pre-warm and verify target TLS for every proxy domain in the target plan.
+   This happens before source shutdown; if certificate validation fails, the
+   source remains untouched. Set `PREWARM_TLS=0` only when TLS is intentionally
+   out of scope for the move.
+4. Insert and verify a final PostgreSQL marker on the source.
+5. Run the real `portablevps-backup.service` on the source.
+6. Stop source app services.
+7. Run `restore.sh` on the target.
+8. Switch the target to normal `.#<target>` and start `apps.target`.
+9. Verify the final marker on the target.
+10. Sync internal NetBird DNS from the target proxy plan.
+
+After the command succeeds, verify the service endpoint from a mesh client and
+apply a follow-up config change for the retired host, usually the `idle` profile.
+Deploy that old host only after the target is healthy and DNS points at it.
+
+Important details:
+
+- Certificates are state. `portablevps.proxy` registers Traefik's
+  `${services.traefik.dataDir}/acme.json` as a backup component so a restored
+  service host can present the existing certificate immediately. DNS-01 issuance
+  must still be healthy for future renewals.
+- The command refuses to proceed when `SOURCE_SERVER` and `TARGET_SERVER` both
+  declare backup repositories and they differ.
+- The command is intentionally scoped to already-provisioned hosts. Creating a
+  new target machine, wiring sops recipients/secrets, and deciding which old
+  machine should become idle remain explicit operator steps.
+
 ## Operator Control Plane
 
 The deploy machine is part of the disaster recovery story. Everything under
