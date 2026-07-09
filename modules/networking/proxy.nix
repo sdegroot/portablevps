@@ -539,6 +539,15 @@ in
 
       environment.etc."portablevps/proxy-domains.json".source = domainPlanFile;
       environment.systemPackages = [ domainPlanCommand ];
+
+      # ACME certificates are service/proxy state. Backing up acme.json lets a
+      # restored or migrated host present the existing certificate immediately,
+      # while normal DNS-01 issuance remains responsible for renewal.
+      portablevps.backups.components."traefik-acme" = lib.mkIf cfg.acme.enable {
+        order = 15;
+        paths = [ "${config.services.traefik.dataDir}/acme.json" ];
+        clearBeforeRestore = [ "${config.services.traefik.dataDir}/acme.json" ];
+      };
     }
 
     (lib.mkIf (cfg.acme.enable && !config.portablevps.secrets.allowPrototypeDefaults) {

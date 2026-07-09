@@ -1098,6 +1098,22 @@ def switch_normal_profile(
     switch_profile(deployment, host, admin_key, ssh_port, flake_path=REPO_ROOT)
 
 
+def switch_restore_profile(
+    deployment: Deployment,
+    host: str,
+    admin_key: str,
+    ssh_port: str = "22",
+) -> None:
+    print(f"prepare-target: switching {host} to .#{deployment.name}-restore", flush=True)
+    switch_profile(
+        Deployment(f"{deployment.name}-restore", deployment.values),
+        host,
+        admin_key,
+        ssh_port,
+        flake_path=REPO_ROOT,
+    )
+
+
 def switch_profile(
     deployment: Deployment,
     host: str,
@@ -1498,6 +1514,178 @@ def command_netbird_dns_sync(_args: argparse.Namespace) -> None:
         status = netbird_upsert_record(token, zone_id, record)
         payload = netbird_record_payload(record)
         print(f"{status}: {payload['name']} {payload['type']} {payload['content']} ttl={payload['ttl']}", flush=True)
+
+
+def proxy_domains(plan: dict) -> list[str]:
+    domains: list[str] = []
+    for entry in plan.get("domains", []):
+        if not isinstance(entry, dict):
+            continue
+        domain = str(entry.get("domain", "")).strip()
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains
+
+
+def prewarm_proxy_certificates(host: str, *, port: str, admin_key: str) -> None:
+    plan = proxy_domain_plan(host, port=port, admin_key=admin_key)
+    domains = proxy_domains(plan)
+    if not domains:
+        print("prewarm-tls: no proxy domains declared; skipping", flush=True)
+        return
+    for domain in domains:
+        print(f"prewarm-tls: trigger certificate load/issuance for {domain} on {host}", flush=True)
+        subprocess.run(
+            [
+                "curl",
+                "--head",
+                "--silent",
+                "--show-error",
+                "--insecure",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "20",
+                "--connect-to",
+                f"{domain}:443:{host}:443",
+                f"https://{domain}/",
+            ],
+            check=True,
+        )
+        for attempt in range(1, 31):
+            result = subprocess.run(
+                [
+                    "curl",
+                    "--head",
+                    "--silent",
+                    "--show-error",
+                    "--connect-timeout",
+                    "10",
+                    "--max-time",
+                    "20",
+                    "--connect-to",
+                    f"{domain}:443:{host}:443",
+                    f"https://{domain}/",
+                ],
+                text=True,
+            )
+            if result.returncode == 0:
+                print(f"prewarm-tls: valid certificate for {domain} on {host}", flush=True)
+                break
+            if attempt == 30:
+                raise CloudError(
+                    f"error: {host} did not present a valid TLS certificate for {domain}; "
+                    "aborting before stopping the source host",
+                    70,
+                )
+            time.sleep(10)
+
+
+def sync_internal_netbird_dns(host: str, *, port: str, admin_key: str) -> None:
+    token = secret_env("NETBIRD_API_TOKEN", "")
+    if not token:
+        print("netbird-dns: NETBIRD_API_TOKEN is unset; skipping DNS repoint", flush=True)
+        return
+    zone_domain = env("NETBIRD_DNS_ZONE", "int.portablevps.io")
+    zone_name = env("NETBIRD_DNS_ZONE_NAME", zone_domain)
+    group_ids = comma_list(env("NETBIRD_DNS_GROUP_IDS", ""))
+    plan = proxy_domain_plan(host, port=port, admin_key=admin_key)
+    records = internal_netbird_records_from_plan(plan, zone_domain)
+    if not records:
+        print(f"netbird-dns: no internal records in plan for zone {zone_domain}; skipping", flush=True)
+        return
+    zone = netbird_find_zone(token, zone_domain)
+    if zone is None:
+        print(f"netbird-dns: create zone {zone_domain}", flush=True)
+        zone = netbird_create_zone(token, name=zone_name, domain=zone_domain, group_ids=group_ids)
+    zone_id = str(zone.get("id", ""))
+    if not zone_id:
+        raise CloudError(f"error: NetBird DNS zone {zone_domain} has no id", 70)
+    for record in records:
+        status = netbird_upsert_record(token, zone_id, record)
+        payload = netbird_record_payload(record)
+        print(f"netbird-dns: {status}: {payload['name']} {payload['type']} {payload['content']} ttl={payload['ttl']}", flush=True)
+
+
+def command_migrate_service(_args: argparse.Namespace) -> None:
+    target = require_server(env("TARGET_SERVER", env("SERVER", "")))
+    source_name = env("SOURCE_SERVER", "")
+    source = require_server(source_name) if source_name else None
+    source_host = env("SOURCE_HOST", "")
+    target_host = env("TARGET_HOST", env("RESTORE_HOST", ""))
+    if not source_host:
+        raise CloudError("error: SOURCE_HOST is required", 64)
+    if not target_host:
+        raise CloudError("error: TARGET_HOST is required", 64)
+    if source and source.backup_repository and target.backup_repository and source.backup_repository != target.backup_repository:
+        raise CloudError(
+            f"error: source and target backup repositories differ: {source.backup_repository} != {target.backup_repository}",
+            64,
+        )
+    if not target.backup_repository:
+        raise CloudError(f"error: target server {target.name} does not declare backupRepository", 64)
+
+    ssh_port = env("SSH_PORT", "22")
+    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    marker = env("MARKER", "")
+    marker_path = marker_file(target, source_host)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wait_admin_ssh(target_host, port=ssh_port, admin_key=admin_key)
+    switch_restore_profile(target, target_host, admin_key, ssh_port)
+    wait_admin_ssh(target_host, port=ssh_port, admin_key=admin_key)
+    admin_ssh(
+        target_host,
+        "test \"$(cat /etc/portablevps/restore-mode)\" = true; "
+        "! systemctl is-active --quiet postgres.service; "
+        "! systemctl is-active --quiet apps.target",
+        port=ssh_port,
+        admin_key=admin_key,
+    )
+    if truthy(env("PREWARM_TLS", "1")):
+        prewarm_proxy_certificates(target_host, port=ssh_port, admin_key=admin_key)
+
+    wait_admin_ssh(source_host, port=ssh_port, admin_key=admin_key)
+    wait_postgres(source_host, port=ssh_port, admin_key=admin_key)
+    if not marker:
+        marker = admin_capture(source_host, "sudo insert-test-data.sh | tail -n 1", port=ssh_port, admin_key=admin_key)
+    marker_path.write_text(f"{marker}\n", encoding="utf-8")
+    admin_ssh(source_host, f"sudo verify-test-data.sh {sh_quote(marker)}", port=ssh_port, admin_key=admin_key)
+    print(f"backup: final source marker verified: {marker}", flush=True)
+    admin_ssh(source_host, "sudo systemctl start portablevps-backup.service", port=ssh_port, admin_key=admin_key)
+    print("backup: final source backup completed", flush=True)
+
+    print(f"cutover: stopping app services on source {source_host}", flush=True)
+    admin_ssh(
+        source_host,
+        "sudo systemctl stop apps.target || true; "
+        "sudo systemctl stop authentik-server.service authentik-worker.service authentik-provision.service postgres.service 2>/dev/null || true; "
+        "for i in $(seq 1 60); do "
+        "active=0; "
+        "for unit in apps.target postgres.service authentik-server.service authentik-worker.service; do "
+        "systemctl is-active --quiet \"$unit\" && active=1; "
+        "done; "
+        "test \"$active\" = 0 && exit 0; "
+        "sleep 2; "
+        "done; "
+        "exit 1",
+        port=ssh_port,
+        admin_key=admin_key,
+    )
+
+    print(f"restore: restoring latest backup onto {target_host}", flush=True)
+    admin_ssh(target_host, "sudo restore.sh", port=ssh_port, admin_key=admin_key)
+    switch_normal_profile(target, target_host, admin_key, "true", ssh_port=ssh_port)
+    wait_admin_ssh(target_host, port=ssh_port, admin_key=admin_key)
+    admin_ssh(target_host, "sudo systemctl start apps.target", port=ssh_port, admin_key=admin_key)
+    wait_postgres(target_host, port=ssh_port, admin_key=admin_key)
+    admin_ssh(target_host, f"sudo verify-test-data.sh {sh_quote(marker)}", port=ssh_port, admin_key=admin_key)
+    sync_internal_netbird_dns(target_host, port=ssh_port, admin_key=admin_key)
+    _report_restore_drill(target_host, admin_key=admin_key, ssh_port=ssh_port)
+    print(
+        f"PASS: migrated backup repository {target.backup_repository} from {source_host} to {target_host}; marker {marker}",
+        flush=True,
+    )
 
 
 def netbird_list_groups(token: str) -> list[dict]:
@@ -2049,6 +2237,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     promote_candidate = subcommands.add_parser("promote-candidate", help="Promote a validated restore candidate to stable identity")
     promote_candidate.set_defaults(func=command_promote_candidate)
+
+    migrate_service = subcommands.add_parser("migrate-service", help="Move a service between existing hosts via backup and restore")
+    migrate_service.set_defaults(func=command_migrate_service)
 
     proxy = subcommands.add_parser("proxy-smoke-test", help="Temporarily enable and verify the proxy smoke-test backend")
     proxy.set_defaults(func=command_proxy_smoke_test)

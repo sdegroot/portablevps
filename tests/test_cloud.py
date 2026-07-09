@@ -752,6 +752,139 @@ class CloudTests(unittest.TestCase):
 
         self.assertIn("exists with type A", str(raised.exception))
 
+    def test_migrate_service_orders_restore_backup_stop_restore_verify(self):
+        registry = Path(self.tempdir.name) / "migrate-servers.json"
+        registry.write_text(
+            json.dumps({
+                "old-auth": {
+                    "name": "old-auth",
+                    "placement": {"provider": "leaseweb"},
+                    "backupRepository": "s3://example/authentik",
+                },
+                "new-auth": {
+                    "name": "new-auth",
+                    "placement": {"provider": "hetzner"},
+                    "backupRepository": "s3://example/authentik",
+                },
+            }),
+            encoding="utf-8",
+        )
+        env = {
+            "SERVER_REGISTRY": str(registry),
+            "TARGET_SERVER": "new-auth",
+            "SOURCE_SERVER": "old-auth",
+            "SOURCE_HOST": "old.example",
+            "TARGET_HOST": "new.example",
+            "PREWARM_TLS": "0",
+        }
+        calls = []
+
+        def fake_admin_ssh(host, command, *, port, admin_key):
+            if "portablevps-backup.service" in command:
+                calls.append("backup")
+            elif "stop apps.target" in command:
+                calls.append("stop-source")
+            elif "restore.sh" in command:
+                calls.append("restore")
+            elif "verify-test-data.sh" in command and host == "new.example":
+                calls.append("verify-target")
+            return mock.Mock()
+
+        def fake_switch_restore(*_args, **_kwargs):
+            calls.append("target-restore-mode")
+
+        def fake_switch_normal(*_args, **_kwargs):
+            calls.append("target-normal-mode")
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "wait_admin_ssh"):
+                with mock.patch.object(cloud, "wait_postgres"):
+                    with mock.patch.object(cloud, "switch_restore_profile", side_effect=fake_switch_restore):
+                        with mock.patch.object(cloud, "switch_normal_profile", side_effect=fake_switch_normal):
+                            with mock.patch.object(cloud, "admin_capture", return_value="marker-1"):
+                                with mock.patch.object(cloud, "admin_ssh", side_effect=fake_admin_ssh):
+                                    with mock.patch.object(cloud, "sync_internal_netbird_dns"):
+                                        with mock.patch.object(cloud, "_report_restore_drill"):
+                                            cloud.command_migrate_service(mock.Mock())
+
+        self.assertEqual(
+            calls,
+            [
+                "target-restore-mode",
+                "backup",
+                "stop-source",
+                "restore",
+                "target-normal-mode",
+                "verify-target",
+            ],
+        )
+
+    def test_migrate_service_refuses_backup_repository_mismatch(self):
+        registry = Path(self.tempdir.name) / "mismatch-servers.json"
+        registry.write_text(
+            json.dumps({
+                "old-auth": {
+                    "name": "old-auth",
+                    "placement": {"provider": "leaseweb"},
+                    "backupRepository": "s3://example/old",
+                },
+                "new-auth": {
+                    "name": "new-auth",
+                    "placement": {"provider": "hetzner"},
+                    "backupRepository": "s3://example/new",
+                },
+            }),
+            encoding="utf-8",
+        )
+        env = {
+            "SERVER_REGISTRY": str(registry),
+            "TARGET_SERVER": "new-auth",
+            "SOURCE_SERVER": "old-auth",
+            "SOURCE_HOST": "old.example",
+            "TARGET_HOST": "new.example",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(cloud.CloudError) as raised:
+                cloud.command_migrate_service(mock.Mock())
+
+        self.assertIn("backup repositories differ", str(raised.exception))
+
+    def test_migrate_service_aborts_on_tls_prewarm_before_source_backup(self):
+        registry = Path(self.tempdir.name) / "tls-servers.json"
+        registry.write_text(
+            json.dumps({
+                "old-auth": {
+                    "name": "old-auth",
+                    "placement": {"provider": "leaseweb"},
+                    "backupRepository": "s3://example/authentik",
+                },
+                "new-auth": {
+                    "name": "new-auth",
+                    "placement": {"provider": "hetzner"},
+                    "backupRepository": "s3://example/authentik",
+                },
+            }),
+            encoding="utf-8",
+        )
+        env = {
+            "SERVER_REGISTRY": str(registry),
+            "TARGET_SERVER": "new-auth",
+            "SOURCE_SERVER": "old-auth",
+            "SOURCE_HOST": "old.example",
+            "TARGET_HOST": "new.example",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch.object(cloud, "wait_admin_ssh"):
+                with mock.patch.object(cloud, "switch_restore_profile"):
+                    with mock.patch.object(cloud, "admin_ssh") as admin_ssh:
+                        with mock.patch.object(cloud, "prewarm_proxy_certificates", side_effect=cloud.CloudError("tls failed")):
+                            with self.assertRaises(cloud.CloudError):
+                                cloud.command_migrate_service(mock.Mock())
+
+        self.assertFalse(any("portablevps-backup.service" in call.args[1] for call in admin_ssh.call_args_list))
+
     def test_restore_phase_requires_confirmation_for_restore_host(self):
         env = {
             **self.server_env,
