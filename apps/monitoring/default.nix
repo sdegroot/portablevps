@@ -286,7 +286,7 @@ in
         name = lib.mkOption { type = lib.types.str; default = "Authentik"; description = "OAuth provider display name."; };
         clientId = lib.mkOption { type = lib.types.str; default = "grafana"; description = "OAuth client id."; };
         clientSecretSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-oauth-secret"; description = "sops secret holding the OAuth client secret."; };
-        issuerBaseUrl = lib.mkOption { type = lib.types.str; default = ""; description = "authentik base URL, e.g. https://auth.epistola.app; the authorize/token/userinfo URLs derive from it."; };
+        issuerBaseUrl = lib.mkOption { type = lib.types.str; default = ""; description = "authentik base URL, e.g. https://auth.epistola.cloud; the authorize/token/userinfo URLs derive from it."; };
         roleAttributePath = lib.mkOption {
           type = lib.types.str;
           default = "(contains(groups, 'epistola_employees') || ends_with(email, '@epistola.app')) && 'Editor' || 'Viewer'";
