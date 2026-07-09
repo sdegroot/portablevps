@@ -52,6 +52,7 @@ let
   # `profile` field. A server may also set `profile` to a path for a custom
   # profile defined in the consumer repository.
   builtinProfiles = {
+    idle = toolRoot + "/modules/profiles/idle.nix";
     single-instance-app = toolRoot + "/modules/profiles/single-instance-app.nix";
     monitoring-server = toolRoot + "/modules/profiles/monitoring-server.nix";
     web-app = toolRoot + "/modules/profiles/web-app.nix";
