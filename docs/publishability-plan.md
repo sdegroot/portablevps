@@ -74,8 +74,10 @@ are implemented as code + tests only.
 ### 6. Release engineering + de-epistola-ize  (item 6)
 - [ ] Remove epistola-specific defaults (region `nl-ams`, `sander@degroot.dev`,
       `EPIS_*` chain names, `nl`-only break-glass, `portablevps.io` placeholders).
-- [ ] Prune legacy alias shims (`vpn`/`public`, `deployment` block) — one
-      consumer today, so break now.
+- [x] Prune legacy alias shims: the `portablevps.deployment` block (use
+      `portablevps.server`), proxy visibility `vpn`/`public` (use
+      `internal`/`netbird-edge`), and `dns.publicCnameTarget` (use
+      `publicTarget`). Verified unused by the consumer + CLI; all configs eval.
 - [x] SECURITY.md (private disclosure + operator responsibilities).
 - [ ] Full EUPL-1.2 text in LICENSE (deliberately deferred — do not paste
       unverified legal text; maintainer must paste the official verbatim text

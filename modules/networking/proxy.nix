@@ -33,11 +33,7 @@ let
     || cfg.acme.dnsProvider != ""
     || cfg.dns.managedZones != [ ]
     || cfg.dns.acmeDelegatedZone != null;
-  visibilityType = lib.types.enum [ "internal" "netbird-edge" "direct-public" "vpn" "public" ];
-  normalizeVisibility = visibility:
-    if visibility == "vpn" then "internal"
-    else if visibility == "public" then "netbird-edge"
-    else visibility;
+  visibilityType = lib.types.enum [ "internal" "netbird-edge" "direct-public" ];
 
   httpServiceType = lib.types.submodule {
     options = {
@@ -60,7 +56,7 @@ let
       visibility = lib.mkOption {
         type = visibilityType;
         default = "internal";
-        description = "Ingress path: internal, netbird-edge, or direct-public. Legacy aliases vpn and public map to internal and netbird-edge.";
+        description = "Ingress path: internal (mesh-only), netbird-edge (public via the mesh edge), or direct-public.";
       };
 
       extraRouterConfig = lib.mkOption {
@@ -109,7 +105,7 @@ let
       visibility = lib.mkOption {
         type = visibilityType;
         default = "internal";
-        description = "Ingress path: internal, netbird-edge, or direct-public. Legacy aliases vpn and public map to internal and netbird-edge.";
+        description = "Ingress path: internal (mesh-only), netbird-edge (public via the mesh edge), or direct-public.";
       };
     };
   };
@@ -161,8 +157,6 @@ let
   publicDnsTarget =
     if cfg.dns.publicTarget != null
     then normalizePublicTarget cfg.dns.publicTarget
-    else if cfg.dns.publicCnameTarget != null
-    then normalizePublicTarget cfg.dns.publicCnameTarget
     else null;
 
   httpRouters = lib.mapAttrs
@@ -229,7 +223,7 @@ let
         (domain: {
           inherit domain serviceName;
           routeType = "http";
-          visibility = normalizeVisibility service.visibility;
+          visibility = service.visibility;
           upstream = service.upstream;
         })
         ([ service.domain ] ++ service.aliases))
@@ -239,7 +233,7 @@ let
       domain = service.domain;
       inherit serviceName;
       routeType = "tcp";
-      visibility = normalizeVisibility service.visibility;
+      visibility = service.visibility;
       upstream = "${service.targetHost}:${toString service.targetPort}";
     })
     cfg.tcp.services;
@@ -284,7 +278,6 @@ let
   domainPlan = {
     server = config.networking.hostName;
     netbirdName = netbirdName;
-    publicCnameTarget = publicDnsTarget;
     publicTarget = publicDnsTarget;
     publicRecordType = cfg.dns.publicRecordType;
     netbirdCnameTarget = netbirdDnsTarget;
@@ -432,13 +425,6 @@ in
         default = [ ];
         example = [ "int.portablevps.io" ];
         description = "DNS zones delegated to the ACME provider where Traefik can create challenge TXT records directly.";
-      };
-
-      publicCnameTarget = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "eu1.netbird.services.";
-        description = "Compatibility alias for portablevps.proxy.dns.publicTarget.";
       };
 
       publicTarget = lib.mkOption {
