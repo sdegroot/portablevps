@@ -2189,6 +2189,132 @@ def command_secrets_init_server(_args: argparse.Namespace) -> None:
     print(f"     then: sops updatekeys secrets/{server.name}.yaml", flush=True)
 
 
+# --- doctor: read-only environment and consumer-repo health check ------------
+
+OK = "ok"
+WARN = "warn"
+FAIL = "fail"
+
+
+def doctor_checks(server_name: str | None = None) -> list[tuple[str, str, str]]:
+    """Return a list of (status, title, hint) health checks for the operator's
+    environment and consumer repository. Pure and offline apart from the flake
+    evaluation check (which honours SERVER_REGISTRY like the rest of the CLI),
+    so it is straightforward to unit-test."""
+    results: list[tuple[str, str, str]] = []
+
+    def add(status: str, title: str, hint: str = "") -> None:
+        results.append((status, title, hint))
+
+    # 1. Required tooling.
+    for tool in ("nix", "git", "ssh"):
+        if shutil.which(tool):
+            add(OK, f"{tool} available")
+        else:
+            add(FAIL, f"{tool} not found", f"install {tool} and re-run")
+
+    # 2. Consumer repository layout. Walk up so a consumer that is a subdirectory
+    # of a git root (a monorepo layout) is still recognised as tracked.
+    in_git_tree = any((parent / ".git").exists() for parent in (REPO_ROOT, *REPO_ROOT.parents))
+    if in_git_tree:
+        add(OK, "consumer repo is a git checkout")
+    else:
+        add(WARN, "not a git repository",
+            "Nix flakes only see git-tracked files; run inside your consumer repo and `git add` new files")
+    if (REPO_ROOT / "flake.nix").is_file():
+        add(OK, "flake.nix present")
+    else:
+        add(FAIL, "flake.nix missing", f"run doctor from your consumer repo root (looked in {REPO_ROOT})")
+
+    # 3. Flake evaluates (implicitly validates the servers/ definitions).
+    servers: dict[str, Server] = {}
+    try:
+        servers = load_servers()
+        if servers:
+            add(OK, f"flake evaluates ({len(servers)} server(s): {', '.join(sorted(servers))})")
+        else:
+            add(WARN, "flake evaluates but declares no servers", "add servers/<name>.nix (see the template)")
+    except Exception as exc:  # noqa: BLE001 - surface any eval failure as one check
+        first = (str(exc).strip().splitlines() or [""])[0]
+        add(FAIL, "flake does not evaluate", first)
+
+    # 4. Operator control-plane keys.
+    admin_priv = repo_path(env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519"))
+    if admin_priv.is_file():
+        if admin_priv.stat().st_mode & 0o077:
+            add(WARN, "cloud admin SSH key is group/world-accessible",
+                f"chmod 600 {admin_priv}")
+        else:
+            add(OK, "cloud admin SSH key present")
+    else:
+        add(WARN, "cloud admin SSH key missing", f"generate it (cloud:keygen) at {admin_priv}")
+    admin_pub = repo_path(env("CLOUD_ADMIN_PUBKEY", "keys/cloud-admin.pub"))
+    if admin_pub.is_file():
+        add(OK, "cloud admin public key present")
+    else:
+        add(WARN, "cloud admin public key missing", str(admin_pub))
+
+    # 5. Server-specific checks (when a SERVER is given).
+    if server_name:
+        try:
+            server = require_server(server_name)
+        except CloudError as exc:
+            add(FAIL, f"server '{server_name}' not usable", str(exc))
+            server = None
+        if server is not None:
+            providers = load_providers()
+            if server.provider_name in providers:
+                add(OK, f"provider '{server.provider_name}' known")
+            else:
+                add(FAIL, f"provider '{server.provider_name}' unknown",
+                    "add providers/<name>/provider.json or fix placement.provider")
+
+            if server.backup_repository:
+                add(OK, "backupRepository set")
+            else:
+                add(WARN, "no backupRepository declared",
+                    "set portablevps.server.backupRepository if this server backs up")
+
+            age = repo_path(resolve_age_key(server_name))
+            if age.is_file():
+                add(OK, "host age key present")
+            else:
+                add(WARN, "host age key missing", f"run secrets-init-server SERVER={server_name}")
+
+            secrets_file = REPO_ROOT / "secrets" / f"{server_name}.yaml"
+            if secrets_file.is_file():
+                add(OK, "secrets file present")
+            else:
+                add(WARN, "secrets file missing (by convention)", str(secrets_file))
+
+            prov_env_file = REPO_ROOT / ".local/providers" / f"{server.provider_name}.env"
+            if prov_env_file.is_file():
+                add(OK, f"provider credentials file present ({server.provider_name}.env)")
+            else:
+                add(WARN, "provider credentials file missing",
+                    f"needed only for provider lifecycle (create/rescue): {prov_env_file}")
+
+    return results
+
+
+_DOCTOR_LABEL = {OK: "OK  ", WARN: "WARN", FAIL: "FAIL"}
+
+
+def command_doctor(_args: argparse.Namespace) -> None:
+    server_name = env("SERVER", env("DEPLOYMENT", "")) or None
+    results = doctor_checks(server_name)
+    for status, title, hint in results:
+        line = f"[{_DOCTOR_LABEL[status]}] {title}"
+        if hint:
+            line += f"\n         -> {hint}"
+        print(line, flush=True)
+    fails = sum(1 for status, _, _ in results if status == FAIL)
+    warns = sum(1 for status, _, _ in results if status == WARN)
+    print(f"\n{len(results)} checks: {fails} failed, {warns} warnings", flush=True)
+    if fails:
+        raise CloudError("doctor found problems that will block operations", 1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -2255,6 +2381,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     secrets_init = subcommands.add_parser("secrets-init-server", help="Generate a per-server age key and print its recipient")
     secrets_init.set_defaults(func=command_secrets_init_server)
+
+    doctor = subcommands.add_parser("doctor", help="Check the operator environment and consumer repo (set SERVER for per-server checks)")
+    doctor.set_defaults(func=command_doctor)
 
     return parser
 

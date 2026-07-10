@@ -31,8 +31,10 @@ are implemented as code + tests only.
 ### 1. One entrypoint + doctor + wizard  (item 1)
 - [ ] `portablevps` as a single flake app (`nix run …#portablevps -- <cmd>`),
       with `--help` and shell completion; Taskfile stays an internal convenience.
-- [ ] `portablevps doctor` — prereq + token + key + eval + bucket + mesh checks
-      with fix-it messages. (highest support-load reducer)
+- [x] `portablevps doctor` — checks tooling (nix/git/ssh), repo layout, flake
+      evaluation, operator keys, and per-server provider/backup/secrets/age with
+      fix-it hints and a non-zero exit on failure. (`cloud.py doctor`,
+      `cloud:doctor` task, 6 unit tests) Still TODO: live token/bucket/mesh reachability probes.
 - [ ] `portablevps init` wizard — scaffold consumer repo AND run the whole
       secrets ceremony (age keys, `.sops.yaml`, `updatekeys`, prompt for the six
       secret values). The user never hand-edits `.sops.yaml`.

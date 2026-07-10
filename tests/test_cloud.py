@@ -1221,5 +1221,103 @@ class CloudTests(unittest.TestCase):
         command_restore_test.assert_called_once()
 
 
+class DoctorTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.repo = Path(self.tempdir.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / "flake.nix").write_text("{}", encoding="utf-8")
+        self.registry = self.repo / "servers.json"
+        self._write_registry({
+            "web": {
+                "name": "web",
+                "placement": {"provider": "hetzner"},
+                "hostname": "web",
+                "netbirdName": "web",
+                "backupRepository": "s3://example/web",
+            }
+        })
+        self._orig_root = cloud.REPO_ROOT
+        cloud.REPO_ROOT = self.repo
+        self.addCleanup(lambda: setattr(cloud, "REPO_ROOT", self._orig_root))
+        self.base_env = {"SERVER_REGISTRY": str(self.registry)}
+
+    def _write_registry(self, data):
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+
+    def _checks(self, server=None, env_extra=None, which=None):
+        merged = {**self.base_env, **(env_extra or {})}
+        which_fn = which or (lambda name: "/usr/bin/" + name)
+        with mock.patch.dict(os.environ, merged, clear=False):
+            with mock.patch("shutil.which", side_effect=which_fn):
+                return cloud.doctor_checks(server)
+
+    @staticmethod
+    def _statuses(results):
+        return [status for status, _title, _hint in results]
+
+    @staticmethod
+    def _titled(results, needle):
+        return [(s, t) for s, t, _ in results if needle in t]
+
+    def test_complete_repo_has_no_failures(self):
+        # Provision the operator control-plane files so nothing is even a warning
+        # about missing keys/secrets.
+        (self.repo / ".local/ssh").mkdir(parents=True)
+        admin = self.repo / ".local/ssh/cloud-admin_ed25519"
+        admin.write_text("key", encoding="utf-8")
+        admin.chmod(0o600)
+        (self.repo / "keys").mkdir()
+        (self.repo / "keys/cloud-admin.pub").write_text("pub", encoding="utf-8")
+        (self.repo / ".local/sops/servers/web").mkdir(parents=True)
+        (self.repo / ".local/sops/servers/web/age-key.txt").write_text("age", encoding="utf-8")
+        (self.repo / "secrets").mkdir()
+        (self.repo / "secrets/web.yaml").write_text("enc", encoding="utf-8")
+        (self.repo / ".local/providers").mkdir(parents=True)
+        (self.repo / ".local/providers/hetzner.env").write_text("HCLOUD_TOKEN=x", encoding="utf-8")
+
+        results = self._checks(server="web")
+
+        self.assertNotIn(cloud.FAIL, self._statuses(results))
+        self.assertTrue(self._titled(results, "flake evaluates"))
+
+    def test_missing_flake_is_failure(self):
+        (self.repo / "flake.nix").unlink()
+        results = self._checks()
+        self.assertIn((cloud.FAIL, "flake.nix missing"),
+                      [(s, t) for s, t, _ in results])
+
+    def test_missing_required_tool_is_failure(self):
+        results = self._checks(which=lambda name: None if name == "nix" else "/usr/bin/" + name)
+        self.assertIn((cloud.FAIL, "nix not found"),
+                      [(s, t) for s, t, _ in results])
+
+    def test_unknown_provider_is_failure(self):
+        self._write_registry({
+            "web": {"name": "web", "placement": {"provider": "nope"}, "hostname": "web"}
+        })
+        results = self._checks(server="web")
+        self.assertTrue(any(s == cloud.FAIL and "provider 'nope' unknown" in t
+                            for s, t, _ in results))
+
+    def test_missing_backup_repository_warns(self):
+        self._write_registry({
+            "web": {"name": "web", "placement": {"provider": "hetzner"}, "hostname": "web"}
+        })
+        results = self._checks(server="web")
+        self.assertTrue(any(s == cloud.WARN and "no backupRepository" in t
+                            for s, t, _ in results))
+
+    def test_command_doctor_exits_nonzero_on_failure(self):
+        (self.repo / "flake.nix").unlink()
+        with mock.patch.dict(os.environ, self.base_env, clear=False):
+            with mock.patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(cloud.CloudError) as raised:
+                        cloud.command_doctor(mock.Mock())
+        self.assertEqual(raised.exception.exit_code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
