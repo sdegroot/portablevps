@@ -18,7 +18,11 @@ func newNetworkCmd(g *globalOptions) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&g.serverFlag, "server", "",
 		"target server (default: default_server in portablevps.toml)")
-	cmd.AddCommand(newNetworkDNSSyncCmd(g))
+	cmd.AddCommand(
+		newNetworkSyncCmd(g),
+		newNetworkDNSSyncCmd(g),
+		newNetworkPolicySyncCmd(g),
+	)
 	return cmd
 }
 
@@ -32,7 +36,25 @@ func netbirdClient(ctx *config.Context, tokenOverride string) (*netbird.Client, 
 	if token == "" {
 		return nil, ExitError{Code: 64, Message: "no NetBird API token: set [network].api_token in portablevps.toml or pass --token"}
 	}
+	// resolveSecretRef passes an unresolved reference through unchanged, which
+	// would otherwise reach NetBird as a literal token and fail with a confusing
+	// 401. Catch it here with an actionable message (op session expired, etc.).
+	if isUnresolvedRef(token) {
+		return nil, ExitError{Code: 66, Message: fmt.Sprintf("could not resolve the NetBird API token from %q "+
+			"(is your 1Password session active? try `op signin`)", token)}
+	}
 	return netbird.New(token, ctx.Network.APIURL), nil
+}
+
+// isUnresolvedRef reports whether s is still a secret reference (op://, env://)
+// that failed to resolve, rather than a real secret value.
+func isUnresolvedRef(s string) bool {
+	for _, scheme := range []string{"op://", "env://"} {
+		if len(s) >= len(scheme) && s[:len(scheme)] == scheme {
+			return true
+		}
+	}
+	return false
 }
 
 func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {

@@ -42,6 +42,30 @@ func (ExecRunner) RunEnv(dir string, extraEnv map[string]string, name string, ar
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// RunEnvInput is RunEnv with stdin fed from input. Use it for secret writes
+// (sops set --value-stdin) so the value never appears in argv / a process list.
+func (ExecRunner) RunEnvInput(dir string, extraEnv map[string]string, input string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range extraEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+	cmd.Stdin = strings.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", &RunError{Err: err, Stderr: strings.TrimSpace(stderr.String())}
+		}
+		return "", err
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
 // RunError carries a failed command's stderr so callers can surface it.
 type RunError struct {
 	Err    error

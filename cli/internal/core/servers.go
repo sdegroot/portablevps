@@ -10,14 +10,17 @@ import (
 // rawServer mirrors the shape of one entry in the consumer flake's `.#serverInfo`
 // output (and the SERVER_REGISTRY test fixture).
 type rawServer struct {
-	Name             string `json:"name"`
-	Provider         string `json:"provider"`
-	Placement        struct {
+	Name      string `json:"name"`
+	Provider  string `json:"provider"`
+	Placement struct {
 		Provider string `json:"provider"`
 	} `json:"placement"`
 	BackupRepository string `json:"backupRepository"`
 	Hostname         string `json:"hostname"`
 	NetbirdName      string `json:"netbirdName"`
+	Netbird          struct {
+		Groups []string `json:"groups"`
+	} `json:"netbird"`
 }
 
 func (r rawServer) toServer(name string) Server {
@@ -39,6 +42,7 @@ func (r rawServer) toServer(name string) Server {
 		BackupRepository: r.BackupRepository,
 		Hostname:         hostname,
 		NetbirdName:      netbird,
+		NetbirdGroups:    r.Netbird.Groups,
 	}
 }
 
@@ -73,6 +77,31 @@ func LoadServers(env Env) (map[string]Server, error) {
 		servers[name] = r.toServer(name)
 	}
 	return servers, nil
+}
+
+// LoadFleetNetbird returns the raw JSON of the consumer flake's `.#netbird`
+// output (fleet-level access policies + disableDefaultPolicy). It returns an
+// empty object when the consumer declares none. The caller unmarshals it into
+// the netbird package's FleetPolicies to avoid a core->netbird dependency.
+func LoadFleetNetbird(env Env) ([]byte, error) {
+	if override := env.Getenv("NETBIRD_CONFIG"); override != "" {
+		data, err := os.ReadFile(override)
+		if err != nil {
+			return nil, fmt.Errorf("reading NETBIRD_CONFIG %q: %w", override, err)
+		}
+		return data, nil
+	}
+	out, err := env.Runner.Run(env.RepoRoot,
+		"nix", "--extra-experimental-features", "nix-command flakes",
+		"eval", "--json", ".#netbird")
+	if err != nil {
+		// A consumer with no fleet netbird output is not an error.
+		return []byte("{}"), nil
+	}
+	if out == "" {
+		return []byte("{}"), nil
+	}
+	return []byte(out), nil
 }
 
 // SortedNames returns the server names in stable order (for deterministic output).

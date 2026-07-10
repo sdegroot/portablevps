@@ -17,4 +17,5 @@ type Server struct {
 	BackupRepository string
 	Hostname         string
 	NetbirdName      string
+	NetbirdGroups    []string
 }
