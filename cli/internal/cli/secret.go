@@ -215,6 +215,15 @@ func newSecretEditCmd(g *globalOptions) *cobra.Command {
 				return err
 			}
 			rel := filepath.Join("secrets", server+".yaml")
+			// Make sure the file exists and pre-seed the editor with the secrets
+			// the server's config declares (empty placeholders), so the operator
+			// sees exactly what to fill.
+			if err := ensureEncryptedFile(ctx.RepoRoot, ageEnv, rel); err != nil {
+				return err
+			}
+			if n, serr := scaffoldSecrets(ctx, server, ageEnv, rel); serr == nil && n > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "seeded %d declared secret(s) as empty placeholders\n", n)
+			}
 			c := exec.Command("sops", rel)
 			c.Dir = ctx.RepoRoot
 			c.Env = os.Environ()
@@ -223,6 +232,11 @@ func newSecretEditCmd(g *globalOptions) *cobra.Command {
 			}
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			if err := c.Run(); err != nil {
+				// sops exits 200 when the file is left unchanged — not an error.
+				if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 200 {
+					fmt.Fprintln(cmd.ErrOrStderr(), "no changes made")
+					return nil
+				}
 				return ExitError{Code: 70, Message: fmt.Sprintf("sops edit: %v", err)}
 			}
 			return nil
