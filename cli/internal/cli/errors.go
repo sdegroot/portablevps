@@ -8,3 +8,6 @@ type ExitError struct {
 }
 
 func (e ExitError) Error() string { return e.Message }
+
+// ExitCode satisfies the shared exit-code interface Execute recognises.
+func (e ExitError) ExitCode() int { return e.Code }

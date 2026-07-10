@@ -14,6 +14,12 @@ import (
 type globalOptions struct {
 	project string
 	json    bool
+
+	// interactivity / confirmation
+	nonInteractive  bool
+	interactiveFlag bool
+	yes             bool
+	confirm         string
 }
 
 func newRootCmd() *cobra.Command {
@@ -27,9 +33,14 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&opts.project, "project", "",
+	pf := root.PersistentFlags()
+	pf.StringVar(&opts.project, "project", "",
 		"consumer repository root (default: $PORTABLEVPS_PROJECT or the current directory)")
-	root.PersistentFlags().BoolVar(&opts.json, "json", false, "emit machine-readable JSON output")
+	pf.BoolVar(&opts.json, "json", false, "emit machine-readable JSON output (implies --non-interactive)")
+	pf.BoolVar(&opts.nonInteractive, "non-interactive", false, "never prompt; missing input is an error (auto-on under $CI or no TTY)")
+	pf.BoolVar(&opts.interactiveFlag, "interactive", false, "force interactive prompts even without a TTY")
+	pf.BoolVar(&opts.yes, "yes", false, "pre-answer benign confirmations (does NOT satisfy a destructive gate)")
+	pf.StringVar(&opts.confirm, "confirm", "", "confirm a destructive action non-interactively (must equal the target host/server)")
 
 	root.AddCommand(newDoctorCmd(opts))
 	return root
@@ -37,16 +48,25 @@ func newRootCmd() *cobra.Command {
 
 // Execute runs the CLI and returns the process exit code.
 func Execute() int {
-	if err := newRootCmd().Execute(); err != nil {
-		var exit ExitError
-		if errors.As(err, &exit) {
-			if exit.Message != "" {
-				fmt.Fprintln(os.Stderr, "error:", exit.Message)
-			}
-			return exit.Code
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
+	err := newRootCmd().Execute()
+	if err == nil {
+		return 0
 	}
-	return 0
+	// ExitError is handled first so a command can choose an empty (already
+	// printed) message.
+	var exit ExitError
+	if errors.As(err, &exit) {
+		if exit.Message != "" {
+			fmt.Fprintln(os.Stderr, "error:", exit.Message)
+		}
+		return exit.Code
+	}
+	// Any error carrying its own exit code (confirm/secrets/... failures).
+	var coder interface{ ExitCode() int }
+	if errors.As(err, &coder) {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return coder.ExitCode()
+	}
+	fmt.Fprintln(os.Stderr, "error:", err)
+	return 1
 }
