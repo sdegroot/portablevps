@@ -295,6 +295,7 @@ in
         Volume=${disabledOpenSshServicePath}:/etc/s6/openssh:Z
 
         [Service]
+        ExecStartPre=${pkgs.systemd}/bin/systemd-tmpfiles --create
         Restart=always
         TimeoutStartSec=180
 
