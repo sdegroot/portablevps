@@ -56,7 +56,7 @@ in
 
     instanceUrl = lib.mkOption {
       type = lib.types.str;
-      example = "https://code.int.epistola.app";
+      example = "https://code.int.epistola.io";
       description = "Forgejo instance URL the runner registers with.";
     };
 
