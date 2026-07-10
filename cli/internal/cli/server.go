@@ -22,7 +22,10 @@ func newServerCmd(g *globalOptions) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&g.serverFlag, "server", "",
 		"target server (default: default_server in portablevps.toml)")
-	cmd.AddCommand(newServerDeployCmd(g))
+	cmd.AddCommand(
+		newServerDeployCmd(g),
+		newServerRollbackCmd(g),
+	)
 	return cmd
 }
 
@@ -135,6 +138,61 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 	}
 	hf.register(cmd)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "build and show what would change, but do not switch")
+	return cmd
+}
+
+func newServerRollbackCmd(g *globalOptions) *cobra.Command {
+	var hf hostFlags
+	var list bool
+	var toGen int
+	cmd := &cobra.Command{
+		Use:   "rollback [server]",
+		Short: "Activate a previous NixOS generation on the server (config rollback)",
+		Long: "Rolls the running server back to a previous NixOS generation (a " +
+			"config/version rollback, distinct from a data restore). --list shows " +
+			"the available generations; --to <n> switches to a specific one.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server, ctx, err := serverArg(g, args)
+			if err != nil {
+				return err
+			}
+			host := hf.host
+			if host == "" {
+				host = defaultMeshHost(server, ctx)
+			}
+			if host == "" {
+				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
+			}
+			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			env := core.RollbackEnv{Host: ssh}
+			if list {
+				out, err := core.ListGenerations(env, host)
+				if err != nil {
+					return err
+				}
+				cmd.Println(out)
+				return nil
+			}
+
+			prog := output.NewProgress(cmd.OutOrStdout(), "server.rollback", server, g.json)
+			env.Report = func(phase, status, msg string) { prog.Phase(phase, status, msg) }
+			if err := core.Rollback(env, host, toGen); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
+			prog.Result("pass", host+" rolled back", 0, "host", host)
+			return nil
+		},
+	}
+	hf.register(cmd)
+	cmd.Flags().BoolVar(&list, "list", false, "list available NixOS generations instead of rolling back")
+	cmd.Flags().IntVar(&toGen, "to", 0, "switch to a specific generation number (default: the previous one)")
 	return cmd
 }
 
