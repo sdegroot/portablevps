@@ -70,6 +70,22 @@ let
 
   oauthEnabled = cfg.oidc.enable && cfg.oidc.issuerBaseUrl != "";
   forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
+  disabledOpenSshService = pkgs.runCommand "forgejo-disabled-openssh-s6-service" { } ''
+    mkdir -p "$out"
+    cat > "$out/run" <<'EOF'
+#!/bin/sh
+exec sleep infinity
+EOF
+    cat > "$out/setup" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    cat > "$out/finish" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod 0555 "$out" "$out/run" "$out/setup" "$out/finish"
+  '';
 in
 {
   options.portablevps.apps.forgejo = {
@@ -268,6 +284,10 @@ in
         Network=host
         EnvironmentFile=${envPath}
         Volume=${dataRoot}:/data:Z
+        # The upstream image also starts an OpenSSH s6 service. It ignores
+        # Forgejo's SSH_LISTEN_HOST and always binds all interfaces, so mask it
+        # and use Forgejo's built-in SSH server behind the NetBird-only proxy.
+        Volume=${disabledOpenSshService}:/etc/s6/openssh:ro
 
         [Service]
         Restart=always
