@@ -29,8 +29,14 @@ are implemented as code + tests only.
 ## Items
 
 ### 1. One entrypoint + doctor + wizard  (item 1)
-- [ ] `portablevps` as a single flake app (`nix run …#portablevps -- <cmd>`),
-      with `--help` and shell completion; Taskfile stays an internal convenience.
+- [~] `portablevps` as a single command. **Decided: a new Go CLI** in
+      `portablevps/cli/` (its own flake, current Go toolchain), built in
+      parallel to `cloud.py` and migrating command-by-command (strangler).
+      Serious-project structure (cli/core/adapters/config/output), cobra
+      `--help` + completion, `--json`, unit tests, `nix flake check`. Done:
+      project scaffold + `doctor` end-to-end. Next: config file
+      (portablevps.toml) + port `deploy`/`install`/`secrets`/`netbird`/`dr`,
+      then delete cloud.py + the Taskfile.
 - [x] `portablevps doctor` — checks tooling (nix/git/ssh), repo layout, flake
       evaluation, operator keys, and per-server provider/backup/secrets/age with
       fix-it hints and a non-zero exit on failure. (`cloud.py doctor`,

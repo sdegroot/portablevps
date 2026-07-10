@@ -60,6 +60,7 @@
 
       # Hermetic NixOS VM tests. These boot Linux VMs, so they are exposed only
       # for Linux systems and run in CI; `nix flake check` on macOS skips them.
+      # (The CLI has its own flake at ./cli with its own checks.)
       checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         restore-mode = import ./tests/vm/restore-mode.nix {
           pkgs = nixpkgs.legacyPackages.${system};

@@ -1,0 +1,83 @@
+# portablevps CLI
+
+The operator and CI entrypoint for portablevps, written in Go. It runs against a
+**consumer repository** (the one holding `servers/`, `secrets/`, `.local/`) and
+is being built **in parallel to** the existing Python CLI (`../scripts/cloud.py`),
+which it will replace command by command (strangler migration) so nothing breaks
+mid-flight.
+
+## Run it
+
+```sh
+# via Nix (no toolchain needed) — the CI-friendly path.
+# From the monorepo root:
+nix run ./portablevps/cli#portablevps -- doctor --server test-vps
+# or from this directory (the CLI is its own flake):
+nix run .#portablevps -- doctor --json          # machine-readable
+
+# from a checkout during development
+go run ./cmd/portablevps doctor
+```
+
+The CLI operates on the consumer repo given by `--project` (default:
+`$PORTABLEVPS_PROJECT`, else the current directory).
+
+## Design
+
+A serious CLI is not one big file. It is split into layers so no file is large,
+the domain logic is unit-testable, and CI can drive everything headlessly:
+
+```
+cli/
+  cmd/portablevps/        # main(): calls internal/cli
+  internal/
+    cli/                  # THIN command layer (cobra): parse flags, wire adapters, render.
+                          #   No business logic. One small file per command.
+    core/                 # Domain logic. Pure: no arg parsing, no process globals —
+                          #   everything (command runner, env, repo root) is injected,
+                          #   so it is trivially unit-testable and deterministic in CI.
+    adapters/             # Side-effect boundaries (exec, PATH lookup). The only place
+                          #   that touches the real system; tests mock here.
+    config/               # Input precedence: flag > env > (future) portablevps.toml > default.
+    output/               # Human and --json rendering. Every command supports --json.
+```
+
+Dependency direction is inward: `cli → core`, `cli → adapters`, and `core`
+depends only on small interfaces it declares itself (e.g. `CommandRunner`), which
+`adapters` implements. `core` never imports `cli` or `adapters`.
+
+## Add a command
+
+1. Put the logic in `internal/core/<name>.go` as a pure function taking a
+   `core.Env` (or a narrower input struct) — no `os.Getenv`, no `exec` directly;
+   use the injected `Runner` / `HasCommand`.
+2. Add rendering to `internal/output` (human + JSON).
+3. Add a thin `internal/cli/<name>.go` cobra command that resolves config, wires
+   the real adapters, calls core, and renders. Register it in `root.go`.
+4. Unit-test the core function with a fake runner and a temp repo dir (see
+   `internal/core/doctor_test.go`). No test should shell out.
+
+## CI conventions
+
+- Every command supports `--json` for scriptable output.
+- Exit codes are meaningful (`ExitError{Code, Message}`); a command returns one
+  and the root maps it to the process exit code.
+- Confirmation of destructive actions will be explicit flags (e.g.
+  `--confirm-destroy <host>`), never a magic environment variable, so CI opts in
+  deliberately.
+
+## Test and build
+
+```sh
+cd cli
+go test ./...            # unit tests
+go vet ./...
+go build ./...
+
+# or through Nix (runs go test in the sandbox):
+nix build .#checks.<system>.cli
+```
+
+Dependencies are vendored (`cli/vendor/`) so the Nix build is hermetic
+(`vendorHash = null`). After changing dependencies, run `go mod tidy && go mod
+vendor` and commit the result.
