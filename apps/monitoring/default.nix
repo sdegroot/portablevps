@@ -255,12 +255,12 @@ in
       description = "Hosts expected to push a backup-success metric. One BackupMetricAbsent alert generated per host (catches a reporter broken since deploy, which a staleness rule cannot).";
     };
 
-    alertEmailFrom = lib.mkOption { type = lib.types.str; default = "alerts@epistola.io"; description = "Alert email From address."; };
-    alertEmailTo = lib.mkOption { type = lib.types.str; default = "sander@degroot.dev"; description = "Alert email recipient."; };
+    alertEmailFrom = lib.mkOption { type = lib.types.str; default = ""; example = "alerts@example.com"; description = "Alert email From address. Required when monitoring is enabled."; };
+    alertEmailTo = lib.mkOption { type = lib.types.str; default = ""; example = "oncall@example.com"; description = "Alert email recipient. Required when monitoring is enabled."; };
     alertRepeatInterval = lib.mkOption { type = lib.types.str; default = "4h"; description = "Alertmanager repeat interval for a still-firing alert."; };
 
     grafana = {
-      rootUrl = lib.mkOption { type = lib.types.str; default = "https://grafana.int.epistola.io"; description = "GF_SERVER_ROOT_URL (the mesh proxy name)."; };
+      rootUrl = lib.mkOption { type = lib.types.str; default = ""; example = "https://grafana.int.example.net"; description = "GF_SERVER_ROOT_URL (the mesh proxy name for Grafana). Required when monitoring is enabled."; };
       adminPasswordSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-admin-password"; description = "sops secret for the break-glass local admin password."; };
       plugins = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -270,7 +270,7 @@ in
       extraHosts = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        example = { "auth.int.epistola.io" = "100.85.212.44"; };
+        example = { "auth.int.example.net" = "100.64.0.10"; };
         description = ''
           Static host:ip entries added to the Grafana container (podman --add-host).
           Grafana's server-side OIDC calls must resolve the authentik issuer, but
@@ -286,11 +286,16 @@ in
         name = lib.mkOption { type = lib.types.str; default = "Authentik"; description = "OAuth provider display name."; };
         clientId = lib.mkOption { type = lib.types.str; default = "grafana"; description = "OAuth client id."; };
         clientSecretSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-oauth-secret"; description = "sops secret holding the OAuth client secret."; };
-        issuerBaseUrl = lib.mkOption { type = lib.types.str; default = ""; description = "authentik base URL, e.g. https://auth.epistola.cloud; the authorize/token/userinfo URLs derive from it."; };
+        issuerBaseUrl = lib.mkOption { type = lib.types.str; default = ""; example = "https://auth.example.net"; description = "OIDC issuer base URL (e.g. your Authentik host); the authorize/token/userinfo URLs derive from it."; };
         roleAttributePath = lib.mkOption {
           type = lib.types.str;
-          default = "(contains(groups, 'epistola_employees') || ends_with(email, '@epistola.app')) && 'Editor' || 'Viewer'";
-          description = "JMESPath mapping OIDC claims to a Grafana org role.";
+          default = "'Viewer'";
+          example = "(contains(groups, 'admins')) && 'Editor' || 'Viewer'";
+          description = ''
+            JMESPath mapping OIDC claims to a Grafana org role. The default
+            grants every authenticated user the read-only Viewer role; override
+            it to map your own groups/domains to Editor/Admin.
+          '';
         };
       };
     };
@@ -298,6 +303,21 @@ in
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
+      # Fail loudly on the settings that would otherwise silently misdirect
+      # alerts (empty From/To => alerts vanish) or break Grafana's OAuth
+      # redirect (empty rootUrl). These carry no default so a consumer must set
+      # its own address; the tool ships none.
+      assertions = [
+        {
+          assertion = cfg.alertEmailFrom != "" && cfg.alertEmailTo != "";
+          message = "portablevps.apps.monitoring: set alertEmailFrom and alertEmailTo — alerts are e-mailed and there is no default recipient.";
+        }
+        {
+          assertion = cfg.grafana.rootUrl != "";
+          message = "portablevps.apps.monitoring.grafana.rootUrl must be set to the externally-reachable Grafana URL (used for GF_SERVER_ROOT_URL and OAuth redirects).";
+        }
+      ];
+
       # Shared podman bridge network with a pinned subnet so containers get
       # static IPs (10.89.0.10-14).
       environment.etc."containers/systemd/monitoring.network".text = ''

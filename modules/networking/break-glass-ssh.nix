@@ -5,12 +5,27 @@
 let
   cfg = config.portablevps.breakGlassSsh;
   net = config.portablevps.network;
-  chain = "EPIS_BGLASS_SSH";
-  countrySet4 = "EPIS_NL4";
+  chain = "PVPS_BGLASS_SSH";
   stateDir = "/var/lib/portablevps-break-glass-ssh";
   allowedCidrs = lib.escapeShellArgs cfg.allowedCidrs;
   countryCodes = lib.escapeShellArgs cfg.countryCodes;
-  nlZoneUrl = cfg.countryZoneUrls.nl or "https://www.ipdeny.com/ipblocks/data/countries/nl.zone";
+
+  # Resolve the IPv4 zone-list URL for a country code: an explicit override in
+  # countryZoneUrls wins, otherwise fall back to the ipdeny.com per-country path.
+  zoneUrlFor = code: cfg.countryZoneUrls.${code}
+    or "https://www.ipdeny.com/ipblocks/data/countries/${code}.zone";
+  # A bundled (Nix-store) copy is optional. When present it makes opening
+  # break-glass SSH independent of a live download during an incident; empty
+  # string means no bundled fallback ships for that country.
+  zoneBundledFor = code: toString (cfg.countryZoneFiles.${code} or "");
+
+  # Render a bash associative-array body ([nl]=<url> [de]=<url> ...) from a
+  # per-country function, over exactly the configured country codes.
+  mkAssoc = f: lib.concatMapStringsSep " "
+    (code: "[${code}]=${lib.escapeShellArg (f code)}") cfg.countryCodes;
+  zoneUrlAssoc = mkAssoc zoneUrlFor;
+  zoneBundledAssoc = mkAssoc zoneBundledFor;
+
   watchdog = pkgs.writeShellScript "portablevps-break-glass-ssh" ''
     set -eu
 
@@ -25,7 +40,6 @@ let
     curl="${pkgs.curl}/bin/curl"
 
     chain=${lib.escapeShellArg chain}
-    country_set4=${lib.escapeShellArg countrySet4}
     iface=${lib.escapeShellArg net.interface}
     join_unit=${lib.escapeShellArg net.joinUnit}
     port=${toString cfg.port}
@@ -33,13 +47,16 @@ let
     state_dir=${lib.escapeShellArg stateDir}
     open_state="$state_dir/open"
     recovered_at_state="$state_dir/recovered-at"
-    nl_zone_url=${lib.escapeShellArg nlZoneUrl}
-    nl_zone_file="$state_dir/nl.zone"
-    nl_zone_bundled=${lib.escapeShellArg "${cfg.countryZoneFiles.nl}"}
     allowed_cidrs=(${allowedCidrs})
     country_codes=(${countryCodes})
+    declare -A zone_urls=( ${zoneUrlAssoc} )
+    declare -A zone_bundled=( ${zoneBundledAssoc} )
 
     mkdir -p "$state_dir"
+
+    # ipset holding a country's IPv4 ranges. Keep the name short (ipset caps at
+    # 31 chars): PVPS_CC4_<code>.
+    set4_name() { echo "PVPS_CC4_$1"; }
 
     ensure_chain() {
       "$iptables" -w -N "$chain" 2>/dev/null || true
@@ -55,14 +72,16 @@ let
       "$ip6tables" -w -F "$chain" 2>/dev/null || true
     }
 
-    refresh_nl_zone() {
-      if [ -s "$nl_zone_file" ] && ! "$find" "$nl_zone_file" -mmin +1440 | "$grep" -q .; then
+    refresh_zone() {
+      # $1 country code, $2 url, $3 destination file. Refresh at most daily.
+      country="$1"; url="$2"; dest="$3"
+      if [ -s "$dest" ] && ! "$find" "$dest" -mmin +1440 | "$grep" -q .; then
         return 0
       fi
 
-      tmp="$nl_zone_file.tmp"
-      if "$curl" -fsSL --connect-timeout 5 --max-time 20 "$nl_zone_url" -o "$tmp"; then
-        mv "$tmp" "$nl_zone_file"
+      tmp="$dest.tmp"
+      if "$curl" -fsSL --connect-timeout 5 --max-time 20 "$url" -o "$tmp"; then
+        mv "$tmp" "$dest"
       else
         rm -f "$tmp"
       fi
@@ -70,31 +89,34 @@ let
 
     load_country_sets() {
       for country in "''${country_codes[@]}"; do
-        case "$country" in
-          nl)
-            refresh_nl_zone
-            # The bundled list ships in the Nix store, so opening break-glass
-            # SSH never depends on a live download during an incident.
-            zone_source="$nl_zone_file"
-            if [ ! -s "$zone_source" ]; then
-              zone_source="$nl_zone_bundled"
-              echo "nl zone download unavailable; using bundled country list" >&2
-            fi
-            if [ -s "$zone_source" ]; then
-              "$ipset" create "$country_set4" hash:net family inet -exist
-              "$ipset" flush "$country_set4"
-              while IFS= read -r cidr; do
-                case "$cidr" in
-                  ""|\#*) continue ;;
-                esac
-                "$ipset" add "$country_set4" "$cidr" -exist
-              done < "$zone_source"
-            fi
-            ;;
-          *)
-            echo "unsupported break-glass country code: $country" >&2
-            ;;
-        esac
+        url="''${zone_urls[$country]:-}"
+        bundled="''${zone_bundled[$country]:-}"
+        zone_file="$state_dir/$country.zone"
+
+        [ -n "$url" ] && refresh_zone "$country" "$url" "$zone_file"
+
+        # The bundled list (if any) ships in the Nix store, so opening
+        # break-glass SSH never depends on a live download during an incident.
+        zone_source="$zone_file"
+        if [ ! -s "$zone_source" ]; then
+          if [ -n "$bundled" ] && [ -s "$bundled" ]; then
+            zone_source="$bundled"
+            echo "$country zone download unavailable; using bundled country list" >&2
+          else
+            echo "no zone list for country $country (download failed, no bundled copy); skipping" >&2
+            continue
+          fi
+        fi
+
+        set4="$(set4_name "$country")"
+        "$ipset" create "$set4" hash:net family inet -exist
+        "$ipset" flush "$set4"
+        while IFS= read -r cidr; do
+          case "$cidr" in
+            ""|\#*) continue ;;
+          esac
+          "$ipset" add "$set4" "$cidr" -exist
+        done < "$zone_source"
       done
     }
 
@@ -103,13 +125,10 @@ let
       load_country_sets
 
       for country in "''${country_codes[@]}"; do
-        case "$country" in
-          nl)
-            if "$ipset" list "$country_set4" >/dev/null 2>&1; then
-              "$iptables" -w -A "$chain" -p tcp --dport "$port" -m set --match-set "$country_set4" src -j ACCEPT
-            fi
-            ;;
-        esac
+        set4="$(set4_name "$country")"
+        if "$ipset" list "$set4" >/dev/null 2>&1; then
+          "$iptables" -w -A "$chain" -p tcp --dport "$port" -m set --match-set "$set4" src -j ACCEPT
+        fi
       done
 
       for cidr in "''${allowed_cidrs[@]}"; do
@@ -180,7 +199,7 @@ in
     closeAfterSeconds = lib.mkOption {
       type = lib.types.ints.positive;
       default = 3600;
-      description = "Seconds to keep public SSH open after Netbird has recovered.";
+      description = "Seconds to keep public SSH open after the mesh VPN has recovered.";
     };
 
     allowedCidrs = lib.mkOption {
@@ -190,9 +209,18 @@ in
     };
 
     countryCodes = lib.mkOption {
-      type = lib.types.listOf (lib.types.enum [ "nl" ]);
+      type = lib.types.listOf (lib.types.strMatching "[a-z]{2}");
       default = [ "nl" ];
-      description = "Country CIDR lists allowed to use public break-glass SSH.";
+      example = [ "nl" "de" ];
+      description = ''
+        ISO 3166-1 alpha-2 country codes whose IPv4 ranges may use public
+        break-glass SSH. Each code's ranges are fetched from its
+        countryZoneUrls entry (defaulting to the ipdeny.com per-country list)
+        and, when a countryZoneFiles entry is bundled, that store copy is used
+        as an offline fallback during an incident. Only "nl" ships a bundled
+        list by default; add your own via countryZoneFiles for offline
+        resilience in other countries.
+      '';
     };
 
     countryZoneUrls = lib.mkOption {
@@ -200,7 +228,11 @@ in
       default = {
         nl = "https://www.ipdeny.com/ipblocks/data/countries/nl.zone";
       };
-      description = "IPv4 country-zone list URLs used to refresh break-glass SSH source filtering.";
+      description = ''
+        IPv4 country-zone list URLs used to refresh break-glass SSH source
+        filtering, keyed by country code. A code without an entry falls back to
+        the ipdeny.com per-country path.
+      '';
     };
 
     countryZoneFiles = lib.mkOption {
@@ -209,10 +241,11 @@ in
         nl = ./data/nl.zone;
       };
       description = ''
-        Pinned IPv4 country-zone list files bundled with the system. Used as
-        the source of truth when the live zone download is unavailable, so
-        break-glass SSH does not depend on an external service during the
-        incident it exists for.
+        Pinned IPv4 country-zone list files bundled with the system, keyed by
+        country code. Used as the source of truth when the live zone download
+        is unavailable, so break-glass SSH does not depend on an external
+        service during the incident it exists for. A country without a bundled
+        file relies on the live download only.
       '';
     };
   };
@@ -242,7 +275,7 @@ in
     };
 
     systemd.timers.portablevps-break-glass-ssh = {
-      description = "Watch Netbird health for public SSH break-glass access";
+      description = "Watch mesh VPN health for public SSH break-glass access";
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnBootSec = "30s";
