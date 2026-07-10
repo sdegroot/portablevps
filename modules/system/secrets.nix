@@ -98,8 +98,8 @@ in
             RESTIC_PASSWORD=${config.sops.placeholder."restic/password"}
             AWS_ACCESS_KEY_ID=${config.sops.placeholder."restic/aws-access-key-id"}
             AWS_SECRET_ACCESS_KEY=${config.sops.placeholder."restic/aws-secret-access-key"}
-            AWS_DEFAULT_REGION=nl-ams
-            AWS_REGION=nl-ams
+            AWS_DEFAULT_REGION=${config.portablevps.backups.restic.region}
+            AWS_REGION=${config.portablevps.backups.restic.region}
           '';
         };
       })
@@ -124,8 +124,8 @@ in
             RESTIC_PASSWORD=dev-password
             AWS_ACCESS_KEY_ID=${config.portablevps.backups.restic.awsAccessKeyId}
             AWS_SECRET_ACCESS_KEY=portablevps-minio-password
-            AWS_DEFAULT_REGION=us-east-1
-            AWS_REGION=us-east-1
+            AWS_DEFAULT_REGION=${config.portablevps.backups.restic.region}
+            AWS_REGION=${config.portablevps.backups.restic.region}
           '';
         };
       })

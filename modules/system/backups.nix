@@ -126,6 +126,19 @@ in
         default = "portablevps";
         description = "AWS access key ID for S3-compatible restic repositories.";
       };
+
+      region = lib.mkOption {
+        type = lib.types.str;
+        default = "us-east-1";
+        example = "nl-ams";
+        description = ''
+          Region reported to the S3 SDK (AWS_DEFAULT_REGION / AWS_REGION) for
+          the restic repository. The default suits AWS us-east-1 and MinIO;
+          set it to your bucket's region (e.g. "nl-ams" for Scaleway
+          Amsterdam) — a mismatched region can fail request signing on some
+          S3-compatible providers.
+        '';
+      };
     };
 
     components = lib.mkOption {
