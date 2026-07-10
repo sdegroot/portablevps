@@ -70,6 +70,7 @@ let
 
   oauthEnabled = cfg.oidc.enable && cfg.oidc.issuerBaseUrl != "";
   forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
+  disabledOpenSshServicePath = "/run/portablevps/forgejo-disabled-openssh-s6";
   disabledOpenSshService = pkgs.runCommand "forgejo-disabled-openssh-s6-service" { } ''
     mkdir -p "$out"
     cat > "$out/run" <<'EOF'
@@ -267,12 +268,16 @@ in
 
       systemd.tmpfiles.rules = [
         "d ${dataRoot} 0750 ${toString forgejoUid} ${toString forgejoUid} -"
+        "d ${disabledOpenSshServicePath} 0755 root root -"
+        "C ${disabledOpenSshServicePath}/run 0555 root root - ${disabledOpenSshService}/run"
+        "C ${disabledOpenSshServicePath}/setup 0555 root root - ${disabledOpenSshService}/setup"
+        "C ${disabledOpenSshServicePath}/finish 0555 root root - ${disabledOpenSshService}/finish"
       ];
 
       environment.etc."containers/systemd/forgejo.container".text = ''
         [Unit]
         Description=Forgejo code hosting
-        After=network-online.target postgres.service
+        After=network-online.target postgres.service systemd-tmpfiles-setup.service
         Wants=network-online.target
         Requires=postgres.service
         PartOf=apps.target
@@ -287,7 +292,7 @@ in
         # The upstream image also starts an OpenSSH s6 service. It ignores
         # Forgejo's SSH_LISTEN_HOST and always binds all interfaces, so mask it
         # and use Forgejo's built-in SSH server behind the NetBird-only proxy.
-        Volume=${disabledOpenSshService}:/etc/s6/openssh:ro
+        Volume=${disabledOpenSshServicePath}:/etc/s6/openssh:Z
 
         [Service]
         Restart=always
