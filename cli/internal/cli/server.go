@@ -25,6 +25,8 @@ func newServerCmd(g *globalOptions) *cobra.Command {
 	cmd.AddCommand(
 		newServerDeployCmd(g),
 		newServerRollbackCmd(g),
+		newServerInstallCmd(g),
+		newServerAdoptCmd(g),
 	)
 	return cmd
 }
