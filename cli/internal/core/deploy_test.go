@@ -6,14 +6,18 @@ import (
 )
 
 type fakeHost struct {
-	runs     []string
-	failTrue bool
+	runs                 []string
+	failTrue             bool
+	failRestoreModeCheck bool
 }
 
 func (f *fakeHost) Run(host, command string) (string, error) {
 	f.runs = append(f.runs, command)
 	if command == "true" && f.failTrue {
 		return "", &DeployError{Code: 1, Msg: "unreachable"}
+	}
+	if f.failRestoreModeCheck && strings.Contains(command, "restore-mode") {
+		return "", &DeployError{Code: 1, Msg: "not in restore mode"}
 	}
 	return "", nil
 }
