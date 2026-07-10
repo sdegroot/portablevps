@@ -64,7 +64,29 @@ let
     then builtinProfiles.${profile} or (throw "portablevps: unknown built-in profile \"${profile}\"; known profiles: ${lib.concatStringsSep ", " (builtins.attrNames builtinProfiles)}")
     else profile;
 
-  # Read logical servers (servers/<name>.nix) from a directory.
+  # The shape every servers/<name>.nix must have. Kept small and explicit so a
+  # typo in a top-level key fails with a named error instead of a cryptic
+  # "attribute 'profile' missing" deep inside module evaluation.
+  serverKeys = [ "name" "profile" "placement" "info" "module" ];
+
+  validateServerShape = name: server:
+    let
+      keys = builtins.attrNames server;
+      missing = lib.subtractLists keys serverKeys;
+      unknown = lib.subtractLists serverKeys keys;
+    in
+    if !(builtins.isAttrs server)
+    then throw "portablevps: server \"${name}\" must be an attrset { ${lib.concatStringsSep "; " serverKeys}; }"
+    else if missing != [ ]
+    then throw "portablevps: server \"${name}\" is missing required field(s): ${lib.concatStringsSep ", " missing}"
+    else if unknown != [ ]
+    then throw "portablevps: server \"${name}\" has unknown field(s): ${lib.concatStringsSep ", " unknown} (allowed: ${lib.concatStringsSep ", " serverKeys}) — check for a typo"
+    else if !(builtins.isAttrs server.placement && server.placement ? provider)
+    then throw "portablevps: server \"${name}\" placement must be an attrset setting a provider, e.g. placement = { provider = \"hetzner\"; };"
+    else server;
+
+  # Read logical servers (servers/<name>.nix) from a directory, validating each
+  # one's shape as it is read.
   readServers = serverDir:
     let
       entries = builtins.readDir serverDir;
@@ -73,7 +95,7 @@ let
         (builtins.attrNames entries);
       names = map (lib.removeSuffix ".nix") fileNames;
     in
-    lib.genAttrs names (name: import (serverDir + "/${name}.nix") { });
+    lib.genAttrs names (name: validateServerShape name (import (serverDir + "/${name}.nix") { }));
 
   # The portablevps CLI writes install-time overrides (disk device, temporary
   # hostname / VPN name during migration) as cloud-override.nix at the consumer
@@ -89,7 +111,8 @@ let
     let
       server = servers.${serverName};
       providerName = server.placement.provider;
-      providerConfig = providers.${providerName};
+      providerConfig = providers.${providerName} or (throw
+        "portablevps: server \"${serverName}\" placement.provider \"${providerName}\" is not a known provider (known: ${lib.concatStringsSep ", " (builtins.attrNames providers)}). Add providers/${providerName}/provider.json or fix the name.");
     in
     mkHost {
       inherit self restoreMode;
