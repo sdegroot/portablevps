@@ -590,12 +590,17 @@ in
 
       # ACME certificates are service/proxy state. Backing up acme.json lets a
       # restored or migrated host present the existing certificate immediately,
-      # while normal DNS-01 issuance remains responsible for renewal.
-      portablevps.backups.components."traefik-acme" = lib.mkIf cfg.acme.enable {
-        order = 15;
-        paths = [ "${config.services.traefik.dataDir}/acme.json" ];
-        clearBeforeRestore = [ "${config.services.traefik.dataDir}/acme.json" ];
-      };
+      # while normal DNS-01 issuance remains responsible for renewal. This rides
+      # on top of an existing backup destination: it only registers when the
+      # host actually has a restic repository, so enabling the proxy on a
+      # disposable, backup-less host (e.g. a monitoring server) does not conscript
+      # it into needing backup infrastructure just to serve UI names over TLS.
+      portablevps.backups.components."traefik-acme" =
+        lib.mkIf (cfg.acme.enable && config.portablevps.backups.restic.repository != "") {
+          order = 15;
+          paths = [ "${config.services.traefik.dataDir}/acme.json" ];
+          clearBeforeRestore = [ "${config.services.traefik.dataDir}/acme.json" ];
+        };
     }
 
     (lib.mkIf (cfg.acme.enable && !config.portablevps.secrets.allowPrototypeDefaults) {

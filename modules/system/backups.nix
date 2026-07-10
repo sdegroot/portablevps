@@ -117,8 +117,15 @@ in
     restic = {
       repository = lib.mkOption {
         type = lib.types.str;
-        default = "s3:http://10.0.2.2:9000/portablevps-dr";
-        description = "Restic repository URL used by backup and restore scripts.";
+        default = "";
+        example = "s3:https://s3.example.com/my-bucket/myservice/restic";
+        description = ''
+          Restic repository URL used by backup and restore scripts. Required on
+          any host that registers backup components (unless it runs with
+          prototype secrets, which use portablevps.secrets.localBackupRepository
+          instead). Usually set via portablevps.server.backupRepository. Left
+          empty it fails the build rather than silently backing up nowhere.
+        '';
       };
 
       awsAccessKeyId = lib.mkOption {

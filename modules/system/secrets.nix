@@ -66,6 +66,14 @@ in
         assertion = cfg.allowPrototypeDefaults || hasSecretsFile;
         message = "Encrypted secrets are required for this host. Set portablevps.secrets.file to an existing sops file, or enable portablevps.secrets.allowPrototypeDefaults for local-only profiles.";
       }
+      {
+        # A host that backs up must know WHERE. The repository default is empty,
+        # so without this a forgotten backupRepository would render an empty
+        # RESTIC_REPOSITORY and back up nowhere (or, historically, into a local
+        # test MinIO that does not exist in production).
+        assertion = !(useSops && hasBackupComponents) || config.portablevps.backups.restic.repository != "";
+        message = "This host registers backup components but portablevps.backups.restic.repository is empty. Set portablevps.server.backupRepository (or portablevps.backups.restic.repository) to your restic repository URL.";
+      }
     ];
 
     sops = lib.mkIf useSops (lib.mkMerge [
