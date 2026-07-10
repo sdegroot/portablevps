@@ -158,6 +158,62 @@ func newServerAdoptCmd(g *globalOptions) *cobra.Command {
 	return cmd
 }
 
+func newServerRepurposeCmd(g *globalOptions) *cobra.Command {
+	var hf hostFlags
+	var resetPaths []string
+	cmd := &cobra.Command{
+		Use:   "repurpose [server]",
+		Short: "Switch a running host to a different server config in place (no reinstall)",
+		Long: "Repoints an already-portablevps host at a DIFFERENT logical server: " +
+			"stops apps, swaps the host age key, optionally clears data dirs, then " +
+			"nixos-rebuild switch. NetBird/machine state persist. Destructive (data).",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server, ctx, err := serverArg(g, args)
+			if err != nil {
+				return err
+			}
+			host := hf.host
+			if host == "" {
+				host = defaultMeshHost(server, ctx)
+			}
+			if host == "" {
+				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
+			}
+			if err := confirmDestroyTarget(g, cmd, host); err != nil {
+				return err
+			}
+			ageKey, err := ageKeyMaterial(ctx, server)
+			if err != nil {
+				return err
+			}
+			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			prog := output.NewProgress(cmd.OutOrStdout(), "server.repurpose", server, g.json)
+			env := core.RepurposeEnv{
+				RepoRoot:       ctx.RepoRoot,
+				Host:           ssh,
+				Stream:         adapters.ExecRunner{},
+				AgeKeyMaterial: ageKey,
+				Report:         func(phase, status, msg string) { prog.Phase(phase, status, msg) },
+			}
+			if err := core.Repurpose(env, core.RepurposeOpts{Server: server, Host: host, ResetPaths: resetPaths}); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
+			prog.Result("pass", host+" now runs .#"+server, 0, "host", host)
+			return nil
+		},
+	}
+	hf.register(cmd)
+	cmd.Flags().StringSliceVar(&resetPaths, "reset-path", nil, "data dir to clear before switching (repeatable; must be under /data or /var/lib)")
+	return cmd
+}
+
 func registerProvisionFlags(cmd *cobra.Command, pf *provisionFlags, adopt bool) {
 	f := cmd.Flags()
 	f.StringVar(&pf.target, "target", "", "install target, e.g. root@1.2.3.4")

@@ -27,6 +27,7 @@ func newServerCmd(g *globalOptions) *cobra.Command {
 		newServerRollbackCmd(g),
 		newServerInstallCmd(g),
 		newServerAdoptCmd(g),
+		newServerRepurposeCmd(g),
 	)
 	return cmd
 }

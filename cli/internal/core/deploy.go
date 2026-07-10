@@ -6,6 +6,7 @@ import "fmt"
 // satisfies it; tests inject a fake.
 type HostRunner interface {
 	Run(host, command string) (string, error)
+	RunInput(host, command, input string) (string, error)
 	WaitReady(host string) error
 	NixSSHOpts() string
 }

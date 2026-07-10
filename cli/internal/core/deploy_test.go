@@ -17,6 +17,10 @@ func (f *fakeHost) Run(host, command string) (string, error) {
 	}
 	return "", nil
 }
+func (f *fakeHost) RunInput(host, command, _ string) (string, error) {
+	f.runs = append(f.runs, command)
+	return "", nil
+}
 func (f *fakeHost) WaitReady(string) error { return nil }
 func (f *fakeHost) NixSSHOpts() string     { return "-i key -p 22" }
 

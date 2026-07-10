@@ -1,8 +1,10 @@
 package adapters
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,6 +55,24 @@ func (s SSH) baseArgs(host string) []string {
 func (s SSH) Run(host, command string) (string, error) {
 	args := append(s.baseArgs(host), command)
 	return ExecRunner{}.Run("", "ssh", args...)
+}
+
+// RunInput executes command on host over admin SSH with stdin fed from input
+// (used to ship a key over `sudo tee`), returning trimmed stdout.
+func (s SSH) RunInput(host, command, input string) (string, error) {
+	args := append(s.baseArgs(host), command)
+	cmd := exec.Command("ssh", args...)
+	cmd.Stdin = strings.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", &RunError{Err: err, Stderr: strings.TrimSpace(stderr.String())}
+		}
+		return "", err
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // WaitReady polls until admin SSH succeeds or the attempt budget is exhausted.
