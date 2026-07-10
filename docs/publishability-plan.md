@@ -54,7 +54,8 @@ are implemented as code + tests only.
       registration, plain + sops-secret env (placeholders under prototype),
       private-registry pull auth, healthcheck → quadlet + backup registration,
       no module authoring required. (`apps/custom/default.nix`)
-- [ ] Worked example in the template repo + a short "run your own app" doc.
+- [x] Worked example in the template repo + a short "run your own app" doc
+      (`templates/server/servers/example.nix`, `docs/run-your-own-app.md`).
 
 ### 4. Type the contract + invest in failure messages  (item 4)
 - [ ] Server definition becomes a real typed submodule (named-option errors on
@@ -73,8 +74,11 @@ are implemented as code + tests only.
       `EPIS_*` chain names, `nl`-only break-glass, `portablevps.io` placeholders).
 - [ ] Prune legacy alias shims (`vpn`/`public`, `deployment` block) — one
       consumer today, so break now.
-- [ ] Full EUPL-1.2 text in LICENSE; SECURITY.md; name availability; binary
-      cache for substitution.
+- [x] SECURITY.md (private disclosure + operator responsibilities).
+- [ ] Full EUPL-1.2 text in LICENSE (deliberately deferred — do not paste
+      unverified legal text; maintainer must paste the official verbatim text
+      from joinup.ec.europa.eu); name availability; binary cache for
+      substitution.
 - [ ] Repo split (or subtree publish) so the `?dir=`/`path:` monorepo coupling
       (which already breaks CI) stops leaking to consumers.
 
