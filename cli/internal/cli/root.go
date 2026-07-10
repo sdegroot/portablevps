@@ -20,6 +20,9 @@ type globalOptions struct {
 	interactiveFlag bool
 	yes             bool
 	confirm         string
+
+	// shared across nouns that act on a server
+	serverFlag string
 }
 
 func newRootCmd() *cobra.Command {
@@ -43,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	pf.StringVar(&opts.confirm, "confirm", "", "confirm a destructive action non-interactively (must equal the target host/server)")
 
 	root.AddCommand(newDoctorCmd(opts))
+	root.AddCommand(newSecretCmd(opts))
 	return root
 }
 

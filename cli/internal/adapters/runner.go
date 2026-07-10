@@ -6,6 +6,7 @@ package adapters
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -14,9 +15,21 @@ import (
 type ExecRunner struct{}
 
 // Run executes name+args in dir and returns trimmed stdout.
-func (ExecRunner) Run(dir, name string, args ...string) (string, error) {
+func (r ExecRunner) Run(dir, name string, args ...string) (string, error) {
+	return r.RunEnv(dir, nil, name, args...)
+}
+
+// RunEnv executes name+args in dir with extraEnv merged over the process
+// environment (e.g. SOPS_AGE_KEY_FILE for sops/age), returning trimmed stdout.
+func (ExecRunner) RunEnv(dir string, extraEnv map[string]string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range extraEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
