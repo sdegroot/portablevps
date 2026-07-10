@@ -43,17 +43,11 @@ func (f *fakeEnvRunner) called(name string) bool {
 func newSecretEnv(t *testing.T) (SecretEnv, *fakeEnvRunner, string) {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "keys"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "keys", "operator-age.pub"), []byte("age1operator\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	fr := &fakeEnvRunner{}
 	return SecretEnv{RepoRoot: root, Runner: fr}, fr, root
 }
 
-func TestSecretInitOwnsTheCeremony(t *testing.T) {
+func TestSecretInitSingleRecipientCeremony(t *testing.T) {
 	env, fr, root := newSecretEnv(t)
 
 	res, err := SecretInit(env, "web", false)
@@ -65,7 +59,7 @@ func TestSecretInitOwnsTheCeremony(t *testing.T) {
 	if !fileExists(filepath.Join(root, res.KeyPath)) {
 		t.Errorf("key not generated at %s", res.KeyPath)
 	}
-	// .sops.yaml rule written with operator + per-server recipient
+	// .sops.yaml rule written with ONLY the per-server recipient (Model A)
 	rules, err := sopsconfig.Rules(filepath.Join(root, ".sops.yaml"))
 	if err != nil || len(rules) != 1 {
 		t.Fatalf("rules = %+v err=%v", rules, err)
@@ -73,12 +67,12 @@ func TestSecretInitOwnsTheCeremony(t *testing.T) {
 	if rules[0].PathRegex != `secrets/web\.yaml$` {
 		t.Errorf("path_regex = %q", rules[0].PathRegex)
 	}
-	if rules[0].Age != "age1operator,age1recipientfor-web" {
-		t.Errorf("age = %q", rules[0].Age)
+	if rules[0].Age != "age1recipientfor-web" {
+		t.Errorf("age should be the single per-server recipient, got %q", rules[0].Age)
 	}
-	// no secrets file yet -> no rekey
-	if res.Rekeyed || fr.called("sops") {
-		t.Errorf("should not have rekeyed a nonexistent secrets file")
+	// init does not touch sops (no operator master key, no auto-rekey)
+	if fr.called("sops") {
+		t.Errorf("init should not invoke sops")
 	}
 }
 
@@ -89,31 +83,10 @@ func TestSecretInitRefusesExistingKeyWithoutForce(t *testing.T) {
 	_ = os.WriteFile(keyPath, []byte("existing"), 0o600)
 
 	_, err := SecretInit(env, "web", false)
-	var se *SecretError
 	if err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected refusal, got %v", err)
 	}
-	if e, ok := err.(*SecretError); ok {
-		se = e
-	}
-	if se == nil || se.ExitCode() != 73 {
+	if e, ok := err.(*SecretError); !ok || e.ExitCode() != 73 {
 		t.Fatalf("expected exit 73, got %v", err)
-	}
-}
-
-func TestSecretInitRekeysExistingSecretsFile(t *testing.T) {
-	env, fr, root := newSecretEnv(t)
-	_ = os.MkdirAll(filepath.Join(root, "secrets"), 0o755)
-	_ = os.WriteFile(filepath.Join(root, "secrets", "web.yaml"), []byte("enc"), 0o644)
-
-	res, err := SecretInit(env, "web", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.Rekeyed {
-		t.Errorf("expected rekey of existing secrets file")
-	}
-	if !fr.called("sops") {
-		t.Errorf("expected sops updatekeys to run")
 	}
 }

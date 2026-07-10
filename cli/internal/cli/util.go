@@ -28,7 +28,8 @@ func toJSONString(s string) string {
 // ensureEncryptedFile creates an empty sops-encrypted secrets file (matching the
 // .sops.yaml creation_rule) if it does not exist yet, so `sops set` has a file to
 // write into for a brand-new server. The transient plaintext is an empty map.
-func ensureEncryptedFile(repoRoot, ageKey, rel string) error {
+// ageEnv provides the decryption/encryption key env (SOPS_AGE_KEY).
+func ensureEncryptedFile(repoRoot string, ageEnv map[string]string, rel string) error {
 	full := filepath.Join(repoRoot, rel)
 	if fileExistsCli(full) {
 		return nil
@@ -41,7 +42,10 @@ func ensureEncryptedFile(repoRoot, ageKey, rel string) error {
 	}
 	cmd := exec.Command("sops", "--encrypt", "--in-place", rel)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "SOPS_AGE_KEY_FILE="+ageKey)
+	cmd.Env = os.Environ()
+	for k, v := range ageEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		_ = os.Remove(full)
 		return ExitError{Code: 70, Message: fmt.Sprintf("creating encrypted %s: %v: %s", rel, err, strings.TrimSpace(string(out)))}
