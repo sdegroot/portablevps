@@ -44,21 +44,37 @@ func secretEnv(g *globalOptions) (core.SecretEnv, *config.Context, error) {
 	return core.SecretEnv{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}}, ctx, nil
 }
 
-// serverArg resolves the target server from --server, the positional arg, or the
-// configured default.
+// serverArg resolves the target server. Precedence: positional arg > --server /
+// env / default_server. If none is given and the consumer directory defines
+// exactly ONE server, that server is used automatically — so a single-server
+// directory needs no --server and no default_server (portablevps's simplest,
+// primary mode: one directory, one server).
 func serverArg(g *globalOptions, args []string) (string, *config.Context, error) {
 	ctx, err := config.Resolve(config.Flags{Project: g.project, Server: g.serverFlag}, os.Getenv)
 	if err != nil {
 		return "", nil, err
 	}
-	server := ctx.Server
 	if len(args) > 0 {
-		server = args[0]
+		return args[0], ctx, nil
 	}
-	if server == "" {
-		return "", ctx, ExitError{Code: 64, Message: "no server given: pass a name, --server, or set default_server in portablevps.toml"}
+	if ctx.Server != "" {
+		return ctx.Server, ctx, nil
 	}
-	return server, ctx, nil
+	// No explicit server: auto-select when the flake defines exactly one.
+	servers, lerr := core.LoadServers(core.Env{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}, Getenv: os.Getenv})
+	if lerr == nil {
+		switch len(servers) {
+		case 1:
+			for name := range servers {
+				return name, ctx, nil
+			}
+		case 0:
+			return "", ctx, ExitError{Code: 64, Message: "this directory defines no servers"}
+		default:
+			return "", ctx, ExitError{Code: 64, Message: "multiple servers defined: pass a name, --server, or set default_server in portablevps.toml"}
+		}
+	}
+	return "", ctx, ExitError{Code: 64, Message: "no server given: pass a name, --server, or set default_server in portablevps.toml"}
 }
 
 // serverAgeEnv resolves the sops decryption env for a server: SOPS_AGE_KEY from
