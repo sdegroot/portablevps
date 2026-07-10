@@ -246,6 +246,7 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 	env := core.InstallEnv{
 		FlakeDir: ctx.RepoRoot,
 		Stream:   adapters.ExecRunner{},
+		Runner:   adapters.ExecRunner{},
 		Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
 	}
 	if err := core.Install(env, core.InstallOpts{
