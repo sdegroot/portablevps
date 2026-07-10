@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -11,11 +12,13 @@ import (
 // Python CLI's admin_ssh/wait_admin_ssh. Host-key verification is TOFU
 // (accept-new pinned into an operator-local known_hosts under .local), so a
 // later MITM — including the session that ships a host's age key — is detected.
+// IdentityOpts carries the ssh -i/-o identity options, produced by the keystore
+// (1Password agent, an op-read temp key, or a file fallback).
 type SSH struct {
 	RepoRoot     string
-	AdminKey     string // key path (absolute, or relative to RepoRoot)
-	Port         string // default "22"
-	WaitAttempts int    // default 120
+	IdentityOpts []string // ssh identity options from the keystore
+	Port         string   // default "22"
+	WaitAttempts int      // default 120
 	WaitDelay    time.Duration
 	sleep        func(time.Duration) // injectable for tests
 }
@@ -27,13 +30,6 @@ func (s SSH) port() string {
 	return s.Port
 }
 
-func (s SSH) keyPath() string {
-	if filepath.IsAbs(s.AdminKey) {
-		return s.AdminKey
-	}
-	return filepath.Join(s.RepoRoot, s.AdminKey)
-}
-
 // knownHosts returns the operator-local known_hosts path, creating its dir.
 func (s SSH) knownHosts() string {
 	p := filepath.Join(s.RepoRoot, ".local", "known_hosts")
@@ -42,16 +38,15 @@ func (s SSH) knownHosts() string {
 }
 
 func (s SSH) baseArgs(host string) []string {
-	return []string{
+	args := []string{
 		"-p", s.port(),
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "UserKnownHostsFile=" + s.knownHosts(),
-		"-i", s.keyPath(),
-		"-o", "IdentitiesOnly=yes",
-		"admin@" + host,
 	}
+	args = append(args, s.IdentityOpts...)
+	return append(args, "admin@"+host)
 }
 
 // Run executes command on host over admin SSH and returns trimmed stdout.
@@ -87,8 +82,11 @@ func (s SSH) WaitReady(host string) error {
 }
 
 // NixSSHOpts returns the value for NIX_SSHOPTS so nixos-rebuild's
-// --target-host/--build-host use the same key and TOFU verification.
+// --target-host/--build-host use the same identity and TOFU verification.
 func (s SSH) NixSSHOpts() string {
-	return fmt.Sprintf("-i %s -o IdentitiesOnly=yes -p %s -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s",
-		s.keyPath(), s.port(), s.knownHosts())
+	parts := append([]string{}, s.IdentityOpts...)
+	parts = append(parts, "-p", s.port(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile="+s.knownHosts())
+	return strings.Join(parts, " ")
 }

@@ -2,12 +2,15 @@ package cli
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/epistola-app/portablevps/internal/adapters"
 	"github.com/epistola-app/portablevps/internal/config"
 	"github.com/epistola-app/portablevps/internal/core"
+	"github.com/epistola-app/portablevps/internal/keystore"
 	"github.com/epistola-app/portablevps/internal/output"
 )
 
@@ -34,11 +37,50 @@ func (h *hostFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&h.host, "host", "", "the running host's admin address (default: <server>.<mesh>)")
 	f.StringVar(&h.sshPort, "ssh-port", "22", "admin SSH port")
-	f.StringVar(&h.adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "path to the cloud-admin SSH private key")
+	f.StringVar(&h.adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "fallback path to the admin SSH private key (used when 1Password has no item)")
 }
 
-func (h *hostFlags) sshAdapter(repoRoot string) adapters.SSH {
-	return adapters.SSH{RepoRoot: repoRoot, AdminKey: h.adminKey, Port: h.sshPort}
+// sshAdapter builds the SSH adapter, sourcing the admin identity through the
+// keystore: the 1Password agent (interactive) or an op-read temp key (headless)
+// when a vault item exists, otherwise the file fallback. Returns a cleanup that
+// shreds any temp key.
+func (h *hostFlags) sshAdapter(g *globalOptions, ctx *config.Context, server string) (adapters.SSH, func(), error) {
+	store := keystore.Store{
+		Runner:    adapters.ExecRunner{},
+		OpAccount: ctx.OpAccount,
+		AgentSock: onePasswordAgentSock(),
+	}
+	mode := keystore.Headless
+	if g.interactive() {
+		mode = keystore.Interactive
+	}
+	ref := keystore.Ref{
+		OpItem:   keystore.DefaultOpItem(ctx.Vault, server),
+		FilePath: repoRelOrAbs(ctx.RepoRoot, h.adminKey),
+		PubPath:  filepath.Join(ctx.RepoRoot, "keys", server+"-admin.pub"),
+	}
+	opts, cleanup, err := store.SSHIdentity(ref, mode)
+	if err != nil {
+		return adapters.SSH{}, func() {}, ExitError{Code: 66, Message: err.Error()}
+	}
+	return adapters.SSH{RepoRoot: ctx.RepoRoot, IdentityOpts: opts, Port: h.sshPort}, cleanup, nil
+}
+
+func repoRelOrAbs(root, p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(root, p)
+}
+
+// onePasswordAgentSock returns the 1Password SSH agent socket (override with
+// PORTABLEVPS_1P_AGENT_SOCK). Only used in interactive+vault mode.
+func onePasswordAgentSock() string {
+	if s := os.Getenv("PORTABLEVPS_1P_AGENT_SOCK"); s != "" {
+		return s
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".1password", "agent.sock")
 }
 
 func newServerDeployCmd(g *globalOptions) *cobra.Command {
@@ -65,11 +107,17 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
 			}
 
+			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
 			prog := output.NewProgress(cmd.OutOrStdout(), "server.deploy", server, g.json)
 			env := core.DeployEnv{
 				RepoRoot: ctx.RepoRoot,
 				Runner:   adapters.ExecRunner{},
-				Host:     hf.sshAdapter(ctx.RepoRoot),
+				Host:     ssh,
 				Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
 				DryRun:   dryRun,
 			}
