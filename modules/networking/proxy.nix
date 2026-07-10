@@ -268,12 +268,16 @@ let
             then "Public clients enter through the NetBird reverse proxy edge."
             else "Public clients connect directly to the VPS public ingress target.";
         } else null;
-        netbird = if entry.visibility == "internal" then {
-          type = "CNAME";
-          name = normalizeDnsName entry.domain;
-          target = netbirdDnsTarget;
-          purpose = "Internal service DNS for connected NetBird clients.";
-        } else null;
+        netbird =
+          if entry.visibility == "internal" || (entry.visibility == "netbird-edge" && cfg.dns.netbirdEdgeOverrides) then {
+            type = "CNAME";
+            name = normalizeDnsName entry.domain;
+            target = netbirdDnsTarget;
+            purpose =
+              if entry.visibility == "netbird-edge"
+              then "Split-horizon override for connected NetBird clients."
+              else "Internal service DNS for connected NetBird clients.";
+          } else null;
       };
     })
     domainEntries;
@@ -455,6 +459,18 @@ in
         default = null;
         example = "test-vps.portablevps.int.";
         description = "Private NetBird DNS CNAME target. Defaults to the configured NetBird peer name.";
+      };
+
+      netbirdEdgeOverrides = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Also emit NetBird private DNS records for services marked
+          visibility = "netbird-edge". This supports split-horizon DNS where
+          public clients enter through the NetBird reverse proxy edge, while
+          connected NetBird clients resolve the same canonical hostname directly
+          to the serving peer.
+        '';
       };
     };
 

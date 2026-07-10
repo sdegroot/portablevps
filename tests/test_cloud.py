@@ -656,7 +656,7 @@ class CloudTests(unittest.TestCase):
                     "dns": {
                         "netbird": {
                             "type": "CNAME",
-                            "name": "test.int.portablevps.io.",
+                            "name": "test.int.example.net.",
                             "target": "test-vps.portablevps.int.",
                         }
                     },
@@ -668,6 +668,11 @@ class CloudTests(unittest.TestCase):
                             "type": "CNAME",
                             "name": "test.portablevps.io.",
                             "target": "eu1.netbird.services.",
+                        },
+                        "netbird": {
+                            "type": "CNAME",
+                            "name": "code.portablevps.io.",
+                            "target": "test-vps.portablevps.int.",
                         }
                     },
                 },
@@ -684,10 +689,15 @@ class CloudTests(unittest.TestCase):
             ]
         }
 
-        records = cloud.internal_netbird_records_from_plan(plan, "int.portablevps.io")
+        records = cloud.internal_netbird_records_from_plan(plan, "int.example.net")
 
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["name"], "test.int.portablevps.io.")
+        self.assertEqual(records[0]["name"], "test.int.example.net.")
+
+        records = cloud.internal_netbird_records_from_plan(plan, "portablevps.io")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["name"], "code.portablevps.io.")
 
     def test_netbird_upsert_record_updates_changed_record(self):
         calls = []

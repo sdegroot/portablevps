@@ -1424,7 +1424,7 @@ def internal_netbird_records_from_plan(plan: dict, zone_domain: str) -> list[dic
     records = []
     normalized_zone = strip_trailing_dot(zone_domain)
     for entry in plan.get("domains", []):
-        if not isinstance(entry, dict) or entry.get("visibility") != "internal":
+        if not isinstance(entry, dict):
             continue
         dns = entry.get("dns", {})
         if not isinstance(dns, dict):

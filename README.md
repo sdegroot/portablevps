@@ -285,13 +285,16 @@ portablevps.proxy = {
     acmeDelegatedZone = "acme.portablevps.io";
     publicTarget = "eu1.netbird.services.";
     netbirdCnameTarget = "test-vps.portablevps.int.";
+    netbirdEdgeOverrides = true;
   };
 };
 ```
 
 Traefik listens on port 443 and the host firewall opens that port only on the
 NetBird interface by default. Use NetBird Reverse Proxy TLS passthrough for
-public names and NetBird Custom Zones for internal names. Certificates are
+public names and NetBird Custom Zones for internal names. Set
+`dns.netbirdEdgeOverrides = true` when connected NetBird clients should resolve a
+`netbird-edge` public hostname directly to the serving peer. Certificates are
 issued per server/service through DNS-01 ACME using sops-managed provider
 credentials at `/etc/portablevps/traefik-acme.env`; wildcard certificates are not
 the default.

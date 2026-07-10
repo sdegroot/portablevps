@@ -137,7 +137,7 @@ in
       };
       domain = lib.mkOption {
         type = lib.types.str;
-        example = "code.int.epistola.io";
+        example = "code.example.com";
         description = "SSH clone domain advertised by Forgejo.";
       };
       port = lib.mkOption {

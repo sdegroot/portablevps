@@ -308,6 +308,7 @@ DNS and ACME provider policy:
     publicTarget = "eu1.netbird.services.";
     publicRecordType = "CNAME";
     netbirdCnameTarget = "test-vps.portablevps.int.";
+    netbirdEdgeOverrides = true;
   };
   ```
 
@@ -315,11 +316,13 @@ DNS and ACME provider policy:
   For `netbird-edge`, set it to the NetBird Reverse Proxy edge target. For
   `direct-public`, set it to the host's public ingress target and choose the
   matching `publicRecordType`, such as `A` for an IPv4 address or `CNAME` for a
-  hostname. `netbirdCnameTarget` is used only for `internal` domains.
+  hostname. `netbirdCnameTarget` is used for `internal` domains and, when
+  `netbirdEdgeOverrides = true`, for NetBird split-horizon overrides of
+  `netbird-edge` domains.
   `managedZones` lists public DNS zones that are delegated to the Traefik ACME
   provider, so the generated plan marks matching names as direct managed-zone
-  ACME instead of CNAME-delegated ACME. Do not rely on split DNS by default; use
-  explicit separate public and internal names when a service needs both paths.
+  ACME instead of CNAME-delegated ACME. `managedZones` is not required for
+  NetBird DNS override zones.
 - On a configured server, inspect the generated domain registration plan:
 
   ```sh
@@ -342,6 +345,16 @@ DNS and ACME provider policy:
 
   ```dns
   app.example.com. CNAME eu1.netbird.services.
+  ```
+
+  If `netbirdEdgeOverrides = true`, also sync the public parent zone into
+  NetBird DNS so connected clients resolve the same hostname directly to the
+  peer:
+
+  ```sh
+  NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-dns-sync \
+    HOST=100.85.5.203 NETBIRD_DNS_ZONE=example.com \
+    NETBIRD_DNS_GROUP_IDS=<netbird-group-id>
   ```
 
 - For each `visibility = "direct-public"` hostname, add public DNS to the host
