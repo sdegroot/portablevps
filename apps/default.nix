@@ -6,6 +6,7 @@
 {
   imports = [
     ./authentik
+    ./custom
     ./forgejo
     ./forgejo-runner
     ./monitoring

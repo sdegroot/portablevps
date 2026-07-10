@@ -49,9 +49,12 @@ are implemented as code + tests only.
       instructions from the domain plan.
 
 ### 3. Bring-your-own container as the paved path  (item 3)
-- [ ] Declarative custom-app schema (image, ports, env+secret refs, data paths,
-      backup component, healthcheck) → quadlet + backup registration, no module
-      authoring required.
+- [x] Declarative custom-app schema (`portablevps.apps.custom.<name>`): image,
+      loopback port, bind-mount volumes with automatic backup-component
+      registration, plain + sops-secret env (placeholders under prototype),
+      private-registry pull auth, healthcheck → quadlet + backup registration,
+      no module authoring required. (`apps/custom/default.nix`)
+- [ ] Worked example in the template repo + a short "run your own app" doc.
 
 ### 4. Type the contract + invest in failure messages  (item 4)
 - [ ] Server definition becomes a real typed submodule (named-option errors on
