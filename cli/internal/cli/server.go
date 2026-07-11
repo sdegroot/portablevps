@@ -23,6 +23,7 @@ func newServerCmd(g *globalOptions) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&g.serverFlag, "server", "",
 		"target server (default: default_server in portablevps.toml)")
 	cmd.AddCommand(
+		newServerListCmd(g),
 		newServerDeployCmd(g),
 		newServerRollbackCmd(g),
 		newServerInstallCmd(g),

@@ -18,4 +18,5 @@ type Server struct {
 	Hostname         string
 	NetbirdName      string
 	NetbirdGroups    []string
+	Purpose          string
 }
