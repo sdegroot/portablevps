@@ -51,7 +51,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newServiceCmd(opts))
 	root.AddCommand(newBackupCmd(opts))
 	root.AddCommand(newNetworkCmd(opts))
-	root.AddCommand(newDevCmd(opts))
+	root.AddCommand(newTestCmd(opts))
 	return root
 }
 

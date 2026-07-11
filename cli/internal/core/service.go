@@ -1,5 +1,7 @@
 package core
 
+import "strings"
+
 // ServiceEnv drives service data-movement (migrate/restore) over admin SSH. The
 // HostRunner is host-parameterised, so one adapter reaches both source and
 // target hosts.
@@ -130,4 +132,42 @@ func Restore(env ServiceEnv, o RestoreOpts) error {
 	}
 	report("done", "ok", o.Host+" restored .#"+o.Server)
 	return nil
+}
+
+// DrillOpts parameterises a real-infrastructure disaster-recovery drill.
+type DrillOpts struct {
+	Server      string
+	SourceHost  string // live host to seed a marker on and back up (left otherwise untouched)
+	RestoreHost string // host to restore onto and verify (destructive to its data)
+}
+
+// RestoreDrill proves backups actually restore, end to end, against real hosts:
+// it seeds a unique verification marker into the source's live data, backs the
+// source up, then restores that backup onto RestoreHost and verifies the marker
+// survived the round trip. The source is only seeded (non-destructive); the
+// restore host is rebuilt from the backup. It returns the marker it used.
+func RestoreDrill(env ServiceEnv, o DrillOpts) (string, error) {
+	report := env.report()
+
+	report("seed", "run", "seeding a verification marker on "+o.SourceHost)
+	out, err := env.Host.Run(o.SourceHost, "sudo insert-test-data.sh | tail -n 1")
+	if err != nil {
+		return "", provisionErr(70, "seeding marker on %s: %v", o.SourceHost, err)
+	}
+	marker := strings.TrimSpace(out)
+	if marker == "" {
+		return "", provisionErr(70, "insert-test-data.sh returned an empty marker on %s", o.SourceHost)
+	}
+	report("seed", "ok", "marker "+marker)
+
+	report("backup", "run", "backing up "+o.SourceHost)
+	if _, err := env.Host.Run(o.SourceHost, "sudo init-backup-repo.sh; sudo backup.sh"); err != nil {
+		return marker, provisionErr(70, "backup on %s: %v", o.SourceHost, err)
+	}
+
+	// Restore onto the (separate) restore host and verify the marker survived.
+	if err := Restore(env, RestoreOpts{Server: o.Server, Host: o.RestoreHost, Marker: marker}); err != nil {
+		return marker, err
+	}
+	return marker, nil
 }
