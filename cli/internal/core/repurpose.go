@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,10 +35,16 @@ func Repurpose(env RepurposeEnv, opts RepurposeOpts) error {
 	if env.AgeKeyMaterial == "" {
 		return provisionErr(66, "no host age key resolved for %s", opts.Server)
 	}
-	for _, p := range opts.ResetPaths {
-		if !strings.HasPrefix(p, "/data/") && !strings.HasPrefix(p, "/var/lib/") {
+	// Clean each reset path FIRST, then check the prefix on the cleaned result, so
+	// a `..` segment (e.g. /var/lib/../../etc) cannot slip past the allow-list and
+	// have `rm -rf` wipe an arbitrary directory on the live host. The cleaned path
+	// is what actually gets deleted below.
+	for i, p := range opts.ResetPaths {
+		clean := filepath.Clean(p)
+		if !strings.HasPrefix(clean, "/data/") && !strings.HasPrefix(clean, "/var/lib/") {
 			return provisionErr(64, "refusing to reset a path outside /data or /var/lib: %s", p)
 		}
+		opts.ResetPaths[i] = clean
 	}
 
 	report("preflight", "run", "checking admin SSH to "+opts.Host)

@@ -174,7 +174,16 @@ func Install(env InstallEnv, opts InstallOpts) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() {
+		// Best-effort shred of the staged host age private key before removing the
+		// temp tree, so it doesn't linger on disk after a crash or on media that
+		// retains deleted data.
+		keyFile := filepath.Join(tmp, "extra-files", "etc", "sops", "age", "keys.txt")
+		if info, statErr := os.Stat(keyFile); statErr == nil {
+			_ = os.WriteFile(keyFile, make([]byte, info.Size()), 0o400)
+		}
+		_ = os.RemoveAll(tmp)
+	}()
 
 	ageDir := filepath.Join(tmp, "extra-files", "etc", "sops", "age")
 	if err := os.MkdirAll(ageDir, 0o700); err != nil {

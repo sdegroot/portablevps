@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -171,8 +172,13 @@ func newSecretSetCmd(g *globalOptions) *cobra.Command {
 				return ExitError{Code: 64, Message: "--key is required (e.g. --key '[\"postgres\"][\"password\"]')"}
 			}
 			if valueStdin {
-				b, _ := io.ReadAll(cmd.InOrStdin())
-				value = string(b)
+				b, rerr := io.ReadAll(cmd.InOrStdin())
+				if rerr != nil {
+					return ExitError{Code: 70, Message: fmt.Sprintf("reading value from stdin: %v", rerr)}
+				}
+				// Trim a single trailing newline (the common `echo | ...` case) so a
+				// stray \n never becomes part of a token/password.
+				value = strings.TrimRight(string(b), "\n")
 			}
 			ageEnv, err := serverAgeEnv(ctx, server)
 			if err != nil {
@@ -182,9 +188,11 @@ func newSecretSetCmd(g *globalOptions) *cobra.Command {
 			if err := ensureEncryptedFile(ctx.RepoRoot, ageEnv, rel); err != nil {
 				return err
 			}
-			_, err = adapters.ExecRunner{}.RunEnv(ctx.RepoRoot, ageEnv,
-				"sops", "set", rel, key, toJSONString(value))
-			if err != nil {
+			// Always feed the value to sops over stdin — never argv — whether it came
+			// from --value or --value-stdin, so the secret never lands in the sops
+			// child's process list (/proc/<pid>/cmdline).
+			if _, err = (adapters.ExecRunner{}).RunEnvInput(ctx.RepoRoot, ageEnv, toJSONString(value),
+				"sops", "set", "--value-stdin", rel, key); err != nil {
 				return ExitError{Code: 70, Message: fmt.Sprintf("sops set: %v", err)}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "set %s in %s\n", key, rel)
