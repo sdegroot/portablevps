@@ -38,6 +38,12 @@ let
     FORGEJO__server__DISABLE_SSH = lib.boolToString (!cfg.ssh.enable);
     FORGEJO__service__DISABLE_REGISTRATION = lib.boolToString cfg.disableRegistration;
     FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION = "false";
+    # Hide the local username/password sign-in form (leaving only the OIDC
+    # button) when an OIDC provider is configured and oidc.hidePasswordForm is
+    # set. Local login stays reachable at /user/login?force_login=true for the
+    # break-glass admin.
+    FORGEJO__service__ENABLE_PASSWORD_SIGNIN_FORM =
+      lib.boolToString (!(cfg.oidc.enable && cfg.oidc.hidePasswordForm));
     FORGEJO__service__ENABLE_NOTIFY_MAIL = "false";
     FORGEJO__openid__ENABLE_OPENID_SIGNIN = "false";
     FORGEJO__openid__ENABLE_OPENID_SIGNUP = "false";
@@ -238,6 +244,15 @@ in
         default = "";
         description = "OIDC issuer base URL used for discovery.";
       };
+      hidePasswordForm = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Hide the local username/password sign-in form so the login page
+          offers only the OIDC (single sign-on) button. Local login remains
+          reachable at /user/login?force_login=true for a break-glass admin.
+        '';
+      };
       scopes = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ "openid" "email" "profile" "groups" ];
@@ -341,13 +356,26 @@ in
         '' + lib.optionalString oauthEnabled ''
 
           oauth_secret="$(${pkgs.coreutils}/bin/tr -d '\n' < ${if prototype then pkgs.writeText "forgejo-demo-oauth-secret" (demoSecret cfg.oidc.clientSecretSecret) else config.sops.secrets.${cfg.oidc.clientSecretSecret}.path})"
-          if ! ${forgejoCli} admin auth list | grep -Fq ${lib.escapeShellArg cfg.oidc.name}; then
+          auth_discover_url=${lib.escapeShellArg "${cfg.oidc.issuerBaseUrl}/application/o/${cfg.oidc.clientId}/.well-known/openid-configuration"}
+          # The auth source's cached endpoints are refetched from --auto-discover-url
+          # only when the source is (re)written, so ADD if missing and UPDATE if it
+          # exists — otherwise an issuer/hostname change (e.g. moving Authentik to a
+          # new domain) never propagates and login keeps redirecting to the old host.
+          src_id="$(${forgejoCli} admin auth list | ${pkgs.gawk}/bin/awk -v n=${lib.escapeShellArg cfg.oidc.name} '$2 == n { print $1; exit }')"
+          if [ -n "$src_id" ]; then
+            ${forgejoCli} admin auth update-oauth \
+              --id "$src_id" \
+              --key ${lib.escapeShellArg cfg.oidc.clientId} \
+              --secret "$oauth_secret" \
+              --auto-discover-url "$auth_discover_url" \
+              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} || true
+          else
             ${forgejoCli} admin auth add-oauth \
               --name ${lib.escapeShellArg cfg.oidc.name} \
               --provider ${lib.escapeShellArg cfg.oidc.provider} \
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
               --secret "$oauth_secret" \
-              --auto-discover-url ${lib.escapeShellArg "${cfg.oidc.issuerBaseUrl}/application/o/${cfg.oidc.clientId}/.well-known/openid-configuration"} \
+              --auto-discover-url "$auth_discover_url" \
               --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} || true
           fi
         '';
