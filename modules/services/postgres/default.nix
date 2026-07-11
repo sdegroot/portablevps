@@ -3,6 +3,19 @@
 
 let
   cfg = config.portablevps.postgres;
+
+  # Extra databases are created via an init script mounted into
+  # /docker-entrypoint-initdb.d (runs once, on an empty cluster, as the
+  # superuser). CREATE DATABASE cannot run in a transaction and has no
+  # IF NOT EXISTS, so use the SELECT ... \gexec idiom guarded on pg_database.
+  extraDbInitScript = pkgs.writeText "portablevps-postgres-extra-databases.sql" (
+    lib.concatMapStringsSep "\n"
+      (db: ''
+        SELECT 'CREATE DATABASE "${db}" OWNER "${cfg.user}"'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${db}')\gexec'')
+      cfg.extraDatabases
+  );
+  hasExtraDatabases = cfg.extraDatabases != [ ];
 in
 {
   options.portablevps.postgres = {
@@ -55,6 +68,22 @@ in
       '';
     };
 
+    extraDatabases = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "valtimo" ];
+      description = ''
+        Additional databases created in the same cluster on first boot, each
+        owned by ${"\${user}"}. Use when a single box hosts several apps that
+        each need their own database but can share one PostgreSQL instance
+        (e.g. the demo box running epistola-suite + valtimo). Rendered as an
+        idempotent init script in /docker-entrypoint-initdb.d, so — like
+        POSTGRES_DB — it only takes effect on an empty data directory. The
+        physical (pg_basebackup) backup already covers the whole cluster, so
+        no per-database backup wiring is needed.
+      '';
+    };
+
     maxConnections = lib.mkOption {
       type = lib.types.ints.positive;
       default = 100;
@@ -103,6 +132,8 @@ in
       Environment=POSTGRES_DB=${cfg.database}
       EnvironmentFile=/etc/portablevps/postgres.env
       Volume=${cfg.dataRoot}:/var/lib/postgresql
+      ${lib.optionalString hasExtraDatabases
+        "Volume=${extraDbInitScript}:/docker-entrypoint-initdb.d/10-portablevps-extra-databases.sql:ro"}
       PublishPort=127.0.0.1:5432:5432
       Exec=-c summarize_wal=on -c max_connections=${toString cfg.maxConnections}
 

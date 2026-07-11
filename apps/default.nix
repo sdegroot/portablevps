@@ -7,6 +7,7 @@
   imports = [
     ./authentik
     ./custom
+    ./epistola-suite
     ./forgejo
     ./forgejo-runner
     ./monitoring
