@@ -6,16 +6,19 @@ let
 in
 {
   options.portablevps.base = {
+    # Secure by default: the failure mode for a host that forgets its platform
+    # is "unreachable", not "internet-exposed with a known password". Local /
+    # prototype hosts opt into the conveniences (see qemu-test-access.nix).
     passwordAuthentication = lib.mkOption {
       type = lib.types.bool;
-      default = true;
-      description = "Whether OpenSSH accepts password authentication.";
+      default = false;
+      description = "Whether OpenSSH accepts password authentication (default: key-only).";
     };
 
     adminInitialPassword = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
-      default = "dev-password";
-      description = "Initial password for the admin user. Set to null for key-only access.";
+      default = null;
+      description = "Initial password for the admin user (default: null = key-only access).";
     };
 
     adminAuthorizedKeyFiles = lib.mkOption {
@@ -26,8 +29,8 @@ in
 
     allowedTCPPorts = lib.mkOption {
       type = lib.types.listOf lib.types.port;
-      default = [ 22 5432 ];
-      description = "TCP ports opened in the host firewall.";
+      default = [ ];
+      description = "TCP ports opened in the host firewall (default: none — open only what a host needs).";
     };
   };
 
