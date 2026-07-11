@@ -1168,6 +1168,25 @@ def install_host_age_key(host: str, *, admin_key: str, ssh_port: str, age_key_pa
     )
 
 
+def resolve_admin_key(server_name: str) -> str:
+    """Operator SSH key path for admin@<host>.
+
+    Prefers a per-server operator key (.local/ssh/servers/<server>_ed25519)
+    when it exists, so each box is reachable only with its own key; falls back
+    to the shared cloud-admin key for boxes not yet migrated. An explicit
+    CLOUD_ADMIN_KEY always overrides both — needed mid-migration, when the box
+    does not yet trust its new per-server key and must still be reached with
+    cloud-admin.
+    """
+    override = env("CLOUD_ADMIN_KEY")
+    if override:
+        return override
+    per_server = f".local/ssh/servers/{server_name}_ed25519"
+    if repo_path(per_server).is_file():
+        return per_server
+    return ".local/ssh/cloud-admin_ed25519"
+
+
 def command_repurpose(_args: argparse.Namespace) -> None:
     """Switch an already-portablevps-managed host to a DIFFERENT logical server,
     in place, over the admin mesh SSH — no kexec/reinstall. Swaps the host age
@@ -1179,7 +1198,7 @@ def command_repurpose(_args: argparse.Namespace) -> None:
     if not host:
         raise CloudError("error: HOST is required", 64)
     require_destroy_confirmation(host, env("CONFIRM_DESTROY", ""))
-    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    admin_key = resolve_admin_key(server.name)
     ssh_port = env("SSH_PORT", "22")
     reset_paths = comma_list(env("RESET_PATHS", ""))
     age_key = resolve_age_key(server.name)
@@ -1234,7 +1253,7 @@ def command_deploy(_args: argparse.Namespace) -> None:
     host = env("HOST", "")
     if not host:
         raise CloudError("error: HOST is required (the running host's admin address, e.g. its mesh FQDN)", 64)
-    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    admin_key = resolve_admin_key(server.name)
     ssh_port = env("SSH_PORT", "22")
 
     # Confirm admin reachability before building and switching.
