@@ -387,6 +387,18 @@ in the flake **and** `CONFIRM_DEFAULT_DENY=yes` on the command. Put the peers
 you administer from into the `operators` group first, confirm the
 `operators-ssh` policy works, then flip it.
 
+**Account-global warning:** `disableDefaultPolicy` is a property of the whole
+NetBird **account**, not of your fleet's groups. Disabling the default allow-all
+makes *every* peer on that account default-deny — so if you share the account
+with other infrastructure (another project, a Kubernetes cluster, unrelated
+VPSes), flipping it will cut off *their* traffic too, since your `policies` only
+declare *your* fleet's flows. Before going default-deny, either give the fleet
+its **own NetBird account/organisation** (so isolation is real), or declare the
+allow-flows for everything else on the shared account. If you can't do either,
+keep the mesh default-allow and rely on each host's firewall (portablevps hosts
+are secure-by-default: key-only SSH and no open ports beyond what a profile
+declares) to limit exposure.
+
 When deSEC shows DNSSEC material for the delegated zone, add the child-zone
 DNSSEC data at Mijn.host only for the delegated ACME zone. Prefer DS format when
 Mijn.host offers it; DNSKEY format is only for provider UIs that compute DS from
