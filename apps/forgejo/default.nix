@@ -36,8 +36,11 @@ let
     FORGEJO__server__SSH_LISTEN_PORT = toString cfg.ssh.listenPort;
     FORGEJO__server__START_SSH_SERVER = lib.boolToString cfg.ssh.enable;
     FORGEJO__server__DISABLE_SSH = lib.boolToString (!cfg.ssh.enable);
-    FORGEJO__service__DISABLE_REGISTRATION = lib.boolToString cfg.disableRegistration;
-    FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION = "false";
+    # With OIDC auto-registration on, registration must be allowed but limited to
+    # the external provider (no local self-signup): DISABLE_REGISTRATION is forced
+    # off and ALLOW_ONLY_EXTERNAL_REGISTRATION on. Otherwise honour disableRegistration.
+    FORGEJO__service__DISABLE_REGISTRATION = lib.boolToString (cfg.disableRegistration && !oidcAutoRegister);
+    FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION = lib.boolToString oidcAutoRegister;
     # Hide the local username/password sign-in form (leaving only the OIDC
     # button) when an OIDC provider is configured and oidc.hidePasswordForm is
     # set. Local login stays reachable at /user/login?force_login=true for the
@@ -50,6 +53,15 @@ let
     FORGEJO__security__INSTALL_LOCK = "true";
     FORGEJO__api__ENABLE_SWAGGER = "false";
     FORGEJO__actions__ENABLED = lib.boolToString cfg.actions.enable;
+  } // lib.optionalAttrs oidcAutoRegister {
+    # Auto-provision a Forgejo account on first SSO login — no manual
+    # complete/link page. Authentik is the gatekeeper for who reaches this flow,
+    # so anyone it lets through gets an account. ACCOUNT_LINKING=auto links to an
+    # existing local account by email (e.g. the break-glass admin).
+    FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION = "true";
+    FORGEJO__oauth2_client__ACCOUNT_LINKING = "auto";
+    FORGEJO__oauth2_client__USERNAME = cfg.oidc.usernameClaim;
+    FORGEJO__oauth2_client__UPDATE_AVATAR = "true";
   } // cfg.extraEnv;
 
   secretEnv = {
@@ -75,6 +87,7 @@ let
     ) + "\n";
 
   oauthEnabled = cfg.oidc.enable && cfg.oidc.issuerBaseUrl != "";
+  oidcAutoRegister = cfg.oidc.enable && cfg.oidc.autoRegister;
   forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
   disabledOpenSshServicePath = "/run/portablevps/forgejo-disabled-openssh-s6";
   disabledOpenSshService = pkgs.runCommand "forgejo-disabled-openssh-s6-service" { } ''
@@ -252,6 +265,21 @@ in
           offers only the OIDC (single sign-on) button. Local login remains
           reachable at /user/login?force_login=true for a break-glass admin.
         '';
+      };
+      autoRegister = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Automatically create a Forgejo account on first SSO login instead of
+          showing the manual complete/link-account page. Local self-signup stays
+          disabled — only the OIDC provider (which is your access gate) can
+          register users. Existing local accounts are linked by email.
+        '';
+      };
+      usernameClaim = lib.mkOption {
+        type = lib.types.enum [ "userid" "nickname" "email" "preferred_username" ];
+        default = "preferred_username";
+        description = "OIDC claim used as the Forgejo username on auto-registration.";
       };
       scopes = lib.mkOption {
         type = lib.types.listOf lib.types.str;
