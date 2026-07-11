@@ -52,6 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newBackupCmd(opts))
 	root.AddCommand(newNetworkCmd(opts))
 	root.AddCommand(newTestCmd(opts))
+	root.AddCommand(newKeyCmd(opts))
 	return root
 }
 
