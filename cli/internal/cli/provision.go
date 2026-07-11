@@ -26,11 +26,20 @@ func confirmDestroyTarget(g *globalOptions, cmd *cobra.Command, resource string)
 // resolveSecretRef dereferences an op://, env:// reference (falls back to the
 // literal on failure) — used for --password.
 func resolveSecretRef(ctx *config.Context, value string) string {
-	r := secrets.Resolver{Runner: adapters.ExecRunner{}, Getenv: os.Getenv, OpAccount: ctx.OpAccount}
+	r := secrets.Resolver{Runner: adapters.ExecRunner{}, Getenv: os.Getenv, OpAccount: ctx.OpAccount, Managers: secretManagers(ctx)}
 	if out, err := r.Resolve(value); err == nil {
 		return out
 	}
 	return value
+}
+
+// secretManagers adapts the config's registered managers to the resolver's type.
+func secretManagers(ctx *config.Context) []secrets.Manager {
+	out := make([]secrets.Manager, 0, len(ctx.Managers))
+	for _, m := range ctx.Managers {
+		out = append(out, secrets.Manager{Scheme: m.Scheme, Command: m.Command})
+	}
+	return out
 }
 
 // provisionFlags are the install/adopt inputs.

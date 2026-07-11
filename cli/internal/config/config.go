@@ -26,15 +26,24 @@ type Flags struct {
 
 // Context is the fully-merged operator context every command runs against.
 type Context struct {
-	RepoRoot       string
-	Server         string
-	DNSZone        string
-	PublicDNSZone  string
-	OpAccount      string
-	OperatorAgeKey string
-	Vault          string // 1Password vault holding per-server key items (empty = file-only)
-	Network        NetworkConfig
-	Providers      map[string]ProviderConfig
+	RepoRoot      string
+	Server        string
+	DNSZone       string
+	PublicDNSZone string
+	OpAccount     string
+	Vault         string          // 1Password vault holding per-server key items (empty = file-only)
+	Managers      []SecretManager // extra CLI-based password managers (Bitwarden, pass, …)
+	Network       NetworkConfig
+	Providers     map[string]ProviderConfig
+}
+
+// SecretManager registers an extra CLI-based password manager so references of
+// the form `<scheme>://<ref>` resolve by running Command with {ref} substituted.
+// This is how portablevps supports managers beyond 1Password without hardcoding
+// each one (e.g. scheme="bw", command=["bw","get","password","{ref}"]).
+type SecretManager struct {
+	Scheme  string
+	Command []string
 }
 
 // NetworkConfig holds mesh-backend settings (NetBird today).
@@ -56,8 +65,11 @@ type file struct {
 	PublicDNSZone string `toml:"public_dns_zone"`
 	Vault         string `toml:"vault"`
 	Secrets       struct {
-		OpAccount      string `toml:"op_account"`
-		OperatorAgeKey string `toml:"operator_age_key"`
+		OpAccount string `toml:"op_account"`
+		Manager   []struct {
+			Scheme  string   `toml:"scheme"`
+			Command []string `toml:"command"`
+		} `toml:"manager"`
 	} `toml:"secrets"`
 	Network struct {
 		APIURL   string `toml:"api_url"`
@@ -115,10 +127,10 @@ func Resolve(flags Flags, getenv func(string) string) (*Context, error) {
 		DNSZone: firstNonEmpty(
 			getenv("NETBIRD_DNS_ZONE"), localFile.Network.DNSZone, repoFile.Network.DNSZone,
 			localFile.DNSZone, repoFile.DNSZone),
-		PublicDNSZone:  firstNonEmpty(localFile.PublicDNSZone, repoFile.PublicDNSZone),
-		OpAccount:      firstNonEmpty(getenv("OP_ACCOUNT"), localFile.Secrets.OpAccount, repoFile.Secrets.OpAccount),
-		OperatorAgeKey: firstNonEmpty(getenv("SOPS_AGE_KEY_FILE"), localFile.Secrets.OperatorAgeKey, repoFile.Secrets.OperatorAgeKey, ".local/sops/age-key.txt"),
-		Vault:          firstNonEmpty(getenv("PORTABLEVPS_VAULT"), localFile.Vault, repoFile.Vault),
+		PublicDNSZone: firstNonEmpty(localFile.PublicDNSZone, repoFile.PublicDNSZone),
+		OpAccount:     firstNonEmpty(getenv("OP_ACCOUNT"), localFile.Secrets.OpAccount, repoFile.Secrets.OpAccount),
+		Vault:         firstNonEmpty(getenv("PORTABLEVPS_VAULT"), localFile.Vault, repoFile.Vault),
+		Managers:      mergeManagers(repoFile, localFile),
 		Network: NetworkConfig{
 			APIURL:   firstNonEmpty(getenv("NETBIRD_API_URL"), localFile.Network.APIURL, repoFile.Network.APIURL),
 			APIToken: firstNonEmpty(getenv("NETBIRD_API_TOKEN"), localFile.Network.APIToken, repoFile.Network.APIToken),
@@ -127,6 +139,28 @@ func Resolve(flags Flags, getenv func(string) string) (*Context, error) {
 		Providers: mergeProviders(repoFile, localFile),
 	}
 	return ctx, nil
+}
+
+// mergeManagers collects the configured extra managers, with .local entries
+// taking precedence over repo entries for the same scheme (local first wins on
+// first-match dispatch).
+func mergeManagers(repoFile, localFile file) []SecretManager {
+	var out []SecretManager
+	seen := map[string]bool{}
+	add := func(scheme string, command []string) {
+		if scheme == "" || len(command) == 0 || seen[scheme] {
+			return
+		}
+		seen[scheme] = true
+		out = append(out, SecretManager{Scheme: scheme, Command: command})
+	}
+	for _, m := range localFile.Secrets.Manager {
+		add(m.Scheme, m.Command)
+	}
+	for _, m := range repoFile.Secrets.Manager {
+		add(m.Scheme, m.Command)
+	}
+	return out
 }
 
 func mergeProviders(repoFile, localFile file) map[string]ProviderConfig {

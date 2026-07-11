@@ -2,6 +2,8 @@ package secrets
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -71,6 +73,52 @@ func TestOpMissingBinaryIsUnavailable(t *testing.T) {
 	var e *Error
 	if !errors.As(err, &e) || e.Code != exitUnavailable {
 		t.Fatalf("expected unavailable error, got %v", err)
+	}
+}
+
+func TestFileReference(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(p, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Runner: &fakeRunner{}}
+	got, err := r.Resolve("file://" + p)
+	if err != nil || got != "from-file" {
+		t.Fatalf("file ref: got %q, %v", got, err)
+	}
+}
+
+// TestGenericManagerReference verifies a configured CLI manager resolves a
+// custom scheme by substituting {ref} into its command.
+func TestGenericManagerReference(t *testing.T) {
+	fr := &fakeRunner{out: "bw-secret\n"}
+	r := Resolver{Runner: fr, Managers: []Manager{{Scheme: "bw", Command: []string{"bw", "get", "password", "{ref}"}}}}
+	got, err := r.Resolve("bw://my-item")
+	if err != nil || got != "bw-secret" {
+		t.Fatalf("bw ref: got %q, %v", got, err)
+	}
+	want := []string{"bw", "get", "password", "my-item"}
+	if len(fr.last) != len(want) {
+		t.Fatalf("bw args = %v, want %v", fr.last, want)
+	}
+	for i := range want {
+		if fr.last[i] != want[i] {
+			t.Fatalf("bw args = %v, want %v", fr.last, want)
+		}
+	}
+	if !IsReference("bw://my-item") {
+		t.Error("scheme://ref should be a reference")
+	}
+}
+
+// TestUnknownSchemeIsUsageError verifies an unregistered scheme errors clearly.
+func TestUnknownSchemeIsUsageError(t *testing.T) {
+	r := Resolver{Runner: &fakeRunner{}}
+	_, err := r.Resolve("vault://path/to/secret")
+	var e *Error
+	if !errors.As(err, &e) || e.Code != exitUsage {
+		t.Fatalf("expected usage error for unknown scheme, got %v", err)
 	}
 }
 

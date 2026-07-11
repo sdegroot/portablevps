@@ -1,17 +1,20 @@
 // Package secrets resolves secret *references* to their values at run time. A
-// value may be a literal (returned unchanged), an `op://vault/item/field`
-// 1Password reference (resolved with the `op` CLI), or an `env://VAR` reference
-// (read from the environment). This lets the committed portablevps.toml and
-// provider env files hold references instead of literal secrets: a human
-// authenticates with 1Password, and CI passes literals via env:// — the same
-// command works in both worlds.
+// value is either a literal (returned unchanged) or a `<scheme>://<ref>`
+// reference. Built-in schemes: `op://…` (1Password, via the `op` CLI),
+// `env://VAR` (an environment variable), and `file://path` (a local file).
+// Any other scheme is dispatched to a CLI-based password manager registered in
+// portablevps.toml ([[secrets.manager]] with a scheme + command template), so
+// Bitwarden, pass, gopass, etc. work without hardcoding each one.
 //
-// Ported from portablevps/scripts/portablevps_cloud/secrets.py so the two CLIs
-// stay behaviourally aligned during the migration.
+// This lets the committed portablevps.toml and provider env files hold
+// references instead of literal secrets: a human authenticates with their
+// password manager, and CI passes literals via env:// — the same command works
+// in both worlds.
 package secrets
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -38,29 +41,62 @@ type Runner interface {
 	Run(dir, name string, args ...string) (string, error)
 }
 
+// Manager is a CLI-based password manager registered for a reference scheme.
+// Command is run with every "{ref}" token replaced by the part after the
+// scheme; its stdout is the secret value.
+type Manager struct {
+	Scheme  string
+	Command []string
+}
+
 // Resolver dereferences secret references.
 type Resolver struct {
 	Runner    Runner
 	Getenv    func(string) string
-	OpAccount string // optional; passed to `op` as --account when set
+	OpAccount string    // optional; passed to `op` as --account when set
+	Managers  []Manager // extra managers registered in portablevps.toml
 }
 
-// IsReference reports whether s uses a known reference scheme.
+// IsReference reports whether s looks like a `<scheme>://<ref>` reference rather
+// than a literal secret value.
 func IsReference(s string) bool {
-	return strings.HasPrefix(s, "op://") || strings.HasPrefix(s, "env://")
+	_, _, ok := splitScheme(s)
+	return ok
 }
 
 // Resolve returns the concrete value for a reference, or the input unchanged if
 // it is a literal.
 func (r Resolver) Resolve(value string) (string, error) {
-	switch {
-	case strings.HasPrefix(value, "op://"):
-		return r.resolveOp(value)
-	case strings.HasPrefix(value, "env://"):
-		return r.resolveEnv(value)
-	default:
-		return value, nil
+	scheme, ref, ok := splitScheme(value)
+	if !ok {
+		return value, nil // literal
 	}
+	switch scheme {
+	case "op":
+		return r.resolveOp(value)
+	case "env":
+		return r.resolveEnv(value)
+	case "file":
+		return r.resolveFile(ref)
+	default:
+		return r.resolveManager(scheme, ref, value)
+	}
+}
+
+// splitScheme splits "<scheme>://<ref>". The scheme must be a simple identifier;
+// anything else (or no "://") is treated as a literal.
+func splitScheme(value string) (scheme, ref string, ok bool) {
+	i := strings.Index(value, "://")
+	if i <= 0 {
+		return "", "", false
+	}
+	scheme = value[:i]
+	for _, c := range scheme {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return "", "", false
+		}
+	}
+	return scheme, value[i+3:], true
 }
 
 // ResolveMapping resolves every reference-valued entry in m, leaving literals
@@ -117,6 +153,43 @@ func (r Resolver) resolveEnv(ref string) (string, error) {
 		return "", &Error{Code: exitUsage, Msg: fmt.Sprintf("env:// reference %q resolves to an empty or unset variable", ref)}
 	}
 	return value, nil
+}
+
+func (r Resolver) resolveFile(path string) (string, error) {
+	if path == "" {
+		return "", &Error{Code: exitUsage, Msg: "file:// reference is missing a path"}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", &Error{Code: exitAPIFailure, Msg: fmt.Sprintf("reading file:// reference %q: %v", path, err)}
+	}
+	return strings.TrimRight(string(data), "\n"), nil
+}
+
+// resolveManager dispatches a reference to a configured CLI-based password
+// manager, substituting {ref} into its command template.
+func (r Resolver) resolveManager(scheme, ref, full string) (string, error) {
+	for _, m := range r.Managers {
+		if m.Scheme != scheme {
+			continue
+		}
+		if len(m.Command) == 0 {
+			return "", &Error{Code: exitUsage, Msg: fmt.Sprintf("secret manager %q has no command configured", scheme)}
+		}
+		args := make([]string, len(m.Command))
+		for i, part := range m.Command {
+			args[i] = strings.ReplaceAll(part, "{ref}", ref)
+		}
+		out, err := r.Runner.Run("", args[0], args[1:]...)
+		if err != nil {
+			if isNotFound(err) {
+				return "", &Error{Code: exitUnavailable, Msg: fmt.Sprintf("%q (for scheme %s://) was not found on PATH to resolve %q", args[0], scheme, full)}
+			}
+			return "", &Error{Code: exitAPIFailure, Msg: fmt.Sprintf("resolving %q via the %s manager failed: %v", full, scheme, err)}
+		}
+		return strings.TrimRight(out, "\n"), nil
+	}
+	return "", &Error{Code: exitUsage, Msg: fmt.Sprintf("unknown secret-reference scheme %q in %q (register it under [[secrets.manager]] in portablevps.toml)", scheme, full)}
 }
 
 // isNotFound reports whether err indicates the command was not found on PATH.

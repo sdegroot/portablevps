@@ -49,9 +49,6 @@ token = "op://Vault/Hetzner/token"
 	if ctx.Providers["hetzner"].Token != "op://Vault/Hetzner/token" {
 		t.Errorf("hetzner token = %q", ctx.Providers["hetzner"].Token)
 	}
-	if ctx.OperatorAgeKey != ".local/sops/age-key.txt" {
-		t.Errorf("operator age key default = %q", ctx.OperatorAgeKey)
-	}
 }
 
 func TestPrecedenceFlagOverEnvOverLocalOverRepo(t *testing.T) {
