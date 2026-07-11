@@ -87,12 +87,14 @@ type SetupKey struct {
 	AutoGroups []string `json:"auto_groups"`
 }
 
-// Bound the managed setup key rather than issuing an unlimited, year-long one.
-// A key that has expired or exhausted its uses reports valid=false, so the next
-// sync transparently regenerates it — and DR/repurpose always syncs before a
-// host joins.
+// Bind the managed setup key to a single host: it lives only in that one
+// server's sops secrets and is only ever meant to enroll that one box, so a
+// usage limit of 1 caps the blast radius of a leaked key at exactly one rogue
+// peer. A key that has expired or exhausted its single use reports valid=false,
+// so the next sync transparently regenerates it — which is why a (re)install or
+// DR/repurpose always runs `network sync` before the host joins.
 const (
-	setupKeyUsageLimit = 10
+	setupKeyUsageLimit = 1
 	setupKeyExpiresIn  = 90 * 24 * 60 * 60 // 90 days, in seconds
 )
 

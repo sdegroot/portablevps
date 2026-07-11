@@ -54,6 +54,10 @@ func TestEnsureSetupKeyCreatesWhenAbsent(t *testing.T) {
 			if body["type"] != "reusable" {
 				t.Errorf("expected reusable key, got %v", body["type"])
 			}
+			// Single-host binding: a managed key must be usable exactly once.
+			if body["usage_limit"] != float64(1) {
+				t.Errorf("expected usage_limit 1 (single host), got %v", body["usage_limit"])
+			}
 			_ = json.NewEncoder(w).Encode(SetupKey{ID: "k1", Name: "portablevps-box1", Key: "SECRET-KEY", Valid: true})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
