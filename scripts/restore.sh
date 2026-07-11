@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Restores the latest restic snapshot and runs module-owned post-restore hooks.
+# Restores a restic snapshot (newest by default, or $RESTORE_SNAPSHOT) and runs
+# module-owned post-restore hooks.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,8 +82,14 @@ for path in "${clear_paths[@]}"; do
   rm -rf "$path"
 done
 
-restic restore latest --target /
+# Which snapshot to restore. Defaults to the newest, but an operator recovering
+# from data corruption (where the latest snapshot already captured the bad state)
+# can select an earlier one: RESTORE_SNAPSHOT=<id|latest>. `restic snapshots`
+# lists the candidates for this repo.
+restore_snapshot="${RESTORE_SNAPSHOT:-latest}"
+echo "restoring snapshot: $restore_snapshot"
+restic restore "$restore_snapshot" --target /
 run_hooks "$BACKUP_CONFIG_DIR/post-restore.d"
 
 echo "restore complete; module restore hooks ran and app services are intentionally not started"
-echo "next: nixos-rebuild switch --flake .#local-vm"
+echo "next: activate this host's own configuration (e.g. \`portablevps server deploy <server>\` or nixos-rebuild switch --flake .#<server>)"

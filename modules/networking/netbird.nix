@@ -29,11 +29,25 @@ let
       exit 1
     fi
 
-    exec ${netbirdPackage}/bin/netbird \
-      --management-url ${lib.escapeShellArg cfg.managementUrl} \
-      --admin-url ${lib.escapeShellArg cfg.adminUrl} \
-      --hostname ${lib.escapeShellArg net.name} \
-      up --setup-key-file ${config.sops.secrets.${cfg.setupKeySecret}.path}
+    # Retry the join: at boot the management URL or DNS can be briefly
+    # unreachable. This is a Type=oneshot unit, and systemd ignores Restart= for
+    # oneshot services, so the retry MUST live here — a mesh-only host that fails
+    # to join is otherwise unreachable until a manual restart. Once the peer is
+    # registered, subsequent boots reconnect from stored state (the single-use
+    # setup key is already spent, which is fine).
+    for attempt in $(seq 1 10); do
+      if ${netbirdPackage}/bin/netbird \
+          --management-url ${lib.escapeShellArg cfg.managementUrl} \
+          --admin-url ${lib.escapeShellArg cfg.adminUrl} \
+          --hostname ${lib.escapeShellArg net.name} \
+          up --setup-key-file ${config.sops.secrets.${cfg.setupKeySecret}.path}; then
+        exit 0
+      fi
+      echo "netbird up failed (attempt $attempt/10); retrying in 15s" >&2
+      sleep 15
+    done
+    echo "error: NetBird join failed after 10 attempts" >&2
+    exit 1
   '';
 in
 {
@@ -98,8 +112,8 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        Restart = "on-failure";
-        RestartSec = "10s";
+        # No Restart= here: systemd ignores it for Type=oneshot. The join script
+        # retries internally instead.
         ExecStart = netbirdJoin;
       };
     };

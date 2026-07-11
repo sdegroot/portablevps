@@ -74,7 +74,10 @@ let
 
   hookFile = hookDirName: hookOptionName: component:
     let
-      orderName = "${toString component.order}-${component.name}";
+      # Zero-pad the order so the lexicographic `sort` in backup.sh/restore.sh
+      # matches numeric order (otherwise order=5 would run after order=15, and
+      # order=100 before order=15).
+      orderName = "${lib.fixedWidthNumber 4 component.order}-${component.name}";
       hookText = component.${hookOptionName};
     in
     lib.optionalAttrs (hookText != "") {
@@ -225,8 +228,11 @@ in
 
     systemd.services.portablevps-backup = {
       description = "Run coordinated module-owned backup";
-      after = lib.unique (lib.concatMap (component: component.afterServices) componentList);
-      wants = lib.unique (lib.concatMap (component: component.wantsServices) componentList);
+      # network-online is explicit (not just transitive via component afterServices):
+      # the restic repo is remote (S3), and ExecStartPre=init-backup-repo.sh needs
+      # the network on a boot-time Persistent catch-up run.
+      after = lib.unique ([ "network-online.target" ] ++ lib.concatMap (component: component.afterServices) componentList);
+      wants = lib.unique ([ "network-online.target" ] ++ lib.concatMap (component: component.wantsServices) componentList);
       # backup.sh and each component hook use `#!/usr/bin/env bash` and call
       # restic / the component tools (pg_basebackup, podman, …) bare, so the
       # service PATH must carry them — the systemd default has neither bash nor

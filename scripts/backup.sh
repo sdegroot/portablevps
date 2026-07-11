@@ -50,9 +50,29 @@ read_paths() {
 
 run_hooks "$BACKUP_CONFIG_DIR/pre-backup.d"
 
-mapfile -t backup_paths < <(read_paths "$BACKUP_CONFIG_DIR/paths.d")
-if [ "${#backup_paths[@]}" -eq 0 ]; then
+mapfile -t registered_paths < <(read_paths "$BACKUP_CONFIG_DIR/paths.d")
+if [ "${#registered_paths[@]}" -eq 0 ]; then
   echo "error: no backup component paths are registered in $BACKUP_CONFIG_DIR/paths.d" >&2
+  exit 78
+fi
+
+# Only hand restic paths that currently exist. Some registered paths are created
+# lazily by their service — most notably Traefik's acme.json, which appears only
+# after the first certificate is issued. restic exits non-zero when given a
+# missing path, and under `set -euo pipefail` that command substitution failure
+# aborts the whole backup, silently leaving a fresh host with ZERO snapshots
+# until the file materialises. Warn about missing paths (visible in the journal)
+# but back up everything that does exist.
+backup_paths=()
+for path in "${registered_paths[@]}"; do
+  if [ -e "$path" ]; then
+    backup_paths+=("$path")
+  else
+    echo "warning: registered backup path does not exist yet, skipping: $path" >&2
+  fi
+done
+if [ "${#backup_paths[@]}" -eq 0 ]; then
+  echo "error: none of the registered backup paths exist yet in $BACKUP_CONFIG_DIR/paths.d" >&2
   exit 78
 fi
 
