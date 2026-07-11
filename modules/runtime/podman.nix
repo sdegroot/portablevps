@@ -83,7 +83,15 @@
       for unit in /etc/containers/systemd/*.container; do
         [ -e "$unit" ] || continue
         name="$(${pkgs.coreutils}/bin/basename "$unit" .container)"
-        new="$(${pkgs.coreutils}/bin/sha256sum "$unit" | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
+        # Hash the .container PLUS any EnvironmentFile it references — otherwise a
+        # change to the env file (e.g. an app's FORGEJO__*/APP env) leaves the
+        # .container byte-identical, so the container never restarts and the new
+        # config silently never takes effect.
+        hashInputs="$unit"
+        for envFile in $(${pkgs.gnugrep}/bin/grep -iE '^EnvironmentFile=' "$unit" | ${pkgs.gnused}/bin/sed -E 's/^[Ee]nvironment[Ff]ile=-?//'); do
+          [ -f "$envFile" ] && hashInputs="$hashInputs $envFile"
+        done
+        new="$(${pkgs.coreutils}/bin/cat $hashInputs 2>/dev/null | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
         hashFile="$stateDir/$name"
         old=""
         [ -f "$hashFile" ] && old="$(${pkgs.coreutils}/bin/cat "$hashFile")"
