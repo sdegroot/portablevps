@@ -44,9 +44,11 @@ let
     join_unit=${lib.escapeShellArg net.joinUnit}
     port=${toString cfg.port}
     close_after_seconds=${toString cfg.closeAfterSeconds}
+    open_after_seconds=${toString cfg.openAfterSeconds}
     state_dir=${lib.escapeShellArg stateDir}
     open_state="$state_dir/open"
     recovered_at_state="$state_dir/recovered-at"
+    unhealthy_since_state="$state_dir/unhealthy-since"
     allowed_cidrs=(${allowedCidrs})
     country_codes=(${countryCodes})
     declare -A zone_urls=( ${zoneUrlAssoc} )
@@ -148,7 +150,7 @@ let
 
     close_public_ssh() {
       clear_rules
-      rm -f "$open_state" "$recovered_at_state"
+      rm -f "$open_state" "$recovered_at_state" "$unhealthy_since_state"
       echo "public SSH break-glass is closed"
     }
 
@@ -161,9 +163,28 @@ let
 
     if ! vpn_healthy; then
       rm -f "$recovered_at_state"
-      open_public_ssh
+      # Already open from a prior sustained outage: keep it open (refresh rules).
+      if [ -e "$open_state" ]; then
+        open_public_ssh
+        exit 0
+      fi
+      # Not open yet: debounce. Only open after the mesh has been unhealthy for
+      # open_after_seconds, so a brief flap — or an attacker briefly disturbing
+      # the mesh to force public SSH exposure — does not instantly open the port.
+      if [ ! -s "$unhealthy_since_state" ]; then
+        echo "$now" > "$unhealthy_since_state"
+      fi
+      unhealthy_since="$(cat "$unhealthy_since_state" 2>/dev/null || echo "$now")"
+      if [ "$((now - unhealthy_since))" -ge "$open_after_seconds" ]; then
+        open_public_ssh
+      else
+        echo "mesh unhealthy for $((now - unhealthy_since))s; break-glass opens after ''${open_after_seconds}s"
+      fi
       exit 0
     fi
+
+    # Mesh healthy: clear the open-debounce timer.
+    rm -f "$unhealthy_since_state"
 
     if [ ! -e "$open_state" ]; then
       close_public_ssh
@@ -200,6 +221,17 @@ in
       type = lib.types.ints.positive;
       default = 3600;
       description = "Seconds to keep public SSH open after the mesh VPN has recovered.";
+    };
+
+    openAfterSeconds = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 180;
+      description = ''
+        Seconds the mesh must be continuously unhealthy before public SSH is
+        opened. Debounces brief flaps and blunts an attacker who briefly
+        disturbs the mesh to force public SSH exposure. Set to 0 to open
+        immediately (the old behaviour).
+      '';
     };
 
     allowedCidrs = lib.mkOption {
