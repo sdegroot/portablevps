@@ -132,6 +132,20 @@ func (c *Client) CreateZone(name, domain string, groupIDs []string) (*Zone, erro
 	return &zone, nil
 }
 
+// ListRecords returns all records in a zone.
+func (c *Client) ListRecords(zoneID string) ([]Record, error) {
+	var records []Record
+	if err := c.request("GET", "/api/dns/zones/"+zoneID+"/records", nil, &records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// DeleteRecord removes a record from a zone by id.
+func (c *Client) DeleteRecord(zoneID, recordID string) error {
+	return c.request("DELETE", "/api/dns/zones/"+zoneID+"/records/"+recordID, nil, nil)
+}
+
 // UpsertRecord creates or updates a record in a zone, returning the action taken.
 func (c *Client) UpsertRecord(zoneID string, want Record) (string, error) {
 	want.Name = stripDot(want.Name)

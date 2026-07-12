@@ -61,6 +61,7 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 	var hf hostFlags
 	var token, zone, zoneName string
 	var groupIDs []string
+	var prune bool
 	cmd := &cobra.Command{
 		Use:   "dns-sync [server]",
 		Short: "Sync a host's internal proxy DNS names into the NetBird DNS zone",
@@ -105,12 +106,17 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 			if err != nil {
 				return ExitError{Code: 70, Message: err.Error()}
 			}
-			if len(records) == 0 {
+			// This host's peer CNAME target scopes pruning to records it owns.
+			ownedTarget, err := netbird.PlanTarget([]byte(planJSON))
+			if err != nil {
+				return ExitError{Code: 70, Message: err.Error()}
+			}
+			if len(records) == 0 && (!prune || ownedTarget == "") {
 				fmt.Fprintf(cmd.OutOrStdout(), "no internal DNS records for zone %s in %s's plan\n", z, host)
 				return nil
 			}
 			out := cmd.OutOrStdout()
-			err = client.DNSSync(z, zoneName, groupIDs, records, func(action string, r netbird.Record) {
+			err = client.DNSSync(z, zoneName, groupIDs, records, ownedTarget, prune, func(action string, r netbird.Record) {
 				fmt.Fprintf(out, "%s: %s %s %s ttl=%d\n", action, r.Name, r.Type, r.Content, r.TTL)
 			})
 			if err != nil {
@@ -124,5 +130,6 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&zone, "zone", "", "DNS zone domain (else dns_zone)")
 	cmd.Flags().StringVar(&zoneName, "zone-name", "", "DNS zone display name (default: the domain)")
 	cmd.Flags().StringSliceVar(&groupIDs, "dns-group-ids", nil, "distribution group IDs (only needed to create a missing zone)")
+	cmd.Flags().BoolVar(&prune, "prune", true, "delete this host's stale records (records pointing at this peer that are no longer in its proxy plan); never touches other hosts' or manual records")
 	return cmd
 }

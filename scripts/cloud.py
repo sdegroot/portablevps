@@ -1511,7 +1511,9 @@ def command_netbird_dns_sync(_args: argparse.Namespace) -> None:
     zone_name = env("NETBIRD_DNS_ZONE_NAME", zone_domain)
     group_ids = comma_list(env("NETBIRD_DNS_GROUP_IDS", ""))
     ssh_port = env("SSH_PORT", "22")
-    admin_key = env("CLOUD_ADMIN_KEY", ".local/ssh/cloud-admin_ed25519")
+    # Honour a per-server operator key (SERVER=<name>) so this works on boxes
+    # migrated off the shared cloud-admin key; falls back to cloud-admin.
+    admin_key = resolve_admin_key(env("SERVER", ""))
 
     wait_admin_ssh(host, port=ssh_port, admin_key=admin_key)
     plan = proxy_domain_plan(host, port=ssh_port, admin_key=admin_key)

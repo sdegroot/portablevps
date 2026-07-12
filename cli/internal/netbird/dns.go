@@ -52,15 +52,37 @@ func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
 	return out, nil
 }
 
+// PlanTarget returns the mesh CNAME target a host publishes for. Every record a
+// host generates points at the same `<peer>.<mesh>` target, so it uniquely
+// identifies records THIS host owns — the safe scope for pruning on a shared
+// zone. Returns "" if the plan has no NetBird records (nothing to scope by).
+func PlanTarget(planJSON []byte) (string, error) {
+	var plan domainPlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return "", fmt.Errorf("parsing proxy domain plan: %w", err)
+	}
+	for _, d := range plan.Domains {
+		if r := d.DNS.Netbird; r != nil && r.Target != "" {
+			return stripDot(r.Target), nil
+		}
+	}
+	return "", nil
+}
+
 // SyncResult reports what a DNS sync did.
 type SyncResult struct {
 	Action string // per record: created/updated/unchanged
 	Record Record
 }
 
-// DNSSync finds or creates the zone and upserts each record, reporting per-record
-// actions via report.
-func (c *Client) DNSSync(zoneDomain, zoneName string, groupIDs []string, records []Record, report func(action string, r Record)) error {
+// DNSSync finds or creates the zone and upserts each record. When prune is set
+// and ownedTarget is non-empty, it then DELETES any record whose content is
+// ownedTarget (i.e. this host's records) but whose name is no longer in the
+// host's plan — so removing a route from a host removes its orphaned record.
+// Records pointing at other hosts, the k8s operator, or manual entries are never
+// touched, because they don't match ownedTarget. report is called per action
+// (created/updated/unchanged/pruned).
+func (c *Client) DNSSync(zoneDomain, zoneName string, groupIDs []string, records []Record, ownedTarget string, prune bool, report func(action string, r Record)) error {
 	zone, err := c.FindZone(zoneDomain)
 	if err != nil {
 		return err
@@ -74,13 +96,34 @@ func (c *Client) DNSSync(zoneDomain, zoneName string, groupIDs []string, records
 			return err
 		}
 	}
+	desired := make(map[string]bool, len(records))
 	for _, r := range records {
+		desired[stripDot(r.Name)] = true
 		action, err := c.UpsertRecord(zone.ID, r)
 		if err != nil {
 			return err
 		}
 		if report != nil {
 			report(action, r)
+		}
+	}
+
+	if prune && ownedTarget != "" {
+		existing, err := c.ListRecords(zone.ID)
+		if err != nil {
+			return err
+		}
+		target := stripDot(ownedTarget)
+		for _, e := range existing {
+			if stripDot(e.Content) != target || desired[stripDot(e.Name)] {
+				continue
+			}
+			if err := c.DeleteRecord(zone.ID, e.ID); err != nil {
+				return err
+			}
+			if report != nil {
+				report("pruned", e)
+			}
 		}
 	}
 	return nil
