@@ -49,7 +49,9 @@ let
     # Behind the Traefik proxy: honour X-Forwarded-Proto/Host so Spring builds
     # the OIDC redirect_uri with the external https host (else it uses the
     # internal http request and authentik rejects a mismatching redirect_uri).
-    SERVER_FORWARD_HEADERS_STRATEGY = "framework";
+    # NB: Spring relaxed binding removes dashes — server.forward-headers-strategy
+    # is SERVER_FORWARDHEADERSSTRATEGY, NOT SERVER_FORWARD_HEADERS_STRATEGY.
+    SERVER_FORWARDHEADERSSTRATEGY = "framework";
     SPRING_DATASOURCE_URL = jdbcUrl;
     SPRING_DATASOURCE_USERNAME = cfg.database.user;
   } // lib.optionalAttrs oidcEnabled {
