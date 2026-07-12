@@ -60,6 +60,12 @@ let
     "SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_${reg}_ISSUERURI" = cfg.oidc.issuerUri;
     SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI = cfg.oidc.issuerUri;
     EPISTOLA_AUTH_AUTOPROVISION = lib.boolToString cfg.oidc.autoProvision;
+  } // lib.optionalAttrs (oidcEnabled && cfg.oidc.userNameAttribute != null) {
+    # Which claim becomes the Spring principal name (shown in the UI). authentik
+    # defaults to `sub` (an opaque id); set `preferred_username` to match
+    # Keycloak's default and show a real username. Relaxed binding removes
+    # dashes: user-name-attribute -> USERNAMEATTRIBUTE.
+    "SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_${reg}_USERNAMEATTRIBUTE" = cfg.oidc.userNameAttribute;
   } // cfg.extraEnv;
 
   # Secret env, rendered as sops placeholders (or demo values in prototype).
@@ -186,6 +192,17 @@ in
         type = lib.types.bool;
         default = true;
         description = "Create the local user record on first OIDC login (EPISTOLA_AUTH_AUTOPROVISION).";
+      };
+      userNameAttribute = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "preferred_username";
+        description = ''
+          Claim used as the Spring principal name shown in the UI. authentik
+          defaults to `sub` (opaque id); set `preferred_username` to match
+          Keycloak's default and display a real username. Null leaves the
+          provider default.
+        '';
       };
     };
 
