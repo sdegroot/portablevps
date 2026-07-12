@@ -46,6 +46,10 @@ let
     # Bind loopback only; the proxy fronts it on 127.0.0.1:${toString cfg.port}.
     SERVER_ADDRESS = "127.0.0.1";
     SERVER_PORT = toString cfg.port;
+    # Behind the Traefik proxy: honour X-Forwarded-Proto/Host so Spring builds
+    # the OIDC redirect_uri with the external https host (else it uses the
+    # internal http request and authentik rejects a mismatching redirect_uri).
+    SERVER_FORWARD_HEADERS_STRATEGY = "framework";
     SPRING_DATASOURCE_URL = jdbcUrl;
     SPRING_DATASOURCE_USERNAME = cfg.database.user;
   } // lib.optionalAttrs oidcEnabled {
