@@ -27,6 +27,7 @@ dns_zone = "int.example.net"
 op_account = "acme.1password.com"
 [network]
 api_token = "op://Vault/NetBird/token"
+mesh_domain = "example.int"
 [provider.hetzner]
 token = "op://Vault/Hetzner/token"
 `)
@@ -39,6 +40,9 @@ token = "op://Vault/Hetzner/token"
 	}
 	if ctx.DNSZone != "int.example.net" {
 		t.Errorf("dns zone = %q", ctx.DNSZone)
+	}
+	if ctx.MeshDomain != "example.int" {
+		t.Errorf("mesh domain = %q", ctx.MeshDomain)
 	}
 	if ctx.OpAccount != "acme.1password.com" {
 		t.Errorf("op account = %q", ctx.OpAccount)

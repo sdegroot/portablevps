@@ -29,6 +29,7 @@ type Context struct {
 	RepoRoot      string
 	Server        string
 	DNSZone       string
+	MeshDomain    string
 	PublicDNSZone string
 	OpAccount     string
 	Vault         string          // 1Password vault holding per-server key items (empty = file-only)
@@ -48,9 +49,10 @@ type SecretManager struct {
 
 // NetworkConfig holds mesh-backend settings (NetBird today).
 type NetworkConfig struct {
-	APIURL   string
-	APIToken string
-	DNSZone  string
+	APIURL     string
+	APIToken   string
+	DNSZone    string
+	MeshDomain string
 }
 
 // ProviderConfig holds per-provider settings.
@@ -62,6 +64,7 @@ type ProviderConfig struct {
 type file struct {
 	DefaultServer string `toml:"default_server"`
 	DNSZone       string `toml:"dns_zone"`
+	MeshDomain    string `toml:"mesh_domain"`
 	PublicDNSZone string `toml:"public_dns_zone"`
 	Vault         string `toml:"vault"`
 	Secrets       struct {
@@ -72,9 +75,10 @@ type file struct {
 		} `toml:"manager"`
 	} `toml:"secrets"`
 	Network struct {
-		APIURL   string `toml:"api_url"`
-		APIToken string `toml:"api_token"`
-		DNSZone  string `toml:"dns_zone"`
+		APIURL     string `toml:"api_url"`
+		APIToken   string `toml:"api_token"`
+		DNSZone    string `toml:"dns_zone"`
+		MeshDomain string `toml:"mesh_domain"`
 	} `toml:"network"`
 	Provider map[string]struct {
 		Token string `toml:"token"`
@@ -127,6 +131,9 @@ func Resolve(flags Flags, getenv func(string) string) (*Context, error) {
 		DNSZone: firstNonEmpty(
 			getenv("NETBIRD_DNS_ZONE"), localFile.Network.DNSZone, repoFile.Network.DNSZone,
 			localFile.DNSZone, repoFile.DNSZone),
+		MeshDomain: firstNonEmpty(
+			getenv("PORTABLEVPS_MESH_DOMAIN"), localFile.Network.MeshDomain, repoFile.Network.MeshDomain,
+			localFile.MeshDomain, repoFile.MeshDomain),
 		PublicDNSZone: firstNonEmpty(localFile.PublicDNSZone, repoFile.PublicDNSZone),
 		OpAccount:     firstNonEmpty(getenv("OP_ACCOUNT"), localFile.Secrets.OpAccount, repoFile.Secrets.OpAccount),
 		Vault:         firstNonEmpty(getenv("PORTABLEVPS_VAULT"), localFile.Vault, repoFile.Vault),
@@ -135,6 +142,9 @@ func Resolve(flags Flags, getenv func(string) string) (*Context, error) {
 			APIURL:   firstNonEmpty(getenv("NETBIRD_API_URL"), localFile.Network.APIURL, repoFile.Network.APIURL),
 			APIToken: firstNonEmpty(getenv("NETBIRD_API_TOKEN"), localFile.Network.APIToken, repoFile.Network.APIToken),
 			DNSZone:  firstNonEmpty(getenv("NETBIRD_DNS_ZONE"), localFile.Network.DNSZone, repoFile.Network.DNSZone),
+			MeshDomain: firstNonEmpty(
+				getenv("PORTABLEVPS_MESH_DOMAIN"), localFile.Network.MeshDomain, repoFile.Network.MeshDomain,
+				localFile.MeshDomain, repoFile.MeshDomain),
 		},
 		Providers: mergeProviders(repoFile, localFile),
 	}

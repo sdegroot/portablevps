@@ -42,7 +42,7 @@ type hostFlags struct {
 
 func (h *hostFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&h.host, "host", "", "the running host's admin address (default: <server>.<mesh>)")
+	f.StringVar(&h.host, "host", "", "the running host's admin address (default: <server>.<network.mesh_domain>)")
 	f.StringVar(&h.sshPort, "ssh-port", "22", "admin SSH port")
 	f.StringVar(&h.adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "fallback path to the admin SSH private key (used when 1Password has no item)")
 }
@@ -200,14 +200,17 @@ func newServerRollbackCmd(g *globalOptions) *cobra.Command {
 	return cmd
 }
 
-// defaultMeshHost derives <server>.<mesh-zone> when a mesh DNS zone is known,
-// matching the Taskfile's HOST default of "<server>.epistola.int".
+// defaultMeshHost derives the admin address "<server>.<mesh_domain>" — the
+// NetBird peer FQDN — matching the Taskfile's HOST default of
+// "<server>.epistola.int".
 func defaultMeshHost(server string, ctx *config.Context) string {
-	// The internal mesh name is <server> under the network's peer domain. When a
-	// dns_zone is configured we use "<server>.<zone>"; otherwise the operator must
-	// pass --host.
-	if ctx != nil && ctx.DNSZone != "" {
-		return server + "." + ctx.DNSZone
+	// The admin address is the mesh PEER domain (network.mesh_domain, e.g.
+	// "epistola.int"), NOT the service dns_zone (e.g. "int.epistola.io") — those
+	// are distinct: dns_zone holds published app hostnames, mesh_domain is where
+	// NetBird resolves peers for operator SSH. When mesh_domain is unset the
+	// operator must pass --host.
+	if ctx != nil && ctx.MeshDomain != "" {
+		return server + "." + ctx.MeshDomain
 	}
 	return ""
 }
