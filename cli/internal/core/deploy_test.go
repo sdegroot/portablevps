@@ -9,6 +9,7 @@ type fakeHost struct {
 	runs                 []string
 	failTrue             bool
 	failRestoreModeCheck bool
+	journal              string // returned for journalctl commands
 }
 
 func (f *fakeHost) Run(host, command string) (string, error) {
@@ -19,6 +20,9 @@ func (f *fakeHost) Run(host, command string) (string, error) {
 	if f.failRestoreModeCheck && strings.Contains(command, "restore-mode") {
 		return "", &DeployError{Code: 1, Msg: "not in restore mode"}
 	}
+	if strings.Contains(command, "journalctl") {
+		return f.journal, nil
+	}
 	return "", nil
 }
 func (f *fakeHost) RunInput(host, command, _ string) (string, error) {
@@ -28,7 +32,10 @@ func (f *fakeHost) RunInput(host, command, _ string) (string, error) {
 func (f *fakeHost) WaitReady(string) error { return nil }
 func (f *fakeHost) NixSSHOpts() string     { return "-i key -p 22" }
 
-type recordRunner struct{ calls [][]string }
+type recordRunner struct {
+	calls [][]string
+	fail  bool
+}
 
 func (r *recordRunner) Stream(_ string, env map[string]string, name string, args ...string) error {
 	call := append([]string{name}, args...)
@@ -36,6 +43,9 @@ func (r *recordRunner) Stream(_ string, env map[string]string, name string, args
 		call = append(call, "NIX_SSHOPTS="+env["NIX_SSHOPTS"])
 	}
 	r.calls = append(r.calls, call)
+	if r.fail {
+		return &DeployError{Code: 1, Msg: "switch failed"}
+	}
 	return nil
 }
 
@@ -65,6 +75,34 @@ func TestDeployRunsSwitchAndReportsSuccess(t *testing.T) {
 	joined := strings.Join(host.runs, " | ")
 	if !strings.Contains(joined, "deploy-report-success") {
 		t.Errorf("expected success report, got %q", joined)
+	}
+}
+
+func TestDeployFailedSwitchSurfacesBlueGreenHint(t *testing.T) {
+	host := &fakeHost{journal: "blue-green(website): idle green failed health check; kept blue on old image"}
+	runner := &recordRunner{fail: true}
+	var infos []string
+	env := DeployEnv{
+		RepoRoot: "/repo", Runner: runner, Host: host,
+		Report: func(_, status, msg string) {
+			if status == "info" {
+				infos = append(infos, msg)
+			}
+		},
+	}
+	err := Deploy(env, "web", "1.2.3.4")
+	if e, ok := err.(*DeployError); !ok || e.ExitCode() != 70 {
+		t.Fatalf("expected exit 70 on a failed switch, got %v", err)
+	}
+	joined := strings.Join(host.runs, " | ")
+	if !strings.Contains(joined, "deploy-report-failure") {
+		t.Errorf("expected failure report, got %q", joined)
+	}
+	if !strings.Contains(joined, "journalctl -u '*-bluegreen.service'") {
+		t.Errorf("expected blue-green journal fetch on failure, got %q", joined)
+	}
+	if !strings.Contains(strings.Join(infos, " "), "idle green failed health check") {
+		t.Errorf("expected reconcile log surfaced as an info report, got %v", infos)
 	}
 }
 

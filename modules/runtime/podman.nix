@@ -83,6 +83,13 @@
       for unit in /etc/containers/systemd/*.container; do
         [ -e "$unit" ] || continue
         name="$(${pkgs.coreutils}/bin/basename "$unit" .container)"
+        # Blue-green colour units are lifecycle-managed by their reconcile
+        # oneshot (warm idle -> health -> flip -> drain), not by this generic
+        # restarter — bouncing the active colour here would defeat zero-downtime.
+        if [ -f /etc/portablevps/bluegreen-excluded-units ] && \
+           ${pkgs.gnugrep}/bin/grep -qxF "$name" /etc/portablevps/bluegreen-excluded-units; then
+          continue
+        fi
         # Hash the .container PLUS any EnvironmentFile it references — otherwise a
         # change to the env file (e.g. an app's FORGEJO__*/APP env) leaves the
         # .container byte-identical, so the container never restarts and the new

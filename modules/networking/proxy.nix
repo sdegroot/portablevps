@@ -49,8 +49,52 @@ let
       };
 
       upstream = lib.mkOption {
-        type = lib.types.str;
-        description = "HTTP upstream URL, for example http://127.0.0.1:3000.";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Single HTTP upstream URL, for example http://127.0.0.1:3000. Set
+          exactly one of `upstream` or `upstreams`.
+        '';
+      };
+
+      upstreams = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "http://127.0.0.1:4322" "http://127.0.0.1:4323" ];
+        description = ''
+          Multiple HTTP upstream URLs load-balanced by Traefik. Combined with
+          `healthCheck`, Traefik routes only to healthy backends — this is how a
+          blue-green app exposes both colour ports while only the running one
+          receives traffic. Set exactly one of `upstream` or `upstreams`.
+        '';
+      };
+
+      healthCheck = lib.mkOption {
+        type = lib.types.nullOr (lib.types.submodule {
+          options = {
+            path = lib.mkOption {
+              type = lib.types.str;
+              default = "/";
+              description = "HTTP path Traefik probes to decide a backend is healthy.";
+            };
+            interval = lib.mkOption {
+              type = lib.types.str;
+              default = "3s";
+              description = "How often Traefik probes each backend.";
+            };
+            timeout = lib.mkOption {
+              type = lib.types.str;
+              default = "2s";
+              description = "Per-probe timeout.";
+            };
+          };
+        });
+        default = null;
+        description = ''
+          Optional Traefik active health check for the load balancer. Required in
+          practice when `upstreams` lists more than one backend so Traefik only
+          dispatches to backends that are up (e.g. blue-green colour ports).
+        '';
       };
 
       visibility = lib.mkOption {
@@ -129,6 +173,13 @@ let
   };
 
   httpServicesConfig = cfg.http.services // testHttpServices;
+  # A service points at either one `upstream` or a list of `upstreams`; resolve
+  # to a canonical non-empty list, and a single representative URL for the
+  # (single-target) NetBird DNS plan.
+  serviceUpstreams = service:
+    if service.upstreams or [ ] != [ ] then service.upstreams
+    else lib.optional (service.upstream or null != null) service.upstream;
+  serviceUpstream = service: lib.head (serviceUpstreams service);
   normalizeDnsName = name:
     if lib.hasSuffix "." name then name else "${name}.";
   normalizeDomain = name:
@@ -193,9 +244,13 @@ let
 
   httpServices = lib.mapAttrs
     (_name: service: {
-      loadBalancer.servers = [
-        { url = service.upstream; }
-      ];
+      loadBalancer = {
+        servers = map (url: { inherit url; }) (serviceUpstreams service);
+      } // lib.optionalAttrs (service.healthCheck or null != null) {
+        healthCheck = {
+          inherit (service.healthCheck) path interval timeout;
+        };
+      };
     })
     httpServicesConfig;
 
@@ -224,7 +279,7 @@ let
           inherit domain serviceName;
           routeType = "http";
           visibility = service.visibility;
-          upstream = service.upstream;
+          upstream = serviceUpstream service;
         })
         ([ service.domain ] ++ service.aliases))
     httpServicesConfig);
@@ -519,6 +574,12 @@ in
         {
           assertion = lib.all (service: service.tlsPassthrough) (lib.attrValues cfg.tcp.services);
           message = "portablevps.proxy.tcp.services currently supports only tlsPassthrough = true.";
+        }
+        {
+          assertion = lib.all
+            (service: (service.upstream != null) != (service.upstreams != [ ]))
+            (lib.attrValues cfg.http.services);
+          message = "portablevps.proxy.http.services.<name>: set exactly one of `upstream` (single) or `upstreams` (list).";
         }
         {
           assertion = !hasDirectPublicRoutes || cfg.openPublicFirewall;
