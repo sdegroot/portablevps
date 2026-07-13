@@ -39,9 +39,10 @@ let
       (lib.mapAttrsToList (k: secret: "${k}=${renderSecret secret}") cfg.extraSecretEnv) + "\n";
 
   # ---- blue-green ----------------------------------------------------------
+  # The reusable orchestration (colour quadlets, reconcile oneshot, proxy
+  # backends, restart-exclude) lives in lib/blue-green.nix; this module only
+  # supplies the app-specific colour container body via mkColorText.
   bg = cfg.blueGreen.enable;
-  bluePort = cfg.port + 1;
-  greenPort = cfg.port + 2;
 
   # Units the registry-auth oneshot must precede: the single container, or (in
   # blue-green) both colour containers.
@@ -53,9 +54,9 @@ let
   # One colour's quadlet. Identical to the single-container [Container] block
   # except for name + PORT, and it deliberately OMITS [Install] so apps.target
   # does not auto-start it — the reconcile oneshot starts only the active colour.
-  mkColorContainer = color: port: ''
+  mkColorText = { color, containerName, port }: ''
     [Unit]
-    Description=${cfg.containerName}-${color} (stateless web app, blue-green) for portablevps
+    Description=${containerName} (stateless web app, blue-green) for portablevps
     After=network-online.target
     Wants=network-online.target
     PartOf=apps.target
@@ -63,7 +64,7 @@ let
 
     [Container]
     Image=${cfg.image}
-    ContainerName=${cfg.containerName}-${color}
+    ContainerName=${containerName}
     # Host network, bound to loopback — the proxy health-checks 127.0.0.1:${toString port}.
     Network=host
     Environment=HOST=127.0.0.1
@@ -85,86 +86,14 @@ let
     TimeoutStartSec=180
   '';
 
-  # Reconcile/flip, run on the box by `nixos-rebuild switch` (restartTriggers on
-  # the image) and at boot (wantedBy apps.target). Values are inlined by nix.
-  reconcileScript = ''
-    set -u
-    name=${cfg.containerName}
-    bluePort=${toString bluePort}
-    greenPort=${toString greenPort}
-    targetImage=${cfg.image}
-    stateDir=/var/lib/portablevps/$name
-    stateFile=$stateDir/active-color
-    mkdir -p "$stateDir"
-
-    # Pick up the colour .container definitions written by this switch (a pure
-    # image bump can leave restartChangedQuadlets' change set empty).
-    systemctl daemon-reload
-
-    active=$(cat "$stateFile" 2>/dev/null || echo blue)
-    case "$active" in blue|green) ;; *) active=blue ;; esac
-    if [ "$active" = blue ]; then idle=green; activePort=$bluePort; idlePort=$greenPort
-    else idle=blue; activePort=$greenPort; idlePort=$bluePort; fi
-    activeCtr=$name-$active
-    idleCtr=$name-$idle
-    activeUnit=$name-$active.service
-    idleUnit=$name-$idle.service
-
-    running() { [ "$(podman inspect -f '{{.State.Running}}' "$1" 2>/dev/null || echo false)" = true ]; }
-    imageof() { podman inspect -f '{{.Config.Image}}' "$1" 2>/dev/null || true; }
-    # Healthy = podman health "healthy", or (image has no HEALTHCHECK) a running
-    # container that answers HTTP on its port.
-    healthy_ok() {
-      local ctr=$1 port=$2 st
-      st=$(podman inspect -f '{{.State.Health.Status}}' "$ctr" 2>/dev/null || true)
-      if [ "$st" = healthy ]; then return 0; fi
-      if [ -z "$st" ] || [ "$st" = "<no value>" ]; then
-        if running "$ctr" && curl -fsS -o /dev/null "http://127.0.0.1:$port/"; then return 0; fi
-      fi
-      return 1
-    }
-    wait_healthy() {
-      local ctr=$1 port=$2 n=0
-      while [ "$n" -lt 60 ]; do
-        if healthy_ok "$ctr" "$port"; then return 0; fi
-        n=$((n + 1)); sleep 2
-      done
-      return 1
-    }
-
-    # Steady state / idempotent re-run: active already on the target image.
-    if running "$activeCtr" && [ "$(imageof "$activeCtr")" = "$targetImage" ]; then
-      exit 0
-    fi
-
-    # Boot / first enable: active not running -> start it (nothing to drain).
-    if ! running "$activeCtr"; then
-      echo "blue-green($name): starting active colour $active"
-      systemctl start "$activeUnit" || true
-      wait_healthy "$activeCtr" "$activePort" \
-        || echo "blue-green($name): active colour $active not healthy yet; Restart=always will retry" >&2
-      exit 0
-    fi
-
-    # Version change: active runs an older image -> warm idle, flip, drain.
-    echo "blue-green($name): flipping $active -> $idle onto $targetImage"
-    podman pull ${lib.optionalString useAuth "--authfile=${authFile} "}"$targetImage" || true
-    systemctl restart "$idleUnit"
-    if wait_healthy "$idleCtr" "$idlePort"; then
-      printf '%s' "$idle" > "$stateFile"
-      # Draining the old colour SIGKILLs a container that ignores SIGTERM
-      # (exit 137), which leaves the unit "failed" and makes the whole switch
-      # report failure. reset-failed clears it — the stop was intentional.
-      systemctl stop "$activeUnit" || true
-      systemctl reset-failed "$activeUnit" 2>/dev/null || true
-      echo "blue-green($name): $idle healthy and now active; drained $active"
-      exit 0
-    fi
-    echo "blue-green($name): idle colour $idle failed health check; kept $active on old image" >&2
-    systemctl stop "$idleUnit" || true
-    systemctl reset-failed "$idleUnit" 2>/dev/null || true
-    exit 1
-  '';
+  bgFragment = import ../../lib/blue-green.nix { inherit lib pkgs; } {
+    inherit config;
+    name = cfg.containerName;
+    image = cfg.image;
+    port = cfg.port;
+    pullAuthFile = if useAuth then authFile else null;
+    mkContainerText = mkColorText;
+  };
 in
 {
   options.portablevps.apps.website = {
@@ -278,42 +207,7 @@ in
     # Blue-green mode: two colour quadlets + a reconcile oneshot (selector at
     # boot, flipper on image change) + the proxy backends + the restart-exclude
     # list so restartChangedQuadlets leaves the colour units to the reconcile.
-    (lib.mkIf bg {
-      environment.etc."containers/systemd/${cfg.containerName}-blue.container".text =
-        mkColorContainer "blue" bluePort;
-      environment.etc."containers/systemd/${cfg.containerName}-green.container".text =
-        mkColorContainer "green" greenPort;
-      environment.etc."portablevps/bluegreen-excluded-units".text =
-        "${cfg.containerName}-blue\n${cfg.containerName}-green\n";
-
-      systemd.services."${cfg.containerName}-bluegreen" = {
-        description = "Blue-green reconcile/flip for ${cfg.containerName}";
-        after = [ "network-online.target" ];
-        wants = [ "network-online.target" ];
-        partOf = [ "apps.target" ];
-        wantedBy = lib.optional (!config.portablevps.restoreMode) "apps.target";
-        # Re-run by `nixos-rebuild switch` whenever the image changes; the switch
-        # waits for this oneshot and propagates its exit status to the deploy.
-        restartTriggers = [ cfg.image ];
-        path = with pkgs; [ podman curl coreutils systemd ];
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-        };
-        script = reconcileScript;
-      };
-
-      # Front both colour ports; Traefik's health check routes only to the
-      # running (active) colour. Ports live here (single source); the server def
-      # sets domain/visibility on the same service (submodule merge).
-      portablevps.proxy.http.services.${cfg.containerName} = {
-        upstreams = lib.mkDefault [
-          "http://127.0.0.1:${toString bluePort}"
-          "http://127.0.0.1:${toString greenPort}"
-        ];
-        healthCheck = lib.mkDefault { path = "/"; interval = "3s"; timeout = "2s"; };
-      };
-    })
+    (lib.mkIf bg bgFragment)
 
     # Private-registry pull auth: the sops secret holds ONLY the token; a oneshot
     # combines it with the (non-secret) username and base64-encodes `user:token`

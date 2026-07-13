@@ -210,6 +210,29 @@ has corrupted state.
 Do not overwrite PostgreSQL state until you have identified the snapshot to
 restore and accepted the data loss window.
 
+## Zero-Downtime App Deploys (Blue-Green)
+
+For an app with `blueGreen.enable = true` (see `docs/run-your-own-app.md`),
+deploy with the CLI so the flip runs and its result gates the deploy:
+
+```sh
+portablevps server deploy <server>
+```
+
+The switch re-runs an on-box reconcile oneshot that warms the idle colour on the
+new image, waits for health, flips, then drains the old colour. Notes:
+
+- **A failed flip fails the deploy** (idle never healthy) and leaves the old
+  colour serving. The CLI prints the reconcile log on failure; also check
+  `journalctl -u '<app>-bluegreen.service'`. Fix the image and redeploy.
+- **Which colour is live** is in `/var/lib/portablevps/<app>/active-color`;
+  `sudo podman ps` shows the single running colour (`<app>-blue`/`<app>-green`).
+- **To roll back a version**, deploy the previous image tag — the reconcile
+  flips back the same way. `nixos-rebuild --rollback` also works but bypasses the
+  flip (it restarts the colour in place; expect a brief blip).
+- **First cutover** (turning blue-green on) has a one-time blip and leaves the
+  old single container; stop it once with `sudo systemctl stop <app>`.
+
 ## Full Host Loss Or Host Move
 
 Use `docs/disaster-recovery.md` when the host is destroyed, the provider is

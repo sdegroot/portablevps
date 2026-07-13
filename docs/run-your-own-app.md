@@ -68,6 +68,55 @@ portablevps.apps.custom.internal = {
 For ghcr.io the token must be a **classic** PAT with `read:packages` (fine-grained
 tokens have no packages permission).
 
+## Zero-downtime deploys (blue-green)
+
+A normal deploy of a single-container app stops the container, pulls the new
+image (which can take minutes), then starts it — so the proxy returns `502` the
+whole time. Blue-green removes that: it runs **two colour slots** (`port+1` and
+`port+2`) but keeps **only one running** in steady state, and on an image change
+it warms the idle colour on the new image, waits until it is healthy, flips
+traffic, and drains the old colour — no dropped request.
+
+It is enabled on the first-party **website** app today
+(`portablevps.apps.website.blueGreen.enable = true`). The reusable machinery
+lives in `lib/blue-green.nix`; an app module opts in by calling it with its
+image, base port, and a `mkContainerText` that renders one colour's Quadlet:
+
+```nix
+# inside an app module (config, lib, pkgs in scope)
+(lib.mkIf cfg.blueGreen.enable (import ../../lib/blue-green.nix { inherit lib pkgs; } {
+  inherit config;
+  name  = cfg.containerName;
+  image = cfg.image;
+  port  = cfg.port;                 # colours run on port+1 / port+2
+  pullAuthFile = if useAuth then authFile else null;
+  mkContainerText = { color, containerName, port }: '' ...one colour's quadlet... '';
+}))
+```
+
+The helper emits the two colour quadlets, the reconcile oneshot, the proxy
+backends (`upstreams` + `healthCheck`), and the restart-exclude entry. The proxy
+side is already generic: give a service **`upstreams`** (a list) + a
+**`healthCheck`** instead of a single `upstream`, and it also gets a Traefik
+retry middleware so a request that lands on a just-drained colour is retried
+against the healthy one.
+
+Requirements and behaviour:
+
+- **Stateless only.** The two colours run simultaneously during a flip, so they
+  must not share a mutable/backed-up volume. (The generic `custom` app does not
+  expose `blueGreen` yet — it is for stateful apps too.)
+- **Deploy via the CLI.** The flip is an on-box reconcile oneshot that
+  `nixos-rebuild switch` re-runs (`restartTriggers = [ image ]`); a normal
+  `portablevps server deploy` triggers it and the switch waits for its exit
+  status, so a failed flip (idle never healthy) keeps the old colour serving and
+  fails the deploy. A colour set left un-flipped by a raw `nixos-rebuild` reveals
+  no new version until a deploy runs the reconcile.
+- **One-time cutover.** Turning blue-green on removes the single container and
+  moves the proxy to the colour ports, so the *first* switch has a brief blip and
+  leaves the old single container to be stopped once. Every subsequent deploy is
+  zero-downtime.
+
 ## Options reference
 
 | Option | Purpose |

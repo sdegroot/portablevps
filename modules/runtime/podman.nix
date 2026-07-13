@@ -1,7 +1,21 @@
 # Enables Podman as the container runtime for service Quadlets.
-{ pkgs, ... }:
+{ pkgs, lib, config, ... }:
 
 {
+  options.portablevps.podman.bluegreenExcludedUnits = lib.mkOption {
+    type = lib.types.listOf lib.types.str;
+    default = [ ];
+    example = [ "website-blue" "website-green" ];
+    description = ''
+      Quadlet unit basenames the on-switch restarter must NOT bounce, because a
+      blue-green reconcile oneshot owns their lifecycle (warm idle -> health ->
+      flip -> drain). Blue-green apps append their colour units here (see
+      lib/blue-green.nix); the restarter skips any `.container` whose basename is
+      in this list.
+    '';
+  };
+
+  config = {
   virtualisation.podman = {
     enable = true;
     dockerCompat = false;
@@ -50,6 +64,13 @@
   # driver netavark shared the firewall's chains, so this didn't arise.) Trusting the
   # bridges lets container->host traffic (DNS + published-port loopbacks) through.
   networking.firewall.trustedInterfaces = [ "podman+" ];
+
+  # The restarter below reads this file to skip reconcile-managed blue-green
+  # colour units. Rendered from the option so multiple blue-green apps merge.
+  environment.etc."portablevps/bluegreen-excluded-units" =
+    lib.mkIf (config.portablevps.podman.bluegreenExcludedUnits != [ ]) {
+      text = lib.concatMapStrings (u: "${u}\n") config.portablevps.podman.bluegreenExcludedUnits;
+    };
 
   # Restart quadlet containers whose definition changed on `nixos-rebuild switch`.
   #
@@ -117,5 +138,6 @@
         done
       fi
     '';
+  };
   };
 }
