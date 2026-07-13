@@ -152,12 +152,17 @@ let
     systemctl restart "$idleUnit"
     if wait_healthy "$idleCtr" "$idlePort"; then
       printf '%s' "$idle" > "$stateFile"
+      # Draining the old colour SIGKILLs a container that ignores SIGTERM
+      # (exit 137), which leaves the unit "failed" and makes the whole switch
+      # report failure. reset-failed clears it — the stop was intentional.
       systemctl stop "$activeUnit" || true
+      systemctl reset-failed "$activeUnit" 2>/dev/null || true
       echo "blue-green($name): $idle healthy and now active; drained $active"
       exit 0
     fi
     echo "blue-green($name): idle colour $idle failed health check; kept $active on old image" >&2
     systemctl stop "$idleUnit" || true
+    systemctl reset-failed "$idleUnit" 2>/dev/null || true
     exit 1
   '';
 in
