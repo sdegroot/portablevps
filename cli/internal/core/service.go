@@ -41,9 +41,12 @@ type MigrateOpts struct {
 }
 
 // Migrate moves a service from SourceHost to TargetHost via its backup
-// repository: put the target in restore mode, take a final source backup, stop
-// the source, restore onto the target, switch the target to normal, and verify.
-// DNS repointing is left to `network dns-sync` (printed as the final step).
+// repository: put the target in restore mode, stop the source, take a final
+// source backup, restore onto the target, switch the target to normal, and
+// verify. The source is stopped BEFORE the final backup so no writes land
+// between the snapshot and the cutover (backing up a still-live source would
+// lose any write made in that window). DNS repointing is left to
+// `network dns-sync` (printed as the final step).
 func Migrate(env ServiceEnv, o MigrateOpts) error {
 	report := env.report()
 
@@ -61,14 +64,17 @@ func Migrate(env ServiceEnv, o MigrateOpts) error {
 		}
 	}
 
+	// Quiesce the source first so the final backup is a consistent snapshot with
+	// no concurrent writes. A failed stop aborts the migration — proceeding would
+	// back up (and cut over to) a still-live source and silently lose writes.
+	report("cutover", "run", "stopping app services on "+o.SourceHost)
+	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl stop apps.target"); err != nil {
+		return provisionErr(70, "stopping source apps: %v", err)
+	}
+
 	report("backup", "run", "final source backup on "+o.SourceHost)
 	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl start portablevps-backup.service"); err != nil {
 		return provisionErr(70, "final source backup failed: %v", err)
-	}
-
-	report("cutover", "run", "stopping app services on "+o.SourceHost)
-	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl stop apps.target || true"); err != nil {
-		return provisionErr(70, "stopping source apps: %v", err)
 	}
 
 	report("restore", "run", "restoring the backup onto "+o.TargetHost)

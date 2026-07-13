@@ -25,6 +25,14 @@ type domainPlan struct {
 	Domains []planDomain `json:"domains"`
 }
 
+// nameInZone reports whether a DNS name belongs to zone (the name equals the
+// zone or is a subdomain of it), both compared dot-insensitively.
+func nameInZone(name, zone string) bool {
+	name = stripDot(name)
+	zone = stripDot(zone)
+	return name == zone || strings.HasSuffix(name, "."+zone)
+}
+
 // RecordsFromPlan derives the internal DNS records for zoneDomain from a host's
 // proxy domain plan JSON (produced by `portablevps-proxy-domain-plan`).
 func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
@@ -32,7 +40,6 @@ func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
 	if err := json.Unmarshal(planJSON, &plan); err != nil {
 		return nil, fmt.Errorf("parsing proxy domain plan: %w", err)
 	}
-	zone := stripDot(zoneDomain)
 	var out []Record
 	for _, d := range plan.Domains {
 		r := d.DNS.Netbird
@@ -40,7 +47,7 @@ func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
 			continue
 		}
 		name := stripDot(r.Name)
-		if name != zone && !strings.HasSuffix(name, "."+zone) {
+		if !nameInZone(name, zoneDomain) {
 			continue
 		}
 		ttl := r.TTL
@@ -50,6 +57,43 @@ func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
 		out = append(out, Record{Name: name, Type: r.Type, Content: stripDot(r.Target), TTL: ttl})
 	}
 	return out, nil
+}
+
+// RecordsFromPlanByZone buckets every NetBird record in the plan into the first
+// zone (of zones) it belongs to. Records matching no configured zone are
+// returned in `unmatched` so the caller can warn instead of silently dropping
+// them — a host's split-horizon overrides (e.g. auth.epistola.app) live in a
+// different zone (epistola.app) than its internal names (int.epistola.io), and
+// both must be published.
+func RecordsFromPlanByZone(planJSON []byte, zones []string) (byZone map[string][]Record, unmatched []Record, err error) {
+	var plan domainPlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return nil, nil, fmt.Errorf("parsing proxy domain plan: %w", err)
+	}
+	byZone = make(map[string][]Record, len(zones))
+	for _, d := range plan.Domains {
+		r := d.DNS.Netbird
+		if r == nil {
+			continue
+		}
+		ttl := r.TTL
+		if ttl == 0 {
+			ttl = 300
+		}
+		rec := Record{Name: stripDot(r.Name), Type: r.Type, Content: stripDot(r.Target), TTL: ttl}
+		matched := false
+		for _, z := range zones {
+			if nameInZone(rec.Name, z) {
+				byZone[z] = append(byZone[z], rec)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			unmatched = append(unmatched, rec)
+		}
+	}
+	return byZone, unmatched, nil
 }
 
 // PlanTarget returns the mesh CNAME target a host publishes for. Every record a

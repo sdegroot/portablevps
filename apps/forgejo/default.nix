@@ -375,11 +375,11 @@ in
               --username ${lib.escapeShellArg cfg.admin.username} \
               --password "$admin_password" \
               --email ${lib.escapeShellArg cfg.admin.email} \
-              --must-change-password=false || true
+              --must-change-password=false
           else
             ${forgejoCli} admin user change-password \
               --username ${lib.escapeShellArg cfg.admin.username} \
-              --password "$admin_password" || true
+              --password "$admin_password"
           fi
         '' + lib.optionalString oauthEnabled ''
 
@@ -396,7 +396,7 @@ in
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
               --secret "$oauth_secret" \
               --auto-discover-url "$auth_discover_url" \
-              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} || true
+              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)}
           else
             ${forgejoCli} admin auth add-oauth \
               --name ${lib.escapeShellArg cfg.oidc.name} \
@@ -404,7 +404,7 @@ in
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
               --secret "$oauth_secret" \
               --auto-discover-url "$auth_discover_url" \
-              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} || true
+              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)}
           fi
         '';
       };
