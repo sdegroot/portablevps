@@ -307,12 +307,17 @@ in
         RemainAfterExit = true;
       };
       path = [ pkgs.rsync pkgs.coreutils ];
+      # --checksum is REQUIRED: Nix store sources all have mtime 1970, and a
+      # same-length edit (e.g. swapping "explicit-consent" -> "implicit-consent",
+      # both 16 chars) leaves file size AND mtime unchanged, so a plain `rsync -a`
+      # (size+mtime quick-check) silently SKIPS the change and the blueprint never
+      # updates. Compare by content instead. (Small files; cost is negligible.)
       script = ''
         install -d -o ${toString akUid} -g ${toString akUid} -m 0750 ${blueprintsDir} ${publicMediaDir}
       '' + lib.optionalString (cfg.blueprintsDir != null) ''
-        rsync -a --delete --chown=${toString akUid}:${toString akUid} ${cfg.blueprintsDir}/ ${blueprintsDir}/
+        rsync -a --checksum --delete --chown=${toString akUid}:${toString akUid} ${cfg.blueprintsDir}/ ${blueprintsDir}/
       '' + lib.optionalString (cfg.assetsDir != null) ''
-        rsync -a --chown=${toString akUid}:${toString akUid} ${cfg.assetsDir}/ ${publicMediaDir}/
+        rsync -a --checksum --chown=${toString akUid}:${toString akUid} ${cfg.assetsDir}/ ${publicMediaDir}/
       '';
     };
 
