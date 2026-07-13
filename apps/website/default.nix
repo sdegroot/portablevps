@@ -72,6 +72,13 @@ let
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
     ${lib.optionalString hasSecretEnv "EnvironmentFile=${secretEnvFile}"}
     ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
+    # Disable the image's built-in HEALTHCHECK: it commonly hardcodes the app's
+    # default port (e.g. an Astro image probes 4321), so on a colour port it
+    # always reports unhealthy — which both fails the switch (podman healthcheck
+    # transient) and breaks the reconcile gate. Health is enforced by HTTP on the
+    # REAL port instead: Traefik's loadBalancer healthCheck (routing) and the
+    # reconcile's curl probe (flip gate).
+    PodmanArgs=--no-healthcheck
 
     [Service]
     Restart=always
