@@ -27,6 +27,16 @@ let
   useAuth = cfg.pullAuthSecret != null && !prototype;
 
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
+
+  # Secret-backed env (e.g. OIDC client secret): rendered from sops into an
+  # EnvironmentFile. In prototype/local-VM mode there is no sops, so demo values
+  # are written directly so the config still evaluates/boots.
+  secretEnvFile = "/etc/portablevps/${cfg.containerName}.env";
+  hasSecretEnv = cfg.extraSecretEnv != { };
+  renderSecret = key: if prototype then "demo" else config.sops.placeholder.${key};
+  secretEnvContent =
+    lib.concatStringsSep "\n"
+      (lib.mapAttrsToList (k: secret: "${k}=${renderSecret secret}") cfg.extraSecretEnv) + "\n";
 in
 {
   options.portablevps.apps.website = {
@@ -80,6 +90,17 @@ in
       default = { };
       description = "Extra plain environment variables passed to the container.";
     };
+
+    extraSecretEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = { OIDC_CLIENT_SECRET = "website/oidc-client-secret"; };
+      description = ''
+        Env backed by sops secrets, as ENV_VAR = "<sops key>". Each key is
+        declared as a sops secret and rendered into an EnvironmentFile as
+        ENV_VAR=<placeholder>. Use for the OIDC client secret, AUTH_SECRET, etc.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
@@ -101,6 +122,7 @@ in
         Environment=PORT=${toString cfg.port}
         Environment=NODE_ENV=production
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
+        ${lib.optionalString hasSecretEnv "EnvironmentFile=${secretEnvFile}"}
         ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
         # No HealthCmd here: when the image ships its own HEALTHCHECK, podman uses
         # it automatically. Restart=always covers a crashed container meanwhile.
@@ -142,6 +164,23 @@ in
           ${pkgs.coreutils}/bin/install -Dm0400 /dev/null ${authFile}
           printf '{"auths":{"${registry}":{"auth":"%s"}}}' "$auth" > ${authFile}
         '';
+      };
+    })
+
+    # Secret-backed env → EnvironmentFile. Normal mode renders from sops;
+    # prototype/local-VM writes demo values directly (no sops).
+    (lib.mkIf (hasSecretEnv && !prototype) {
+      sops.secrets = lib.genAttrs (lib.unique (lib.attrValues cfg.extraSecretEnv)) (_: { });
+      sops.templates."portablevps/${cfg.containerName}.env" = {
+        path = secretEnvFile;
+        mode = "0400";
+        content = secretEnvContent;
+      };
+    })
+    (lib.mkIf (hasSecretEnv && prototype) {
+      environment.etc."portablevps/${cfg.containerName}.env" = {
+        mode = "0400";
+        text = secretEnvContent;
       };
     })
   ]);
