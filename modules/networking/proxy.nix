@@ -221,8 +221,24 @@ let
         } // lib.optionalAttrs cfg.acme.enable {
           certResolver = acmeResolverName;
         };
-      } // service.extraRouterConfig)
+      }
+      # A health-checked (multi-backend) service gets a retry middleware: when a
+      # backend is drained mid-deploy (blue-green flip), a request dispatched to
+      # it before the health check catches up gets connection-refused; retry
+      # re-dispatches to the healthy backend so the flip is truly zero-downtime.
+      // lib.optionalAttrs (service.healthCheck or null != null) {
+        middlewares = [ "${name}-retry" ];
+      }
+      // service.extraRouterConfig)
     httpServicesConfig;
+
+  httpMiddlewares = lib.listToAttrs (lib.concatLists (lib.mapAttrsToList
+    (name: service:
+      lib.optional (service.healthCheck or null != null) {
+        name = "${name}-retry";
+        value.retry = { attempts = 2; initialInterval = "100ms"; };
+      })
+    httpServicesConfig));
 
   httpDenyRouters = lib.listToAttrs (lib.flatten (lib.mapAttrsToList
     (name: service:
@@ -615,10 +631,12 @@ in
           })
         ];
         dynamicConfigOptions = lib.mkIf hasRoutes {
-          http = lib.mkIf (httpServicesConfig != { }) {
+          http = lib.mkIf (httpServicesConfig != { }) ({
             routers = httpRouters // httpDenyRouters;
             services = httpServices;
-          };
+          } // lib.optionalAttrs (httpMiddlewares != { }) {
+            middlewares = httpMiddlewares;
+          });
           tcp = lib.mkIf (cfg.tcp.services != { }) {
             routers = tcpRouters;
             services = tcpServices;
