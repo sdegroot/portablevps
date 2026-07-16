@@ -1,7 +1,21 @@
 # Enables Podman as the container runtime for service Quadlets.
-{ pkgs, ... }:
+{ pkgs, lib, config, ... }:
 
 {
+  options.portablevps.podman.bluegreenExcludedUnits = lib.mkOption {
+    type = lib.types.listOf lib.types.str;
+    default = [ ];
+    example = [ "website-blue" "website-green" ];
+    description = ''
+      Quadlet unit basenames the on-switch restarter must NOT bounce, because a
+      blue-green reconcile oneshot owns their lifecycle (warm idle -> health ->
+      flip -> drain). Blue-green apps append their colour units here (see
+      lib/blue-green.nix); the restarter skips any `.container` whose basename is
+      in this list.
+    '';
+  };
+
+  config = {
   virtualisation.podman = {
     enable = true;
     dockerCompat = false;
@@ -51,6 +65,13 @@
   # bridges lets container->host traffic (DNS + published-port loopbacks) through.
   networking.firewall.trustedInterfaces = [ "podman+" ];
 
+  # The restarter below reads this file to skip reconcile-managed blue-green
+  # colour units. Rendered from the option so multiple blue-green apps merge.
+  environment.etc."portablevps/bluegreen-excluded-units" =
+    lib.mkIf (config.portablevps.podman.bluegreenExcludedUnits != [ ]) {
+      text = lib.concatMapStrings (u: "${u}\n") config.portablevps.podman.bluegreenExcludedUnits;
+    };
+
   # Restart quadlet containers whose definition changed on `nixos-rebuild switch`.
   #
   # Quadlet containers are GENERATED units: podman's systemd generator reads
@@ -83,6 +104,13 @@
       for unit in /etc/containers/systemd/*.container; do
         [ -e "$unit" ] || continue
         name="$(${pkgs.coreutils}/bin/basename "$unit" .container)"
+        # Blue-green colour units are lifecycle-managed by their reconcile
+        # oneshot (warm idle -> health -> flip -> drain), not by this generic
+        # restarter — bouncing the active colour here would defeat zero-downtime.
+        if [ -f /etc/portablevps/bluegreen-excluded-units ] && \
+           ${pkgs.gnugrep}/bin/grep -qxF "$name" /etc/portablevps/bluegreen-excluded-units; then
+          continue
+        fi
         # Hash the .container PLUS any EnvironmentFile it references — otherwise a
         # change to the env file (e.g. an app's FORGEJO__*/APP env) leaves the
         # .container byte-identical, so the container never restarts and the new
@@ -110,5 +138,6 @@
         done
       fi
     '';
+  };
   };
 }

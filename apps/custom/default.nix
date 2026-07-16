@@ -151,6 +151,35 @@ let
           description = "Restore ordering for this app's component (postgres=10, acme=15, container-state=20).";
         };
       };
+
+      blueGreen = {
+        enable = lib.mkEnableOption ''
+          zero-downtime blue-green deploys for this app. Runs two colour slots
+          (on port+1/port+2) but keeps only one running; on an image change a
+          reconcile oneshot warms the idle colour on the new image, waits for
+          health, flips, and drains the old colour (see lib/blue-green.nix and
+          docs/run-your-own-app.md). Requirements: the app must have an HTTP
+          surface (`port` set) AND listen on the `$PORT` env var (the colour
+          slots inject PORT=port+1 / PORT=port+2 so both can run at once). The
+          image's own HEALTHCHECK and any `healthCmd` are dropped; health is
+          probed over HTTP on the colour port. Stateless by default — see
+          `blueGreen.sharedVolumesOk` before combining with volumes
+        '';
+        sharedVolumesOk = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Acknowledge that this app tolerates TWO instances accessing its
+            volumes concurrently — during a flip both colours run for a few
+            seconds against the same host paths. Required to combine
+            `blueGreen.enable` with any `volumes`. Leave false for single-writer
+            stores (Postgres, SQLite, most embedded DBs): a second instance on
+            the same data directory will fail to start or corrupt it. Safe to set
+            for read-only content volumes or apps built for concurrent shared
+            storage.
+          '';
+        };
+      };
     };
   });
 
@@ -200,6 +229,58 @@ let
       [Install]
       WantedBy=apps.target
     '';
+
+    bg = app.blueGreen.enable;
+    # Only render the blue-green machinery once the config is valid (port set);
+    # otherwise `port + 1` in the helper would crash before the assertion below
+    # can report the real problem cleanly.
+    bgReady = app.blueGreen.enable && app.port != null;
+
+    # One colour's quadlet for blue-green: the container body with a per-colour
+    # name + PORT (injected LAST so it wins over any env.PORT), no [Install] (the
+    # reconcile starts only the active colour), and --no-healthcheck (health is
+    # HTTP on the colour port via Traefik + the reconcile probe).
+    mkColorText = { color, containerName, port }: ''
+      [Unit]
+      Description=${containerName} (portablevps custom app, blue-green)
+      After=network-online.target
+      Wants=network-online.target
+      PartOf=apps.target
+      ${restoreGate}
+
+      [Container]
+      Image=${app.image}
+      ContainerName=${containerName}
+      Network=${app.network}
+      ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") app.env)}
+      Environment=PORT=${toString port}
+      ${lib.optionalString hasSecretEnv "EnvironmentFile=${envFile}"}
+      ${lib.concatMapStringsSep "\n" (v: "Volume=${v.hostPath}:${v.containerPath}") app.volumes}
+      ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
+      ${lib.concatMapStringsSep "\n" (a: "PodmanArgs=${a}") app.extraPodmanArgs}
+      PodmanArgs=--no-healthcheck
+
+      [Service]
+      Restart=always
+      TimeoutStartSec=180
+    '';
+
+    # Config fragment from the shared blue-green helper (colour quadlets,
+    # reconcile oneshot, proxy backends, restart-exclude), for blue-green apps.
+    bgFragment = import ../../lib/blue-green.nix { inherit lib pkgs; } {
+      inherit config;
+      name = app.containerName;
+      image = app.image;
+      port = app.port;
+      pullAuthFile = if useAuth then authFile else null;
+      mkContainerText = mkColorText;
+    };
+
+    # Units the registry-auth oneshot must precede.
+    authTargets =
+      if bg
+      then [ "${app.containerName}-blue.service" "${app.containerName}-green.service" ]
+      else [ "${app.containerName}.service" ];
   };
 
   derived = lib.mapAttrsToList derive enabledApps;
@@ -221,7 +302,10 @@ in
   # without evaluating `enabledApps`, which is what breaks the recursion.
   config = {
     environment.etc = lib.mkMerge (
-      (map (d: { "containers/systemd/${d.app.containerName}.container".text = d.containerText; }) derived)
+      # Single container — blue-green apps emit colour quadlets via bgFragment instead.
+      (map (d: lib.optionalAttrs (!d.bg) { "containers/systemd/${d.app.containerName}.container".text = d.containerText; }) derived)
+      # Blue-green colour quadlets (from the shared helper).
+      ++ (map (d: lib.optionalAttrs d.bgReady d.bgFragment.environment.etc) derived)
       # Secret env under prototype/local-VM: placeholders so the container boots
       # for DR testing without a sops file.
       ++ (map
@@ -241,28 +325,38 @@ in
 
     # Private-registry pull auth (mirrors the website app): sops holds only the
     # token; a oneshot base64-encodes user:token into a podman authfile.
-    systemd.services = lib.mkMerge (map
-      (d: lib.optionalAttrs d.useAuth {
-        "${d.app.containerName}-registry-auth" = {
-          description = "Render the ${d.app.containerName} podman registry authfile from sops";
-          before = [ "${d.app.containerName}.service" ];
-          requiredBy = [ "${d.app.containerName}.service" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
+    systemd.services = lib.mkMerge (
+      (map
+        (d: lib.optionalAttrs d.useAuth {
+          "${d.app.containerName}-registry-auth" = {
+            description = "Render the ${d.app.containerName} podman registry authfile from sops";
+            before = d.authTargets;
+            requiredBy = d.authTargets;
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+            };
+            script = ''
+              set -eu
+              token="$(${pkgs.coreutils}/bin/tr -d '\n' < ${config.sops.secrets.${d.app.pullAuthSecret}.path})"
+              auth="$(${pkgs.coreutils}/bin/printf '%s:%s' ${lib.escapeShellArg d.app.pullAuthUser} "$token" \
+                | ${pkgs.coreutils}/bin/base64 -w0)"
+              umask 077
+              ${pkgs.coreutils}/bin/install -Dm0400 /dev/null ${d.authFile}
+              printf '{"auths":{"${d.registry}":{"auth":"%s"}}}' "$auth" > ${d.authFile}
+            '';
           };
-          script = ''
-            set -eu
-            token="$(${pkgs.coreutils}/bin/tr -d '\n' < ${config.sops.secrets.${d.app.pullAuthSecret}.path})"
-            auth="$(${pkgs.coreutils}/bin/printf '%s:%s' ${lib.escapeShellArg d.app.pullAuthUser} "$token" \
-              | ${pkgs.coreutils}/bin/base64 -w0)"
-            umask 077
-            ${pkgs.coreutils}/bin/install -Dm0400 /dev/null ${d.authFile}
-            printf '{"auths":{"${d.registry}":{"auth":"%s"}}}' "$auth" > ${d.authFile}
-          '';
-        };
-      })
-      derived);
+        })
+        derived)
+      # Blue-green reconcile oneshot (from the shared helper).
+      ++ (map (d: lib.optionalAttrs d.bgReady d.bgFragment.systemd.services) derived));
+
+    # Blue-green proxy backends (both colour ports + health check) and the
+    # restart-exclude, contributed per app by the shared helper.
+    portablevps.proxy.http.services = lib.mkMerge
+      (map (d: lib.optionalAttrs d.bgReady d.bgFragment.portablevps.proxy.http.services) derived);
+    portablevps.podman.bluegreenExcludedUnits = lib.concatMap
+      (d: lib.optionals d.bgReady d.bgFragment.portablevps.podman.bluegreenExcludedUnits) derived;
 
     # Backup component: the app's stateful volumes ride in the shared restic
     # snapshot and are cleared+restored in order during a restore.
@@ -296,10 +390,21 @@ in
       derived);
 
     assertions = lib.concatMap
-      (d: lib.optional d.useAuth {
-        assertion = d.app.pullAuthUser != null;
-        message = "portablevps.apps.custom.${d.name}: pullAuthUser must be set when pullAuthSecret is set.";
-      })
+      (d:
+        (lib.optional d.useAuth {
+          assertion = d.app.pullAuthUser != null;
+          message = "portablevps.apps.custom.${d.name}: pullAuthUser must be set when pullAuthSecret is set.";
+        })
+        ++ (lib.optionals d.bg [
+          {
+            assertion = d.app.port != null;
+            message = "portablevps.apps.custom.${d.name}: blueGreen.enable requires `port` (the app must expose an HTTP port and listen on $PORT).";
+          }
+          {
+            assertion = d.app.volumes == [ ] || d.app.blueGreen.sharedVolumesOk;
+            message = "portablevps.apps.custom.${d.name}: blueGreen.enable runs two instances during a flip, so it refuses `volumes` unless blueGreen.sharedVolumesOk = true (only safe if the app tolerates concurrent access — NOT single-writer databases).";
+          }
+        ]))
       derived;
   };
 }

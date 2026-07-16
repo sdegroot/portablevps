@@ -14,10 +14,10 @@ func TestMigrateOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	seq := strings.Join(host.runs, " | ")
-	// key ordering invariants: restore-mode check, source backup, stop source,
+	// key ordering invariants: restore-mode check, stop source, source backup,
 	// restore on target, start apps.
 	for _, want := range []string{
-		"restore-mode", "portablevps-backup.service", "stop apps.target", "restore.sh", "start apps.target",
+		"restore-mode", "stop apps.target", "portablevps-backup.service", "restore.sh", "start apps.target",
 	} {
 		if !strings.Contains(seq, want) {
 			t.Errorf("migrate did not run %q; sequence: %s", want, seq)
@@ -27,9 +27,10 @@ func TestMigrateOrdering(t *testing.T) {
 	if !stream.sawContaining("#svc-restore") || !stream.sawContaining("#svc") {
 		t.Errorf("expected switches to svc-restore then svc: %v", stream.calls)
 	}
-	// backup happens before the source stop
-	if strings.Index(seq, "portablevps-backup.service") > strings.Index(seq, "stop apps.target") {
-		t.Errorf("final backup must precede stopping the source: %s", seq)
+	// the source is stopped BEFORE the final backup so the snapshot is consistent
+	// (no writes can land between the backup and the cutover).
+	if strings.Index(seq, "stop apps.target") > strings.Index(seq, "portablevps-backup.service") {
+		t.Errorf("source must be stopped before the final backup: %s", seq)
 	}
 }
 

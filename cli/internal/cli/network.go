@@ -80,12 +80,23 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 			if host == "" {
 				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
 			}
-			z := zone
-			if z == "" {
-				z = ctx.DNSZone
-			}
-			if z == "" {
-				return ExitError{Code: 64, Message: "no DNS zone: set dns_zone in portablevps.toml or pass --zone"}
+			// Which NetBird zones to sync into. An explicit --zone forces a single
+			// zone (and keeps --zone-name meaningful); otherwise use the configured
+			// managed_dns_zones, falling back to the single dns_zone. This lets one
+			// host publish internal names (int.epistola.io) and public split-horizon
+			// overrides (auth/code.epistola.app) into their respective zones.
+			var zones []string
+			singleZoneName := ""
+			switch {
+			case zone != "":
+				zones = []string{zone}
+				singleZoneName = zoneName
+			case len(ctx.Network.ManagedDNSZones) > 0:
+				zones = ctx.Network.ManagedDNSZones
+			case ctx.DNSZone != "":
+				zones = []string{ctx.DNSZone}
+			default:
+				return ExitError{Code: 64, Message: "no DNS zone: set dns_zone or [network].managed_dns_zones in portablevps.toml, or pass --zone"}
 			}
 			client, err := netbirdClient(ctx, token)
 			if err != nil {
@@ -102,25 +113,42 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 			if err != nil {
 				return ExitError{Code: 70, Message: fmt.Sprintf("reading proxy domain plan from %s: %v", host, err)}
 			}
-			records, err := netbird.RecordsFromPlan([]byte(planJSON), z)
+			byZone, unmatched, err := netbird.RecordsFromPlanByZone([]byte(planJSON), zones)
 			if err != nil {
 				return ExitError{Code: 70, Message: err.Error()}
 			}
-			// This host's peer CNAME target scopes pruning to records it owns.
+			// This host's peer CNAME target scopes pruning to records it owns; the
+			// same target identifies its records in every zone (internal + overrides).
 			ownedTarget, err := netbird.PlanTarget([]byte(planJSON))
 			if err != nil {
 				return ExitError{Code: 70, Message: err.Error()}
 			}
-			if len(records) == 0 && (!prune || ownedTarget == "") {
-				fmt.Fprintf(cmd.OutOrStdout(), "no internal DNS records for zone %s in %s's plan\n", z, host)
-				return nil
-			}
 			out := cmd.OutOrStdout()
-			err = client.DNSSync(z, zoneName, groupIDs, records, ownedTarget, prune, func(action string, r netbird.Record) {
-				fmt.Fprintf(out, "%s: %s %s %s ttl=%d\n", action, r.Name, r.Type, r.Content, r.TTL)
-			})
-			if err != nil {
-				return err
+			for _, r := range unmatched {
+				fmt.Fprintf(out, "warning: %s has no managed zone (add its zone to [network].managed_dns_zones); skipped %s %s\n", r.Name, r.Type, r.Content)
+			}
+
+			synced := false
+			for _, z := range zones {
+				records := byZone[z]
+				// Nothing to add and nothing this host could prune here — skip.
+				if len(records) == 0 && (!prune || ownedTarget == "") {
+					continue
+				}
+				synced = true
+				zn := ""
+				if len(zones) == 1 {
+					zn = singleZoneName
+				}
+				err = client.DNSSync(z, zn, groupIDs, records, ownedTarget, prune, func(action string, r netbird.Record) {
+					fmt.Fprintf(out, "%s [%s]: %s %s %s ttl=%d\n", action, z, r.Name, r.Type, r.Content, r.TTL)
+				})
+				if err != nil {
+					return err
+				}
+			}
+			if !synced && len(unmatched) == 0 {
+				fmt.Fprintf(out, "no internal DNS records for zones %v in %s's plan\n", zones, host)
 			}
 			return nil
 		},

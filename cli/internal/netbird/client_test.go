@@ -70,6 +70,29 @@ func TestRecordsFromPlanFiltersByZone(t *testing.T) {
 	}
 }
 
+func TestRecordsFromPlanByZoneBucketsAndReportsUnmatched(t *testing.T) {
+	// An internal name, a public split-horizon override in a different zone, and
+	// a record in no configured zone.
+	plan := []byte(`{"domains":[
+		{"dns":{"netbird":{"name":"grafana.int.epistola.io.","type":"CNAME","target":"box.epistola.int.","ttl":300}}},
+		{"dns":{"netbird":{"name":"auth.epistola.app.","type":"CNAME","target":"box.epistola.int.","ttl":300}}},
+		{"dns":{"netbird":{"name":"stray.example.org.","type":"CNAME","target":"box.epistola.int.","ttl":300}}}
+	]}`)
+	byZone, unmatched, err := RecordsFromPlanByZone(plan, []string{"int.epistola.io", "epistola.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := byZone["int.epistola.io"]; len(got) != 1 || got[0].Name != "grafana.int.epistola.io" {
+		t.Errorf("int.epistola.io bucket = %+v", got)
+	}
+	if got := byZone["epistola.app"]; len(got) != 1 || got[0].Name != "auth.epistola.app" {
+		t.Errorf("epistola.app bucket = %+v", got)
+	}
+	if len(unmatched) != 1 || unmatched[0].Name != "stray.example.org" {
+		t.Errorf("expected stray.example.org unmatched, got %+v", unmatched)
+	}
+}
+
 func TestUpsertRecordCreatesAndIsIdempotent(t *testing.T) {
 	var records []Record
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

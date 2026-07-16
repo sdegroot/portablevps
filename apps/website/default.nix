@@ -37,6 +37,63 @@ let
   secretEnvContent =
     lib.concatStringsSep "\n"
       (lib.mapAttrsToList (k: secret: "${k}=${renderSecret secret}") cfg.extraSecretEnv) + "\n";
+
+  # ---- blue-green ----------------------------------------------------------
+  # The reusable orchestration (colour quadlets, reconcile oneshot, proxy
+  # backends, restart-exclude) lives in lib/blue-green.nix; this module only
+  # supplies the app-specific colour container body via mkColorText.
+  bg = cfg.blueGreen.enable;
+
+  # Units the registry-auth oneshot must precede: the single container, or (in
+  # blue-green) both colour containers.
+  authTargets =
+    if bg
+    then [ "${cfg.containerName}-blue.service" "${cfg.containerName}-green.service" ]
+    else [ "${cfg.containerName}.service" ];
+
+  # One colour's quadlet. Identical to the single-container [Container] block
+  # except for name + PORT, and it deliberately OMITS [Install] so apps.target
+  # does not auto-start it — the reconcile oneshot starts only the active colour.
+  mkColorText = { color, containerName, port }: ''
+    [Unit]
+    Description=${containerName} (stateless web app, blue-green) for portablevps
+    After=network-online.target
+    Wants=network-online.target
+    PartOf=apps.target
+    ${restoreGate}
+
+    [Container]
+    Image=${cfg.image}
+    ContainerName=${containerName}
+    # Host network, bound to loopback — the proxy health-checks 127.0.0.1:${toString port}.
+    Network=host
+    Environment=HOST=127.0.0.1
+    Environment=PORT=${toString port}
+    Environment=NODE_ENV=production
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
+    ${lib.optionalString hasSecretEnv "EnvironmentFile=${secretEnvFile}"}
+    ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
+    # Disable the image's built-in HEALTHCHECK: it commonly hardcodes the app's
+    # default port (e.g. an Astro image probes 4321), so on a colour port it
+    # always reports unhealthy — which both fails the switch (podman healthcheck
+    # transient) and breaks the reconcile gate. Health is enforced by HTTP on the
+    # REAL port instead: Traefik's loadBalancer healthCheck (routing) and the
+    # reconcile's curl probe (flip gate).
+    PodmanArgs=--no-healthcheck
+
+    [Service]
+    Restart=always
+    TimeoutStartSec=180
+  '';
+
+  bgFragment = import ../../lib/blue-green.nix { inherit lib pkgs; } {
+    inherit config;
+    name = cfg.containerName;
+    image = cfg.image;
+    port = cfg.port;
+    pullAuthFile = if useAuth then authFile else null;
+    mkContainerText = mkColorText;
+  };
 in
 {
   options.portablevps.apps.website = {
@@ -101,10 +158,21 @@ in
         ENV_VAR=<placeholder>. Use for the OIDC client secret, AUTH_SECRET, etc.
       '';
     };
+
+    blueGreen.enable = lib.mkEnableOption ''
+      zero-downtime blue-green deploys. Instead of one container, run two
+      colour slots (blue on port+1, green on port+2); only the ACTIVE colour
+      runs in steady state. On an image change a reconcile oneshot (re-run by
+      `nixos-rebuild switch` via restartTriggers) warms the idle colour on the
+      new image, waits for it to be healthy, flips, then drains the old colour.
+      The proxy fronts both ports with a health check so traffic only ever hits
+      a healthy backend. Requires the app to be fronted by the portablevps proxy
+    '';
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
-    {
+    # Single-container mode (blue-green disabled): unchanged.
+    (lib.mkIf (!bg) {
       environment.etc."containers/systemd/${cfg.containerName}.container".text = ''
         [Unit]
         Description=${cfg.containerName} (stateless web app) for portablevps
@@ -134,7 +202,12 @@ in
         [Install]
         WantedBy=apps.target
       '';
-    }
+    })
+
+    # Blue-green mode: two colour quadlets + a reconcile oneshot (selector at
+    # boot, flipper on image change) + the proxy backends + the restart-exclude
+    # list so restartChangedQuadlets leaves the colour units to the reconcile.
+    (lib.mkIf bg bgFragment)
 
     # Private-registry pull auth: the sops secret holds ONLY the token; a oneshot
     # combines it with the (non-secret) username and base64-encodes `user:token`
@@ -149,8 +222,8 @@ in
       sops.secrets.${cfg.pullAuthSecret} = { };
       systemd.services."${cfg.containerName}-registry-auth" = {
         description = "Render the ${cfg.containerName} podman registry authfile from sops";
-        before = [ "${cfg.containerName}.service" ];
-        requiredBy = [ "${cfg.containerName}.service" ];
+        before = authTargets;
+        requiredBy = authTargets;
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;

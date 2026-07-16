@@ -1,6 +1,9 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // HostRunner drives an already-installed host over admin SSH. adapters.SSH
 // satisfies it; tests inject a fake.
@@ -69,6 +72,11 @@ func Deploy(env DeployEnv, server, host string) error {
 	if err != nil {
 		if !env.DryRun {
 			reportDeployOutcome(env, host, "failure")
+			// A failed blue-green flip fails the switch; surface WHY (the
+			// reconcile oneshot's log) instead of just a generic non-zero exit.
+			if hint := blueGreenFailureHint(env, host); hint != "" {
+				report(action, "info", hint)
+			}
 		}
 		report(action, "fail", err.Error())
 		return deployErr(70, "nixos-rebuild %s failed: %v", action, err)
@@ -88,4 +96,20 @@ func Deploy(env DeployEnv, server, host string) error {
 func reportDeployOutcome(env DeployEnv, host, outcome string) {
 	unit := "portablevps-deploy-report-" + outcome + ".service"
 	_, _ = env.Host.Run(host, "sudo systemctl start "+unit+" || true")
+}
+
+// blueGreenFailureHint returns the tail of any blue-green reconcile journal so a
+// switch that failed because a colour flip failed shows the cause, not just a
+// generic exit code. Best effort — returns "" on any error or no blue-green app.
+func blueGreenFailureHint(env DeployEnv, host string) string {
+	out, err := env.Host.Run(host,
+		"sudo journalctl -u '*-bluegreen.service' -n 30 --no-pager 2>/dev/null "+
+			"| grep -i 'blue-green' | tail -n 8")
+	if err != nil {
+		return ""
+	}
+	if out = strings.TrimSpace(out); out == "" {
+		return ""
+	}
+	return "blue-green reconcile log:\n" + out
 }

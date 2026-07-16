@@ -53,6 +53,11 @@ type NetworkConfig struct {
 	APIToken   string
 	DNSZone    string
 	MeshDomain string
+	// ManagedDNSZones are all the NetBird custom DNS zones the tool syncs proxy
+	// records into. This lets one host publish records across several zones —
+	// e.g. internal names into int.epistola.io and public split-horizon overrides
+	// (auth/code.epistola.app) into epistola.app. Empty falls back to [DNSZone].
+	ManagedDNSZones []string
 }
 
 // ProviderConfig holds per-provider settings.
@@ -75,10 +80,11 @@ type file struct {
 		} `toml:"manager"`
 	} `toml:"secrets"`
 	Network struct {
-		APIURL     string `toml:"api_url"`
-		APIToken   string `toml:"api_token"`
-		DNSZone    string `toml:"dns_zone"`
-		MeshDomain string `toml:"mesh_domain"`
+		APIURL          string   `toml:"api_url"`
+		APIToken        string   `toml:"api_token"`
+		DNSZone         string   `toml:"dns_zone"`
+		MeshDomain      string   `toml:"mesh_domain"`
+		ManagedDNSZones []string `toml:"managed_dns_zones"`
 	} `toml:"network"`
 	Provider map[string]struct {
 		Token string `toml:"token"`
@@ -145,6 +151,7 @@ func Resolve(flags Flags, getenv func(string) string) (*Context, error) {
 			MeshDomain: firstNonEmpty(
 				getenv("PORTABLEVPS_MESH_DOMAIN"), localFile.Network.MeshDomain, repoFile.Network.MeshDomain,
 				localFile.MeshDomain, repoFile.MeshDomain),
+			ManagedDNSZones: firstNonEmptyList(localFile.Network.ManagedDNSZones, repoFile.Network.ManagedDNSZones),
 		},
 		Providers: mergeProviders(repoFile, localFile),
 	}
@@ -212,4 +219,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// firstNonEmptyList returns the first non-empty list, so a per-operator override
+// in .local wins over the repo default without being merged into it.
+func firstNonEmptyList(lists ...[]string) []string {
+	for _, l := range lists {
+		if len(l) > 0 {
+			return l
+		}
+	}
+	return nil
 }

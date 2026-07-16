@@ -166,6 +166,13 @@ in
           Disable this for append-only repositories whose bucket policy
           denies object deletion; such repositories need out-of-band
           rotation instead.
+
+          IMPORTANT: weekly maintenance runs `restic forget --prune`, which
+          DELETES objects. On an object-locked / append-only S3 bucket (e.g.
+          once S3 Object Lock is applied), the prune will fail every week and
+          leave repository maintenance red. Set this to false for such repos
+          and rotate snapshots out of band. See the fleet's S3 object-lock
+          rollout before enabling immutability.
         '';
       };
 
