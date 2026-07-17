@@ -7,11 +7,23 @@
 # consumer-provided config-as-code tree (blueprints) and brand assets from the
 # Nix store onto the host before the containers start.
 #
+# Consumer-supplied content reaches the container two different ways, and the
+# split is deliberate:
+#   * blueprints + brand assets are SYNCED onto the host, because authentik owns
+#     them afterwards (it re-reads blueprints itself and serves media through its
+#     file backend).
+#   * email templates are BIND-MOUNTED READ-ONLY FROM THE STORE, because Django
+#     caches them in-process and they only take effect on a container restart —
+#     which requires their hash to be in the .container file, and requires the
+#     content to already be in place when that restart happens. See
+#     templatesVolume.
+#
 # This module is deployment-agnostic. A consumer enables it and supplies the
-# parts that are theirs: the blueprints + brand assets (as store paths), the
-# public domain, SMTP relay, and any extra secret-backed env (e.g. per-app
-# OAuth client secrets referenced by their blueprints). Secrets are named by
-# their sops key; the module declares them and renders `key=<placeholder>`.
+# parts that are theirs: the blueprints + brand assets + email templates (as
+# store paths), the public domain, SMTP relay, and any extra secret-backed env
+# (e.g. per-app OAuth client secrets referenced by their blueprints). Secrets are
+# named by their sops key; the module declares them and renders
+# `key=<placeholder>`.
 { config, lib, pkgs, ... }:
 
 let
@@ -30,6 +42,38 @@ let
 
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
 
+  # Where /templates comes from. Consumer-supplied templates are mounted STRAIGHT
+  # FROM THE NIX STORE rather than synced onto the host like the blueprints, and
+  # the difference is load-bearing:
+  #
+  #  * Django compiles a template once and caches it in-process for the life of
+  #    the process (authentik sets APP_DIRS without OPTIONS.loaders, so Django
+  #    wraps the loaders in cached.Loader unconditionally — no DEBUG escape). So,
+  #    unlike a blueprint (which the worker re-reads on its own), an edited
+  #    template only takes effect when the container RESTARTS.
+  #  * The generic quadlet restarter (modules/runtime/podman.nix) bounces a
+  #    container when its .container file changes. Naming the store path here puts
+  #    the templates' content hash INTO that file, so an edit — and only an edit —
+  #    bounces both containers.
+  #  * It also has to be a store path, not a synced copy. That restarter is an
+  #    ACTIVATION SCRIPT, and switch-to-configuration runs activation scripts
+  #    BEFORE it restarts changed units — so a sync done by authentik-provision
+  #    would land AFTER the bounce it is supposed to feed, and the new template
+  #    would not take effect until the next switch. A store path is already there,
+  #    immutable, before anything starts: there is no window to lose.
+  #
+  # `ro` and never `Z`: :Z asks podman to relabel the SOURCE for exclusive use by
+  # this container, which on a read-only, globally-shared store path is both wrong
+  # and impossible. Store paths are world-readable, which is all authentik (uid
+  # 1000) needs — get_template_choices() skips anything not R_OK.
+  #
+  # With no consumer templates, /templates stays the host dir: unmanaged, and the
+  # only mode in which an admin dropping a file there means anything.
+  templatesVolume =
+    if cfg.emailTemplatesDir != null
+    then "${cfg.emailTemplatesDir}:/templates:ro"
+    else "${templatesDir}:/templates:Z";
+
   commonContainer = execArg: extraLines: ''
     [Unit]
     Description=authentik ${execArg}
@@ -46,7 +90,7 @@ let
     Network=host
     EnvironmentFile=/etc/portablevps/authentik.env
     Volume=${mediaDir}:/media:Z
-    Volume=${templatesDir}:/templates:Z
+    Volume=${templatesVolume}
     # authentik ships `ak healthcheck` (checks DB + broker connectivity); the
     # upstream compose uses it for both server and worker. On failure podman
     # kills the container so systemd's Restart=always revives a hung (not just
@@ -261,6 +305,43 @@ in
       '';
     };
 
+    emailTemplatesDir = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = lib.literalExpression "./templates";
+      description = ''
+        A directory of custom Django email templates, bind-mounted READ-ONLY from
+        the Nix store onto the container's template dir (`/templates`, authentik's
+        `email.template_dir` default — note the config key is `email.template_dir`,
+        i.e. `AUTHENTIK_EMAIL__TEMPLATE_DIR`, not `AUTHENTIK_TEMPLATE_DIR`, which
+        nothing reads). authentik globs `**/*.html` under it and offers each hit to
+        an email stage's `template` field by its path RELATIVE to the dir — so
+        `templates/email/foo.html` here is referenced as `email/foo.html` from a
+        blueprint. Consumer-owned; null leaves authentik on its bundled set and
+        `/templates` on the (unmanaged, backed-up) host dir instead.
+
+        Setting this makes the templates immutable and store-derived, like the
+        blueprints: they are not backed up, and a file dropped into the host dir by
+        hand is ignored.
+
+        Three upstream footguns a consumer's tree must respect:
+          * A stage's `template` is validated against what is on disk AT APPLY
+            TIME, so a blueprint naming a missing template fails outright
+            ("Invalid template ... specified"). Mounting from the store means the
+            file is always in place before anything starts.
+          * authentik derives the plaintext sibling with a naive
+            `template_name.replace("html", "txt")` — every occurrence, not just
+            the extension. NEVER put "html" in a template's name or path beyond
+            the extension itself (`html_digest.html` would look for
+            `txt_digest.txt`). Ship a matching .txt next to each .html; a missing
+            one silently yields an HTML-only mail with an empty body.
+          * The filesystem loader OUTRANKS the app-directories loader, so naming a
+            file after a bundled template (`email/password_reset.html`) silently
+            SHADOWS it everywhere rather than adding a choice. Use distinct names
+            unless shadowing is the intent.
+      '';
+    };
+
     extraSecretEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -312,6 +393,9 @@ in
       # both 16 chars) leaves file size AND mtime unchanged, so a plain `rsync -a`
       # (size+mtime quick-check) silently SKIPS the change and the blueprint never
       # updates. Compare by content instead. (Small files; cost is negligible.)
+      # Templates are absent here on purpose — they are bind-mounted from the
+      # store (see templatesVolume), so there is nothing to sync and no ordering
+      # to get right.
       script = ''
         install -d -o ${toString akUid} -g ${toString akUid} -m 0750 ${blueprintsDir} ${publicMediaDir}
       '' + lib.optionalString (cfg.blueprintsDir != null) ''
@@ -355,13 +439,18 @@ in
         "Environment=AUTHENTIK_LISTEN__METRICS=127.0.0.1:9301"
       ]);
 
-    # Back up authentik's file state (uploaded media, custom templates). The
-    # database is covered by the platform PostgreSQL online backup. Blueprints
-    # are regenerated from the Nix store, so they are not backed up.
-    portablevps.backups.components.authentik = {
-      order = 30;
-      paths = [ mediaDir templatesDir ];
-      clearBeforeRestore = [ mediaDir templatesDir ];
-    };
+    # Back up authentik's file state (uploaded media, and custom templates only
+    # when they are host-managed). The database is covered by the platform
+    # PostgreSQL online backup. Blueprints are regenerated from the Nix store, so
+    # they are not backed up — and store-mounted templates are store-derived for
+    # exactly the same reason, so they aren't either. When emailTemplatesDir is
+    # null the host dir is the source of truth and does need covering.
+    portablevps.backups.components.authentik =
+      let templateState = lib.optional (cfg.emailTemplatesDir == null) templatesDir;
+      in {
+        order = 30;
+        paths = [ mediaDir ] ++ templateState;
+        clearBeforeRestore = [ mediaDir ] ++ templateState;
+      };
   };
 }
