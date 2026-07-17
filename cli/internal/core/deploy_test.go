@@ -10,6 +10,7 @@ type fakeHost struct {
 	failTrue             bool
 	failRestoreModeCheck bool
 	journal              string // returned for journalctl commands
+	probeOut             string // returned for the failed-unit health probe
 }
 
 func (f *fakeHost) Run(host, command string) (string, error) {
@@ -22,6 +23,9 @@ func (f *fakeHost) Run(host, command string) (string, error) {
 	}
 	if strings.Contains(command, "journalctl") {
 		return f.journal, nil
+	}
+	if strings.Contains(command, "--state=failed") {
+		return f.probeOut, nil
 	}
 	return "", nil
 }
@@ -103,6 +107,62 @@ func TestDeployFailedSwitchSurfacesBlueGreenHint(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(infos, " "), "idle green failed health check") {
 		t.Errorf("expected reconcile log surfaced as an info report, got %v", infos)
+	}
+}
+
+func TestDeployTreatsHealthcheckFalsePositiveAsSuccess(t *testing.T) {
+	// switch-to-configuration exited non-zero, but the only failed unit is a
+	// podman healthcheck transient whose container came up healthy.
+	host := &fakeHost{probeOut: "healthcheck-transient-ok unit=abc123def456-9f.service cid=abc123def456\nverdict=benign units= abc123def456-9f.service"}
+	runner := &recordRunner{fail: true}
+	var warns, oks []string
+	env := DeployEnv{
+		RepoRoot: "/repo", Runner: runner, Host: host,
+		Report: func(_, status, msg string) {
+			switch status {
+			case "warn":
+				warns = append(warns, msg)
+			case "ok":
+				oks = append(oks, msg)
+			}
+		},
+	}
+	if err := Deploy(env, "web", "1.2.3.4"); err != nil {
+		t.Fatalf("benign healthcheck false-positive must not fail the deploy, got %v", err)
+	}
+	joined := strings.Join(host.runs, " | ")
+	if !strings.Contains(joined, "reset-failed abc123def456-9f.service") {
+		t.Errorf("expected the stale transient unit to be reset-failed, got %q", joined)
+	}
+	if !strings.Contains(joined, "deploy-report-success") {
+		t.Errorf("expected a SUCCESS report (not failure) for a benign false-positive, got %q", joined)
+	}
+	if strings.Contains(joined, "deploy-report-failure") {
+		t.Errorf("must not fire the failure reporter (DeployFailing alert) on a benign false-positive, got %q", joined)
+	}
+	if len(warns) == 0 {
+		t.Error("expected a warning explaining the tolerated false-positive")
+	}
+}
+
+func TestDeployRealUnitFailureStillFails(t *testing.T) {
+	// A non-healthcheck unit failed to start: a genuine failure, must not be
+	// swallowed by the healthcheck-tolerance path.
+	host := &fakeHost{
+		probeOut: "verdict=real reason=non-healthcheck-unit unit=grafana.service",
+		journal:  "blue-green(website): idle green failed health check; kept blue on old image",
+	}
+	runner := &recordRunner{fail: true}
+	err := Deploy(DeployEnv{RepoRoot: "/repo", Runner: runner, Host: host}, "web", "1.2.3.4")
+	if e, ok := err.(*DeployError); !ok || e.ExitCode() != 70 {
+		t.Fatalf("a real unit failure must still exit 70, got %v", err)
+	}
+	joined := strings.Join(host.runs, " | ")
+	if !strings.Contains(joined, "deploy-report-failure") {
+		t.Errorf("expected the failure reporter on a real failure, got %q", joined)
+	}
+	if strings.Contains(joined, "reset-failed") {
+		t.Errorf("must not reset-failed anything on a real failure, got %q", joined)
 	}
 }
 

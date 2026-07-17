@@ -70,13 +70,43 @@ func Deploy(env DeployEnv, server, host string) error {
 		"--build-host", "admin@"+host,
 		"--elevate=sudo", "--no-reexec")
 	if err != nil {
-		if !env.DryRun {
-			reportDeployOutcome(env, host, "failure")
-			// A failed blue-green flip fails the switch; surface WHY (the
-			// reconcile oneshot's log) instead of just a generic non-zero exit.
-			if hint := blueGreenFailureHint(env, host); hint != "" {
-				report(action, "info", hint)
-			}
+		// A dry run changes nothing, so there is no "did it actually apply?"
+		// question to answer — any error is just a failure.
+		if env.DryRun {
+			report(action, "fail", err.Error())
+			return deployErr(70, "nixos-rebuild %s failed: %v", action, err)
+		}
+		// nixos-rebuild reports failure (switch-to-configuration exit 4) when the
+		// switch fully APPLIED but some unit is left in a failed state. On this
+		// fleet that is almost always a benign podman healthcheck false-positive:
+		// when a container restarts during the switch, podman's transient
+		// healthcheck unit fires while the container is still inside its
+		// HealthStartPeriod and `podman healthcheck run` exits 1 (a podman bug
+		// fixed only in v6 — the start period suppresses the container KILL but
+		// not the process exit code), leaving a failed <id>-<hash>.service that
+		// switch-to-configuration then counts against an otherwise-good switch.
+		//
+		// Distinguish that from a real failure by VERIFYING container health, not
+		// by trusting the exit code: benign only if every failed unit is a podman
+		// healthcheck transient whose container converges to healthy. Anything
+		// else — a real unit that failed to start, a container that stays
+		// unhealthy, an unreachable host — falls through to the failure path.
+		if units, detail := benignHealthcheckFailure(env, host); units != "" {
+			report(action, "warn", "switch applied; ignoring known podman healthcheck false-positive ("+detail+")")
+			// Clear the stale failed transient units so they neither linger in
+			// `systemctl --failed` nor re-trigger DeployFailing alerting. (podman
+			// also clears them on the container's next restart; this just doesn't
+			// wait for that.)
+			_, _ = env.Host.Run(host, "sudo systemctl reset-failed "+units+" || true")
+			reportDeployOutcome(env, host, "success")
+			report(action, "ok", host+" now runs .#"+server+" (with a tolerated healthcheck false-positive)")
+			return nil
+		}
+		reportDeployOutcome(env, host, "failure")
+		// A failed blue-green flip fails the switch; surface WHY (the
+		// reconcile oneshot's log) instead of just a generic non-zero exit.
+		if hint := blueGreenFailureHint(env, host); hint != "" {
+			report(action, "info", hint)
 		}
 		report(action, "fail", err.Error())
 		return deployErr(70, "nixos-rebuild %s failed: %v", action, err)
@@ -88,6 +118,68 @@ func Deploy(env DeployEnv, server, host string) error {
 	reportDeployOutcome(env, host, "success")
 	report(action, "ok", host+" now runs .#"+server)
 	return nil
+}
+
+// benignSwitchProbe inspects the host's failed units and decides whether the
+// switch's non-zero exit is only the known podman healthcheck false-positive.
+// It emits diagnostic lines then a final `verdict=benign units=<names>` (when
+// EVERY failed unit is a podman healthcheck transient whose container reaches
+// healthy) or `verdict=real reason=...`. It waits out a still-"starting"
+// container (bounded) rather than mistaking a slow boot for a real failure —
+// only the true-positive path polls, so a genuine failure returns promptly.
+const benignSwitchProbe = `sudo bash -c '
+set -u
+failed=$(systemctl list-units --type=service --state=failed --plain --no-legend 2>/dev/null | awk "{print \$1}")
+if [ -z "$failed" ]; then echo "verdict=real reason=no-failed-units"; exit 0; fi
+benign=""
+for u in $failed; do
+  es=$(systemctl show -p ExecStart --value "$u" 2>/dev/null)
+  case "$es" in
+    *"healthcheck run"*) : ;;
+    *) echo "verdict=real reason=non-healthcheck-unit unit=$u"; exit 0 ;;
+  esac
+  # The container id is the last long-hex token in ExecStart ("... podman
+  # healthcheck run <id>"). tail -n1 is load-bearing: the podman store path can
+  # itself contain short hex runs, but the id is always last, so take the last.
+  cid=$(printf "%s" "$es" | grep -oE "[0-9a-f]{12,64}" | tail -n1)
+  if [ -z "$cid" ]; then echo "verdict=real reason=no-container-id unit=$u"; exit 0; fi
+  h=starting
+  for _ in $(seq 1 30); do
+    h=$(podman inspect "$cid" --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" 2>/dev/null || echo gone)
+    [ "$h" = starting ] || break
+    sleep 5
+  done
+  if [ "$h" != healthy ]; then echo "verdict=real reason=container-not-healthy unit=$u cid=$cid health=$h"; exit 0; fi
+  echo "healthcheck-transient-ok unit=$u cid=$cid"
+  benign="$benign $u"
+done
+echo "verdict=benign units=$benign"
+'`
+
+// benignHealthcheckFailure runs benignSwitchProbe and, when the failed switch is
+// only the tolerated podman healthcheck false-positive, returns the failed
+// transient unit names (space-separated, for `systemctl reset-failed`) plus a
+// short human detail. Returns "" for units on a genuine failure or if the host
+// cannot be probed (can't verify => treat as real).
+func benignHealthcheckFailure(env DeployEnv, host string) (units, detail string) {
+	out, err := env.Host.Run(host, benignSwitchProbe)
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "verdict=benign units="); ok {
+			u := strings.TrimSpace(rest)
+			if u == "" {
+				return "", ""
+			}
+			return u, "restarted container healthy; failed unit(s): " + u
+		}
+		if strings.HasPrefix(line, "verdict=real") {
+			return "", ""
+		}
+	}
+	return "", ""
 }
 
 // reportDeployOutcome starts the host's own deploy-report unit (best effort), so
