@@ -233,6 +233,109 @@ new image, waits for health, flips, then drains the old colour. Notes:
 - **First cutover** (turning blue-green on) has a one-time blip and leaves the
   old single container; stop it once with `sudo systemctl stop <app>`.
 
+## Automatic Updates (Pull-Based Self-Upgrade)
+
+Opt-in per box via `portablevps.autoUpgrade` (ADR 0003). An enabled box rebuilds
+*itself* from the committed flake on `main` on a timer — no operator deploy, no
+inbound access to the box, and no deploy key in CI. Currently enabled on the
+**website** (`hetzner-fsn-20260710a`, 2-minute poll).
+
+### How it works (end to end)
+
+1. The app image is a git pin in the server def
+   (`portablevps.apps.<app>.image = "ghcr.io/…:<tag>"`) — git is the source of
+   truth for what runs, so `nixos-rebuild --rollback` covers infra *and* app.
+2. On release, the app repo's CI publishes a new image and the pin on `main` is
+   advanced (see "Bumping the pin").
+3. Each enabled box runs the `nixos-upgrade` unit on its timer: it fetches the
+   flake (`github:epistola-app/epistola-nix-infra?dir=epistola`), evaluates
+   `#<hostname>`, and `nixos-rebuild switch`es. No change → no-op; pin moved → the
+   podman restart-on-change step rolls the container (blue-green flips,
+   health-gated, so a broken image never takes traffic).
+4. Outcome is stamped to `portablevps_deploy_last_{success,failure}_timestamp_
+   seconds` (same as an operator deploy) → the `DeployFailing` alert.
+
+Pull, not push: the box needs only *outbound* read access to GitHub (a read-only
+PAT); nothing reaches into the box and no operator SSH/age key lands in CI. The
+price is up-to-poll-interval latency (2 min for the website).
+
+### Enabling it on a box
+
+```nix
+portablevps.autoUpgrade = {
+  enable = true;
+  flake = "github:epistola-app/epistola-nix-infra?dir=epistola";
+  tokenSecret = "github/repo-token";   # sops key in this box's secrets file
+  dates = "*:0/2";                     # poll interval (systemd OnCalendar)
+  randomizedDelaySec = "20s";
+};
+```
+
+Prerequisites:
+
+- **`github/repo-token`** in the box's sops file — a GitHub fine-grained PAT,
+  `Contents: Read-only`, scoped to `epistola-app/epistola-nix-infra`. It is handed
+  to nix as `access-tokens = github.com=<token>` via a root-only (0400) sops
+  EnvironmentFile on `nixos-upgrade`, so it never lands in the world-readable
+  nix.conf. Rotate before it expires (≤1 yr); if it lapses, self-upgrade stops and
+  the box keeps its last good generation.
+- **`main` must hold the live config** — the box tracks `main`. Arm with one
+  operator `portablevps server deploy <box>`; the timer self-drives after.
+
+Auto-disabled in restore mode and in prototype/local-VM mode.
+
+### Bumping the pin (Renovate) — PLANNED
+
+The pin is meant to be advanced by **Renovate** (so no app-CI write token into
+this repo). The app repo tags images `v1.0.<run_number>-<short_sha>` — a monotonic
+number so Renovate can order releases, plus the sha for exact-commit traceability.
+Renovate opens and auto-merges a PR bumping the pin on `main` (the infra CI eval
+gates it); the box applies it on the next tick. **Status:** autoUpgrade is live on
+the website; the Renovate side + the `v1.0.N-<sha>` tag scheme are the remaining
+follow-up.
+
+Until Renovate is wired, bump the pin by hand: edit
+`portablevps.apps.website.image`, commit, and push to `main` — the box applies it
+on the next tick (no `server deploy` needed).
+
+### Observing a deploy
+
+- **Metrics/alert:** `portablevps_deploy_last_{success,failure}_timestamp_seconds`
+  (per `host_name`); `DeployFailing` fires when the last failure is newer than the
+  last success.
+- **Logs:** the `nixos-upgrade` journal ships to VictoriaLogs via the OTel
+  collector — filter by unit for the rebuild output. (A "Fleet deploys" Grafana
+  dashboard over these is a planned follow-up.)
+- **On the box:** `systemctl status nixos-upgrade.timer` (next run),
+  `journalctl -u nixos-upgrade -f` (live), `nixos-rebuild list-generations`.
+
+### Operating
+
+- **Force a tick now:** `sudo systemctl start nixos-upgrade.service`.
+- **Pause** (e.g. during an incident): `sudo systemctl stop nixos-upgrade.timer`
+  (transient), or set `autoUpgrade.enable = false` + deploy (durable).
+- **Roll back a bad auto-update:** `git revert` the offending commit on `main` and
+  push — the next tick converges. For an immediate local fix,
+  `sudo nixos-rebuild switch --rollback` on the box, but also revert on `main` or
+  the next tick re-pulls it. See "Bad NixOS Upgrade" / "Bad Application Or Database
+  Migration".
+- **Golden rule:** never `server deploy` **uncommitted** local changes to an
+  autoUpgrade box — the next tick reverts them. Commit + push to `main` instead.
+
+### Failure modes
+
+- **Build/eval fails:** the switch never happens (safe); the box keeps running and
+  self-corrects when a good commit lands. `DeployFailing` fires.
+- **Clean switch, unhealthy app:** blue-green won't flip to an unhealthy colour, so
+  the site stays on the old image — but `nixos-upgrade` reports *success*, so watch
+  the deploy dashboard/logs, not just `DeployFailing`.
+- **Blast radius:** any `main` commit touching the box's config or a shared
+  `portablevps` module auto-rolls to every enabled box within a tick — keep `main`
+  deployable.
+- **Fetch path severed** (a commit breaks the box's own mesh/DNS, or the token
+  lapses): the box can't self-upgrade; recover with an operator `server deploy` or
+  break-glass SSH.
+
 ## Full Host Loss Or Host Move
 
 Use `docs/disaster-recovery.md` when the host is destroyed, the provider is
