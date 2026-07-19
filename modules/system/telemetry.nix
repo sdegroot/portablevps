@@ -14,6 +14,12 @@ let
   enabled = cfg.endpoint != "";
   backupsPresent = (config.portablevps.backups.components or { }) != { };
 
+  # When the proxy exposes a loopback Prometheus endpoint, scrape it here so its
+  # series get the same host.name/service.* resource attributes as everything else
+  # this collector ships (a direct Traefik->OTLP export would not carry them).
+  proxyMetricsEnabled = config.portablevps.proxy.metrics.enable or false;
+  proxyMetricsPort = config.portablevps.proxy.metrics.port or 8082;
+
   # Resource attributes stamped on every metric/log. service.name (the
   # application) is added when set so telemetry can be differentiated by app, not
   # just host. host.name comes from the CONFIGURED machine name, not the OS
@@ -102,6 +108,12 @@ in
 
           # Read the systemd journal directly (journalctl) — no rsyslog / file.
           journald = { };
+        } // lib.optionalAttrs proxyMetricsEnabled {
+          prometheus.config.scrape_configs = [{
+            job_name = "traefik";
+            scrape_interval = cfg.scrapeInterval;
+            static_configs = [{ targets = [ "127.0.0.1:${toString proxyMetricsPort}" ]; }];
+          }];
         };
         processors = {
           batch = { timeout = "10s"; send_batch_size = 1024; };
@@ -122,7 +134,8 @@ in
           };
           pipelines = {
             metrics = {
-              receivers = [ "hostmetrics" "podman_stats" ];
+              receivers = [ "hostmetrics" "podman_stats" ]
+                ++ lib.optional proxyMetricsEnabled "prometheus";
               processors = [ "batch" "resourcedetection" "resource" ];
               exporters = [ "otlphttp" ];
             };

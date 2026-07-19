@@ -418,6 +418,25 @@ in
       description = "Open the proxy port on the public host firewall.";
     };
 
+    metrics = {
+      enable = lib.mkEnableOption ''
+        a loopback Prometheus metrics endpoint on Traefik. It binds 127.0.0.1 only
+        and is meant to be scraped by this host's own OpenTelemetry collector (see
+        modules/system/telemetry.nix), which stamps the fleet host.name/service.*
+        resource attributes and ships the series to the monitoring gateway — so
+        Traefik metrics land per-host like every other metric'';
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8082;
+        description = "Loopback port for Traefik's Prometheus metrics endpoint (bound to 127.0.0.1).";
+      };
+      entryPointName = lib.mkOption {
+        type = lib.types.str;
+        default = "metrics";
+        description = "Traefik entry point name dedicated to the Prometheus metrics endpoint.";
+      };
+    };
+
     acme = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -614,6 +633,18 @@ in
           {
             entryPoints.${cfg.entryPointName}.address = ":${toString cfg.port}";
           }
+          (lib.mkIf cfg.metrics.enable {
+            # Loopback-only Prometheus endpoint; per-router/service/entrypoint
+            # labels (incl. `code`) so 5xx ratios and per-service latency are
+            # computable. Scraped locally by the host's OTel collector.
+            entryPoints.${cfg.metrics.entryPointName}.address = "127.0.0.1:${toString cfg.metrics.port}";
+            metrics.prometheus = {
+              entryPoint = cfg.metrics.entryPointName;
+              addRoutersLabels = true;
+              addServicesLabels = true;
+              addEntryPointsLabels = true;
+            };
+          })
           (lib.mkIf cfg.acme.enable {
             certificatesResolvers.${acmeResolverName}.acme = {
               email = cfg.acme.email;

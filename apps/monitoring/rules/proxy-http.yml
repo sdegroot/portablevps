@@ -1,0 +1,41 @@
+# Proxy (Traefik) HTTP alerts. Fed by Traefik's Prometheus metrics endpoint
+# (portablevps.proxy.metrics.enable), scraped by each host's OTel collector and
+# shipped to the gateway — so the series carry host_name like every other metric.
+#
+# METRIC NAMES: these travel Prometheus -> OTel prometheus receiver -> OTLP ->
+# VictoriaMetrics (-opentelemetry.usePrometheusNaming=true). That round-trip can
+# rename counters/histograms. Verify the ACTUAL series after the first host ships
+# (query VictoriaMetrics for {__name__=~"traefik.*"}) and adjust these exprs if the
+# names differ from the Prometheus-native ones assumed here.
+groups:
+  - name: proxy-http
+    interval: 30s
+    rules:
+      - alert: ProxyHigh5xxRatio
+        # 5xx share of served requests, with a small traffic floor so a single
+        # error on an idle proxy doesn't trip it.
+        expr: |
+          (
+            sum by (host_name) (rate(traefik_service_requests_total{code=~"5.."}[5m]))
+            / sum by (host_name) (rate(traefik_service_requests_total[5m]))
+          ) > 0.05
+          and
+          sum by (host_name) (rate(traefik_service_requests_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx ratio on {{ $labels.host_name }}"
+          description: "Traefik on {{ $labels.host_name }} has served {{ $value | humanizePercentage }} 5xx responses over the last 5m."
+
+      - alert: ProxyHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (host_name, le) (rate(traefik_service_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 proxy latency on {{ $labels.host_name }}"
+          description: "Traefik p95 request duration on {{ $labels.host_name }} has been above 2s for 10m (currently {{ $value | humanize }}s)."
