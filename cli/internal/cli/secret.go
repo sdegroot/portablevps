@@ -45,21 +45,38 @@ func secretEnv(g *globalOptions) (core.SecretEnv, *config.Context, error) {
 	return core.SecretEnv{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}}, ctx, nil
 }
 
+// serverRef accepts either a bare server name or a path to its definition file
+// (servers/<name>.nix) and returns the bare name. This lets operators shell
+// tab-complete the file — `pvps server deploy servers/<TAB>` — instead of typing
+// the machine name by hand. It is pure string work (no file I/O), so it is
+// independent of the process's working directory. A value that is neither a path
+// nor a .nix file is returned unchanged.
+func serverRef(s string) string {
+	if s == "" {
+		return s
+	}
+	if strings.Contains(s, "/") || strings.HasSuffix(s, ".nix") {
+		return strings.TrimSuffix(filepath.Base(s), ".nix")
+	}
+	return s
+}
+
 // serverArg resolves the target server. Precedence: positional arg > --server /
 // env / default_server. If none is given and the consumer directory defines
 // exactly ONE server, that server is used automatically — so a single-server
 // directory needs no --server and no default_server (portablevps's simplest,
-// primary mode: one directory, one server).
+// primary mode: one directory, one server). The name may be given as a bare
+// server name or as a path to its servers/<name>.nix file (see serverRef).
 func serverArg(g *globalOptions, args []string) (string, *config.Context, error) {
 	ctx, err := config.Resolve(config.Flags{Project: g.project, Server: g.serverFlag}, os.Getenv)
 	if err != nil {
 		return "", nil, err
 	}
 	if len(args) > 0 {
-		return args[0], ctx, nil
+		return serverRef(args[0]), ctx, nil
 	}
 	if ctx.Server != "" {
-		return ctx.Server, ctx, nil
+		return serverRef(ctx.Server), ctx, nil
 	}
 	// No explicit server: auto-select when the flake defines exactly one.
 	servers, lerr := core.LoadServers(core.Env{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}, Getenv: os.Getenv})
