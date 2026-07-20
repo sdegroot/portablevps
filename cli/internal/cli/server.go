@@ -99,7 +99,9 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 		Long: "Deploys the current committed flake to an already-running host: an " +
 			"in-place nixos-rebuild switch over admin SSH, built on the remote. No " +
 			"identity or data changes (unlike repurpose). Use --dry-run to build and " +
-			"show what would change without switching.",
+			"show what would change without switching.\n\n" +
+			"[server] may be a bare name or a path to its definition file " +
+			"(servers/<name>.nix), so you can shell tab-complete it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server, ctx, err := serverArg(g, args)
