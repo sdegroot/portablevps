@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# pvps — run the portablevps CLI against the consumer you're working in.
+#
+# Wraps `nix run portablevps/cli#portablevps` so it ALWAYS builds from the
+# current source tree (a prebuilt binary drifts from the config — e.g. an old
+# one defaulted the deploy --host to the dns_zone instead of the mesh_domain).
+#
+# The TOOL (CLI flake) is anchored to this script's location. The CONSUMER is
+# wherever you ARE: the nearest ancestor of $PWD that holds a portablevps.toml.
+# The CLI runs from there, so portablevps.toml, .local/ keys, and relative flags
+# resolve against the consumer you're in. So, from anywhere under a consumer:
+#   cd epistola && pvps doctor
+#   pvps server deploy hetzner-fsn-20260710a
+#   pvps server deploy hetzner-nbg1-20260707a --dry-run
+#
+# The CLI filters its flake source to git-tracked files, so `git add` any new
+# .go files before they take effect here.
+set -euo pipefail
+
+# The tool: this script lives at <root>/portablevps/bin/pvps → flake at
+# <root>/portablevps/cli, independent of the caller's cwd.
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cli_flake="$(cd -- "${script_dir}/.." && pwd)/cli"
+
+# The consumer: nearest ancestor of $PWD containing a portablevps.toml.
+project=""
+d="$PWD"
+while :; do
+  if [ -f "${d}/portablevps.toml" ]; then project="${d}"; break; fi
+  [ "${d}" = "/" ] && break
+  d="$(dirname -- "${d}")"
+done
+if [ -z "${project}" ]; then
+  echo "pvps: no portablevps.toml found from ${PWD} upward — cd into a consumer (e.g. epistola/) and retry." >&2
+  exit 1
+fi
+
+# Ensure flakes are usable even if the user's nix.conf doesn't enable them,
+# without clobbering an existing NIX_CONFIG.
+flake_conf="experimental-features = nix-command flakes"
+if [ -n "${NIX_CONFIG:-}" ]; then
+  export NIX_CONFIG="${NIX_CONFIG}"$'\n'"${flake_conf}"
+else
+  export NIX_CONFIG="${flake_conf}"
+fi
+
+cd -- "${project}"
+exec nix run "${cli_flake}#portablevps" -- "$@"
