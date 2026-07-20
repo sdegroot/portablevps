@@ -296,8 +296,9 @@ in this repo (it uses the built-in `GITHUB_TOKEN`). It edits the one-line
   release is published, passing the freshly-built tag as the `tag` input. This is
   the event-driven trigger — a release cut → the pin bumps → the box rolls, within
   ~CI-time + ≤2 min.
-- **`schedule` (fallback):** hourly, it queries ghcr for the newest `sha-*` tag and
-  bumps if it differs — a safety net if a dispatch is missed.
+- **`schedule` (fallback):** hourly, it queries ghcr for the newest
+  `<version>-<sha>` tag (e.g. `1.0.1-ad50b71`) and bumps if it differs — a safety
+  net if a dispatch is missed.
 
 No PR/eval gate is used: a pin bump is a one-line string change that can't break
 evaluation, and the real gate is on the box — blue-green won't flip to an image
@@ -315,10 +316,12 @@ that fails its health check, so a bad tag leaves the old colour serving.
        GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
      run: |
        gh workflow run website-pin-bump.yml -R epistola-app/epistola-nix-infra \
-         -f tag="sha-${GITHUB_SHA::7}"
+         -f tag="${{ needs.version.outputs.version }}-${{ needs.version.outputs.short_sha }}"
    ```
-   (Use whatever tag the build actually pushed; with docker/metadata-action's
-   `type=sha` it's `sha-<7-char-sha>`.)
+   (Pins the readable `<version>-<sha>` tag, e.g. `1.0.1-ad50b71` — the version for
+   understandability plus the sha for exact traceability. The website build already
+   publishes it via docker/metadata-action's
+   `type=raw,value=${version}-${short_sha}`.)
 2. **Package read for the schedule path.** Grant this repo read access to the
    private `website` package: org → Packages → `website` → *Manage Actions access*
    → add `epistola-nix-infra`. Without it, scheduled runs soft-skip (no failure);
@@ -326,7 +329,7 @@ that fails its health check, so a bad tag leaves the old colour serving.
 
 **Manual bump** (no CI needed): edit `portablevps.apps.website.image`, commit, and
 push to `main` — the box applies it on the next tick. Or run the workflow by hand:
-`gh workflow run website-pin-bump.yml -f tag=sha-<...>` (empty `tag` = newest).
+`gh workflow run website-pin-bump.yml -f tag=<version>-<sha>` (empty `tag` = newest).
 
 ### Observing a deploy
 
