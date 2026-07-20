@@ -281,12 +281,16 @@ in
       };
       interval = lib.mkOption {
         type = lib.types.str;
-        default = "5min";
+        default = "1min";
         description = ''
-          How often to ping the pulse URL (systemd OnUnitActiveSec). Set the
-          external check's DOWN window comfortably larger than this (e.g. 3-4x) so
-          a single transient health blip or missed ping — an Alertmanager restart
-          mid-deploy, say — does not false-alarm.
+          How often to ping the pulse URL (systemd OnUnitActiveSec). This measures
+          from when the unit last FINISHED, so the real cadence drifts to slightly
+          MORE than the value set. The external check's DOWN window must be
+          comfortably larger than this cadence (aim for window >= 3-4x interval) —
+          if they are equal (e.g. both 5min) the drift lands each pulse just past
+          the window and the check flaps UP/DOWN every cycle. A short interval also
+          means a single withheld ping (an Alertmanager restart mid-deploy, say)
+          is absorbed by the next one instead of tripping a false alarm.
         '';
       };
     };
