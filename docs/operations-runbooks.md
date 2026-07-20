@@ -284,19 +284,49 @@ Prerequisites:
 
 Auto-disabled in restore mode and in prototype/local-VM mode.
 
-### Bumping the pin (Renovate) — PLANNED
+### Bumping the pin (GitHub Actions)
 
-The pin is meant to be advanced by **Renovate** (so no app-CI write token into
-this repo). The app repo tags images `v1.0.<run_number>-<short_sha>` — a monotonic
-number so Renovate can order releases, plus the sha for exact-commit traceability.
-Renovate opens and auto-merges a PR bumping the pin on `main` (the infra CI eval
-gates it); the box applies it on the next tick. **Status:** autoUpgrade is live on
-the website; the Renovate side + the `v1.0.N-<sha>` tag scheme are the remaining
-follow-up.
+The pin is advanced by the **`website-pin-bump`** workflow
+(`.github/workflows/website-pin-bump.yml`) — GitHub-native, no Renovate, no PATs
+in this repo (it uses the built-in `GITHUB_TOKEN`). It edits the one-line
+`portablevps.apps.website.image` pin and commits it to `main`; the box's
+`autoUpgrade` poll then rolls it via blue-green. Two triggers:
 
-Until Renovate is wired, bump the pin by hand: edit
-`portablevps.apps.website.image`, commit, and push to `main` — the box applies it
-on the next tick (no `server deploy` needed).
+- **`workflow_dispatch` (fast path):** the website repo's CI calls it the moment a
+  release is published, passing the freshly-built tag as the `tag` input. This is
+  the event-driven trigger — a release cut → the pin bumps → the box rolls, within
+  ~CI-time + ≤2 min.
+- **`schedule` (fallback):** hourly, it queries ghcr for the newest `sha-*` tag and
+  bumps if it differs — a safety net if a dispatch is missed.
+
+No PR/eval gate is used: a pin bump is a one-line string change that can't break
+evaluation, and the real gate is on the box — blue-green won't flip to an image
+that fails its health check, so a bad tag leaves the old colour serving.
+
+**Setup (one-time):**
+
+1. **Website repo → dispatch token.** Create a fine-grained PAT with only
+   `Actions: Read and write` on `epistola-app/epistola-nix-infra`, add it as a
+   website-repo Actions secret (e.g. `INFRA_DISPATCH_TOKEN`), and add a step after
+   the image push:
+   ```yaml
+   - name: Trigger infra pin bump
+     env:
+       GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+     run: |
+       gh workflow run website-pin-bump.yml -R epistola-app/epistola-nix-infra \
+         -f tag="sha-${GITHUB_SHA::7}"
+   ```
+   (Use whatever tag the build actually pushed; with docker/metadata-action's
+   `type=sha` it's `sha-<7-char-sha>`.)
+2. **Package read for the schedule path.** Grant this repo read access to the
+   private `website` package: org → Packages → `website` → *Manage Actions access*
+   → add `epistola-nix-infra`. Without it, scheduled runs soft-skip (no failure);
+   the dispatch path needs no package access.
+
+**Manual bump** (no CI needed): edit `portablevps.apps.website.image`, commit, and
+push to `main` — the box applies it on the next tick. Or run the workflow by hand:
+`gh workflow run website-pin-bump.yml -f tag=sha-<...>` (empty `tag` = newest).
 
 ### Observing a deploy
 
