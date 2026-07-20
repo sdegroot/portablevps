@@ -125,6 +125,10 @@ let
         ({ ... }: {
           _module.args = {
             serverConfig = server.info;
+            # The full fleet roster, so a host module can derive fleet-wide lists
+            # (e.g. the monitoring box's per-host presence alerts) instead of
+            # hand-maintaining them.
+            fleetServerNames = builtins.attrNames servers;
             inherit serverName providerName providerConfig;
           };
         })
@@ -154,6 +158,7 @@ let
         ({ ... }: {
           _module.args = {
             serverConfig = server.info;
+            fleetServerNames = builtins.attrNames servers;
             inherit serverName;
             providerName = "local-vm";
             providerConfig = { };

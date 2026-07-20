@@ -259,6 +259,42 @@ in
     alertEmailTo = lib.mkOption { type = lib.types.str; default = ""; example = "oncall@example.com"; description = "Alert email recipient. Required when monitoring is enabled."; };
     alertRepeatInterval = lib.mkOption { type = lib.types.str; default = "4h"; description = "Alertmanager repeat interval for a still-firing alert."; };
 
+    deadMansSwitch = {
+      # Every internal absence alert (NodeMetricsMissing, ComponentDown, …) needs
+      # THIS box's vmalert + Alertmanager alive to fire, so nothing here can report
+      # the monitoring box's own death. This is the external watcher: a health-gated
+      # heartbeat to a push-based external monitor (e.g. an updown.io pulse). The box
+      # pings only when the alerting pipeline is proven healthy — so a dead box AND a
+      # silently-dead Alertmanager (box still up) both stop the pulse and trip the
+      # external alert.
+      enable = lib.mkEnableOption "an external dead-man's-switch heartbeat to a push-based monitor (e.g. updown.io pulse)";
+      pulseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://pulse.updown.io/xxxx/yyyy";
+        description = ''
+          The external pulse URL to ping. Not treated as a secret — worst case a
+          leaked URL only lets someone POST spurious pulses, which can keep the
+          check falsely UP but cannot silence a real outage. Required when
+          deadMansSwitch.enable is true.
+        '';
+      };
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "1min";
+        description = ''
+          How often to ping the pulse URL (systemd OnUnitActiveSec). This measures
+          from when the unit last FINISHED, so the real cadence drifts to slightly
+          MORE than the value set. The external check's DOWN window must be
+          comfortably larger than this cadence (aim for window >= 3-4x interval) —
+          if they are equal (e.g. both 5min) the drift lands each pulse just past
+          the window and the check flaps UP/DOWN every cycle. A short interval also
+          means a single withheld ping (an Alertmanager restart mid-deploy, say)
+          is absorbed by the next one instead of tripping a false alarm.
+        '';
+      };
+    };
+
     grafana = {
       rootUrl = lib.mkOption { type = lib.types.str; default = ""; example = "https://grafana.int.example.net"; description = "GF_SERVER_ROOT_URL (the mesh proxy name for Grafana). Required when monitoring is enabled."; };
       adminPasswordSecret = lib.mkOption { type = lib.types.str; default = "monitoring/grafana-admin-password"; description = "sops secret for the break-glass local admin password."; };
@@ -315,6 +351,10 @@ in
         {
           assertion = cfg.grafana.rootUrl != "";
           message = "portablevps.apps.monitoring.grafana.rootUrl must be set to the externally-reachable Grafana URL (used for GF_SERVER_ROOT_URL and OAuth redirects).";
+        }
+        {
+          assertion = !cfg.deadMansSwitch.enable || cfg.deadMansSwitch.pulseUrl != "";
+          message = "portablevps.apps.monitoring.deadMansSwitch.pulseUrl must be set when deadMansSwitch.enable is true.";
         }
       ];
 
@@ -452,6 +492,13 @@ in
             };
             podman_stats = { endpoint = "unix:///run/podman/podman.sock"; collection_interval = "30s"; };
             journald = { };
+          } // lib.optionalAttrs (config.portablevps.proxy.metrics.enable or false) {
+            # This box's own Traefik (fronting the UIs), if it exposes metrics.
+            prometheus.config.scrape_configs = [{
+              job_name = "traefik";
+              scrape_interval = "30s";
+              static_configs = [{ targets = [ "127.0.0.1:${toString (config.portablevps.proxy.metrics.port or 8082)}" ]; }];
+            }];
           };
           processors = {
             # fleet metrics can arrive as delta; VM wants cumulative.
@@ -478,7 +525,8 @@ in
             telemetry = { logs.level = "info"; metrics.level = "none"; };
             pipelines = {
               metrics = {
-                receivers = [ "otlp" "hostmetrics" "podman_stats" ];
+                receivers = [ "otlp" "hostmetrics" "podman_stats" ]
+                  ++ lib.optional (config.portablevps.proxy.metrics.enable or false) "prometheus";
                 processors = [ "deltatocumulative" "batch" "resourcedetection" "resource" ];
                 exporters = [ "otlphttp/victoriametrics" ];
               };
@@ -568,5 +616,58 @@ in
       environment.etc."portablevps/monitoring/grafana.env".text =
         grafanaCommonEnv + "GF_SECURITY_ADMIN_PASSWORD=demo-admin\n";
     })
+
+    # External dead-man's-switch (normal mode only — a local VM has no sops secret
+    # and must not ping the internet). A timer pings the external pulse URL, but
+    # ONLY after confirming the alerting-critical components answer healthy on
+    # loopback. Withholding the pulse is the signal: if this box (or its alerting
+    # pipeline) is dead, the external monitor sees no pulse and alerts independently.
+    (lib.mkIf (cfg.deadMansSwitch.enable && !prototype) (
+      let
+        pulseScript = pkgs.writeShellScript "portablevps-monitoring-pulse" ''
+          set -u
+          # Probe each alerting-critical component. VictoriaLogs + Grafana are
+          # deliberately excluded — logs/dashboards being down must not silence the
+          # pager-of-last-resort.
+          check() {
+            if ! ${pkgs.curl}/bin/curl -fsS --max-time 5 -o /dev/null "$2"; then
+              echo "portablevps-monitoring-pulse: $1 unhealthy ($2)" >&2
+              return 1
+            fi
+          }
+          ok=1
+          check victoriametrics "http://127.0.0.1:8428/health"    || ok=0
+          check vmalert         "http://127.0.0.1:8880/-/healthy" || ok=0
+          check alertmanager    "http://127.0.0.1:9093/-/healthy" || ok=0
+          if [ "$ok" -ne 1 ]; then
+            echo "portablevps-monitoring-pulse: alerting pipeline unhealthy — withholding pulse so the external monitor fires" >&2
+            exit 0
+          fi
+          if ${pkgs.curl}/bin/curl -fsS --max-time 10 -o /dev/null ${lib.escapeShellArg cfg.deadMansSwitch.pulseUrl}; then
+            echo "portablevps-monitoring-pulse: alerting pipeline healthy — pulse sent"
+          else
+            echo "portablevps-monitoring-pulse: pulse ping failed (no outbound network to the external monitor?)" >&2
+            exit 1
+          fi
+        '';
+      in
+      {
+        systemd.services.portablevps-monitoring-pulse = {
+          description = "External dead-man's-switch: health-gated heartbeat to the external pulse monitor";
+          after = [ "victoriametrics.service" "vmalert.service" "alertmanager.service" ];
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = pulseScript;
+          };
+        };
+        systemd.timers.portablevps-monitoring-pulse = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "2min";
+            OnUnitActiveSec = cfg.deadMansSwitch.interval;
+          };
+        };
+      }
+    ))
   ]);
 }

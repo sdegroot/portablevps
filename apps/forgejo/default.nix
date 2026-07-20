@@ -215,8 +215,12 @@ in
     admin = {
       username = lib.mkOption {
         type = lib.types.str;
-        default = "admin";
-        description = "Break-glass local admin username.";
+        default = "breakglass";
+        description = ''
+          Break-glass local admin username. Must not be one of Forgejo's reserved
+          names (notably "admin", which Forgejo refuses with
+          `CreateUser: name is reserved`).
+        '';
       };
       email = lib.mkOption {
         type = lib.types.str;
@@ -369,7 +373,11 @@ in
           done
 
           admin_password="$(${pkgs.coreutils}/bin/tr -d '\n' < ${if prototype then pkgs.writeText "forgejo-demo-admin-password" (demoSecret cfg.admin.passwordSecret) else config.sops.secrets.${cfg.admin.passwordSecret}.path})"
-          if ! ${forgejoCli} admin user list | grep -Fq -- ${lib.escapeShellArg cfg.admin.username}; then
+          # Exact match on the Username column ($2), not a substring search of the
+          # whole table — a loose `grep admin` also matches "akadmin" (Authentik's
+          # SSO superuser) or the email column, wrongly taking the change-password
+          # branch on a break-glass user that was never created.
+          if ! ${forgejoCli} admin user list | ${pkgs.gawk}/bin/awk -v u=${lib.escapeShellArg cfg.admin.username} 'NR>1 && $2==u {f=1} END{exit(f?0:1)}'; then
             ${forgejoCli} admin user create \
               --admin \
               --username ${lib.escapeShellArg cfg.admin.username} \
