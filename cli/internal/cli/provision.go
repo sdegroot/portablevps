@@ -74,17 +74,13 @@ func ageKeyMaterial(ctx *config.Context, server string) (string, error) {
 
 // nixosAnywhereIdentity resolves the SSH identity for nixos-anywhere from the
 // keystore and converts ssh -o/-i options into nixos-anywhere args.
-func nixosAnywhereIdentity(g *globalOptions, ctx *config.Context, server, adminKey string) ([]string, func(), error) {
+func nixosAnywhereIdentity(g *globalOptions, ctx *config.Context, server, adminKey, adminPub string) ([]string, func(), error) {
 	store := keystore.Store{Runner: adapters.ExecRunner{}, OpAccount: ctx.OpAccount, AgentSock: onePasswordAgentSock()}
 	mode := keystore.Headless
 	if g.interactive() {
 		mode = keystore.Interactive
 	}
-	ref := keystore.Ref{
-		OpItem:   keystore.DefaultOpItem(ctx.Vault, server),
-		FilePath: repoRelOrAbs(ctx.RepoRoot, adminKey),
-		PubPath:  filepath.Join(ctx.RepoRoot, "keys", server+"-admin.pub"),
-	}
+	ref := resolveAdminIdentity(ctx, server, adminKey, adminPub).ref(ctx, server, adminKey == "" && os.Getenv("CLOUD_ADMIN_KEY") == "")
 	opts, cleanup, err := store.SSHIdentity(ref, mode)
 	if err != nil {
 		return nil, func() {}, ExitError{Code: 66, Message: err.Error()}
@@ -155,7 +151,7 @@ func newServerAdoptCmd(g *globalOptions) *cobra.Command {
 
 			prog := output.NewProgress(cmd.OutOrStdout(), "server.adopt", server, g.json)
 			// 1. bootstrap the admin public key onto login_user@host.
-			if err := bootstrapAdminKey(ctx, &pf, prog); err != nil {
+			if err := bootstrapAdminKey(ctx, server, &pf, prog); err != nil {
 				return err
 			}
 			// 2. install, now reachable over the admin key.
@@ -230,7 +226,7 @@ func registerProvisionFlags(cmd *cobra.Command, pf *provisionFlags, adopt bool) 
 	f.StringVar(&pf.sshPort, "ssh-port", "22", "SSH port")
 	f.BoolVar(&pf.buildOnRemote, "build-on-remote", true, "build the system closure on the target (cross-arch)")
 	f.BoolVar(&pf.restoreMode, "restore", false, "install the <server>-restore profile")
-	f.StringVar(&pf.adminPub, "admin-pubkey", "keys/cloud-admin.pub", "admin public key shipped/authorized on the host")
+	f.StringVar(&pf.adminPub, "admin-pubkey", "", "admin public key override shipped/authorized on the host (default: per-server/cloud-admin fallback)")
 	if adopt {
 		f.StringVar(&pf.loginUser, "login-user", "root", "existing login user on the foreign host")
 		f.StringVar(&pf.initialKey, "initial-key", "", "initial SSH private key for the foreign host (else the agent)")
@@ -245,7 +241,7 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 	if err != nil {
 		return err
 	}
-	identity, cleanup, err := nixosAnywhereIdentity(g, ctx, server, pf.adminPubToPriv())
+	identity, cleanup, err := nixosAnywhereIdentity(g, ctx, server, "", pf.adminPub)
 	if err != nil {
 		return err
 	}
@@ -274,20 +270,10 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 	return nil
 }
 
-// adminPubToPriv derives the admin private-key fallback path from the pubkey path
-// (drop a trailing .pub), used only for the file fallback when 1Password/agent
-// is unavailable.
-func (pf *provisionFlags) adminPubToPriv() string {
-	// The install identity's file fallback is the operator's admin key; we don't
-	// derive it from the pubkey — use the conventional cloud-admin key path. The
-	// keystore prefers the agent/1Password anyway.
-	return ".local/ssh/cloud-admin_ed25519"
-}
-
 // bootstrapAdminKey installs the admin public key onto login_user@host over a
 // one-off credential (initial key, agent, or password).
-func bootstrapAdminKey(ctx *config.Context, pf *provisionFlags, prog *output.Progress) error {
-	pubPath := repoRelOrAbs(ctx.RepoRoot, pf.adminPub)
+func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, prog *output.Progress) error {
+	pubPath := repoRelOrAbs(ctx.RepoRoot, resolveAdminIdentity(ctx, server, "", pf.adminPub).publicRel)
 	pub, err := os.ReadFile(pubPath)
 	if err != nil {
 		return ExitError{Code: 66, Message: fmt.Sprintf("admin public key not found: %s", pubPath)}

@@ -57,7 +57,7 @@ func newTestDRCmd(g *globalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&sourceHost, "source-host", "", "(remote mode) live host to seed a marker on and back up")
 	cmd.Flags().StringVar(&restoreHost, "restore-host", "", "(remote mode) host to restore onto and verify (its data is wiped)")
 	cmd.Flags().StringVar(&sshPort, "ssh-port", "22", "admin SSH port (remote mode)")
-	cmd.Flags().StringVar(&adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "fallback admin SSH key path (remote mode)")
+	cmd.Flags().StringVar(&adminKey, "admin-key", "", "admin SSH private key override in remote mode (default: 1Password/per-server file/cloud-admin fallback)")
 	return cmd
 }
 

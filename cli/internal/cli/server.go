@@ -44,7 +44,7 @@ func (h *hostFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&h.host, "host", "", "the running host's admin address (default: <server>.<network.mesh_domain>)")
 	f.StringVar(&h.sshPort, "ssh-port", "22", "admin SSH port")
-	f.StringVar(&h.adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "fallback path to the admin SSH private key (used when 1Password has no item)")
+	f.StringVar(&h.adminKey, "admin-key", "", "admin SSH private key override (default: 1Password/per-server file/cloud-admin fallback)")
 }
 
 // sshAdapter builds the SSH adapter, sourcing the admin identity through the
@@ -61,11 +61,7 @@ func (h *hostFlags) sshAdapter(g *globalOptions, ctx *config.Context, server str
 	if g.interactive() {
 		mode = keystore.Interactive
 	}
-	ref := keystore.Ref{
-		OpItem:   keystore.DefaultOpItem(ctx.Vault, server),
-		FilePath: repoRelOrAbs(ctx.RepoRoot, h.adminKey),
-		PubPath:  filepath.Join(ctx.RepoRoot, "keys", server+"-admin.pub"),
-	}
+	ref := resolveAdminIdentity(ctx, server, h.adminKey, "").ref(ctx, server, h.adminKey == "" && os.Getenv("CLOUD_ADMIN_KEY") == "")
 	opts, cleanup, err := store.SSHIdentity(ref, mode)
 	if err != nil {
 		return adapters.SSH{}, func() {}, ExitError{Code: 66, Message: err.Error()}

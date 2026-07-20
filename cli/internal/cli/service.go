@@ -66,7 +66,7 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&targetHost, "target-host", "", "the destination (target) host address")
 	cmd.Flags().StringVar(&marker, "marker", "", "optional demo marker to verify before/after")
 	cmd.Flags().StringVar(&hf.sshPort, "ssh-port", "22", "admin SSH port")
-	cmd.Flags().StringVar(&hf.adminKey, "admin-key", ".local/ssh/cloud-admin_ed25519", "fallback admin SSH key path")
+	cmd.Flags().StringVar(&hf.adminKey, "admin-key", "", "admin SSH private key override (default: 1Password/per-server file/cloud-admin fallback)")
 	return cmd
 }
 
