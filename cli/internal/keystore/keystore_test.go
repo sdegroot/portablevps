@@ -76,6 +76,9 @@ func TestSSHIdentityInteractiveUsesAgent(t *testing.T) {
 	if selector == "" || selector == pub {
 		t.Fatalf("expected temp pubkey selector, got %v", opts)
 	}
+	if !strings.HasSuffix(selector, ".pub") {
+		t.Fatalf("temp public key selector must keep .pub suffix for OpenSSH, got %q", selector)
+	}
 	info, err := os.Stat(selector)
 	if err != nil {
 		t.Fatal(err)

@@ -116,6 +116,9 @@ func TestNixosAnywhereIdentityUsesPerServerAgentPublicKey(t *testing.T) {
 	if selector == "" || selector == pubPath {
 		t.Fatalf("expected temp per-server public key selector: %v", opts)
 	}
+	if !strings.HasSuffix(selector, ".pub") {
+		t.Fatalf("temp per-server public key selector must keep .pub suffix for OpenSSH, got %q", selector)
+	}
 	data, err := os.ReadFile(selector)
 	if err != nil {
 		t.Fatal(err)

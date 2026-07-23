@@ -144,7 +144,23 @@ func writeTempPublicKey(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading public key file %s: %w", path, err)
 	}
-	return writeTempKey(string(data))
+	f, err := os.CreateTemp("", "portablevps-key-*.pub")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if err := os.Chmod(name, 0o600); err != nil {
+		f.Close()
+		return "", err
+	}
+	if _, err := f.WriteString(strings.TrimRight(string(data), "\n") + "\n"); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // shred overwrites and removes a temp key file (best effort).
