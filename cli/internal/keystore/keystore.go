@@ -75,15 +75,15 @@ func (s Store) SSHIdentity(ref Ref, mode Mode) (opts []string, cleanup func(), e
 	// Interactive with a 1Password item: use the agent, selecting the identity by
 	// its public key so only the right key is offered.
 	if mode == Interactive && ref.OpItem != "" && ref.PubPath != "" && s.AgentSock != "" {
-		pub, err := writeTempPublicKey(ref.PubPath)
+		identity, err := writeTempPublicKey(ref.PubPath)
 		if err != nil {
 			return nil, noop, err
 		}
 		return []string{
 			"-o", "IdentityAgent=" + s.AgentSock,
-			"-i", pub,
+			"-i", identity,
 			"-o", "IdentitiesOnly=yes",
-		}, func() { shred(pub) }, nil
+		}, func() { shred(identity + ".pub") }, nil
 	}
 
 	// Headless with a 1Password item: op read the private key to a shredded temp.
@@ -144,12 +144,23 @@ func writeTempPublicKey(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading public key file %s: %w", path, err)
 	}
-	f, err := os.CreateTemp("", "portablevps-key-*.pub")
+	f, err := os.CreateTemp("", "portablevps-key-*")
 	if err != nil {
 		return "", err
 	}
-	name := f.Name()
-	if err := os.Chmod(name, 0o600); err != nil {
+	identity := f.Name()
+	pub := identity + ".pub"
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Remove(identity); err != nil {
+		return "", err
+	}
+	f, err = os.OpenFile(pub, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chmod(pub, 0o600); err != nil {
 		f.Close()
 		return "", err
 	}
@@ -160,7 +171,7 @@ func writeTempPublicKey(path string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	return name, nil
+	return identity, nil
 }
 
 // shred overwrites and removes a temp key file (best effort).

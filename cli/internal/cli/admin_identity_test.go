@@ -116,17 +116,21 @@ func TestNixosAnywhereIdentityUsesPerServerAgentPublicKey(t *testing.T) {
 	if selector == "" || selector == pubPath {
 		t.Fatalf("expected temp per-server public key selector: %v", opts)
 	}
-	if !strings.HasSuffix(selector, ".pub") {
-		t.Fatalf("temp per-server public key selector must keep .pub suffix for OpenSSH, got %q", selector)
+	if strings.HasSuffix(selector, ".pub") {
+		t.Fatalf("ssh -i selector must be the identity basename, got public key path %q", selector)
 	}
-	data, err := os.ReadFile(selector)
+	if _, err := os.Stat(selector); !os.IsNotExist(err) {
+		t.Fatalf("temp identity basename must not exist as a private key")
+	}
+	pubSelector := selector + ".pub"
+	data, err := os.ReadFile(pubSelector)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "test\n" {
 		t.Fatalf("selector content = %q", data)
 	}
-	info, err := os.Stat(selector)
+	info, err := os.Stat(pubSelector)
 	if err != nil {
 		t.Fatal(err)
 	}
