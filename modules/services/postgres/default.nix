@@ -16,6 +16,14 @@ let
       cfg.extraDatabases
   );
   hasExtraDatabases = cfg.extraDatabases != [ ];
+
+  extensionInitScript = pkgs.writeText "portablevps-postgres-extensions.sql" (
+    ''
+      \connect "${cfg.database}"
+    ''
+    + lib.concatMapStringsSep "\n" (ext: ''CREATE EXTENSION IF NOT EXISTS "${ext}";'') cfg.extensions
+  );
+  hasExtensions = cfg.extensions != [ ];
 in
 {
   options.portablevps.postgres = {
@@ -47,6 +55,12 @@ in
       type = lib.types.str;
       default = "postgres-demo";
       description = "Podman container name.";
+    };
+
+    image = lib.mkOption {
+      type = lib.types.str;
+      default = "docker.io/library/postgres:18";
+      description = "PostgreSQL container image. Override for extension-bearing images such as pgvector.";
     };
 
     database = lib.mkOption {
@@ -81,6 +95,16 @@ in
         POSTGRES_DB — it only takes effect on an empty data directory. The
         physical (pg_basebackup) backup already covers the whole cluster, so
         no per-database backup wiring is needed.
+      '';
+    };
+
+    extensions = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "hstore" "pg_trgm" "unaccent" "vector" ];
+      description = ''
+        PostgreSQL extensions created in the primary database on first boot.
+        The selected image must ship each extension's control files.
       '';
     };
 
@@ -126,7 +150,7 @@ in
       ConditionPathExists=!/run/portablevps/restore-mode
 
       [Container]
-      Image=docker.io/library/postgres:18
+      Image=${cfg.image}
       ContainerName=${cfg.containerName}
       Environment=POSTGRES_USER=${cfg.user}
       Environment=POSTGRES_DB=${cfg.database}
@@ -134,6 +158,8 @@ in
       Volume=${cfg.dataRoot}:/var/lib/postgresql
       ${lib.optionalString hasExtraDatabases
         "Volume=${extraDbInitScript}:/docker-entrypoint-initdb.d/10-portablevps-extra-databases.sql:ro"}
+      ${lib.optionalString hasExtensions
+        "Volume=${extensionInitScript}:/docker-entrypoint-initdb.d/20-portablevps-extensions.sql:ro"}
       PublishPort=127.0.0.1:5432:5432
       Exec=-c summarize_wal=on -c max_connections=${toString cfg.maxConnections}
 

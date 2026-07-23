@@ -106,6 +106,12 @@ backups go to a local test S3 (the QEMU MinIO), never the real bucket. Each
 `<server>` gets a `<server>-local-vm` / `<server>-local-vm-restore` config via
 `lib.mkFlake`.
 
+Apps that own state outside the generic platform PostgreSQL marker can add
+executable hooks under `/etc/portablevps/dr/seed.d` and
+`/etc/portablevps/dr/verify.d`. The harness passes the marker string to each
+hook, so an app can seed and verify its own database tables, uploads, or other
+state without hardcoding app logic into the test driver.
+
 **The tool's own demo** (from `portablevps/`):
 
 ```sh

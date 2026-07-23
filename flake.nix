@@ -47,6 +47,7 @@
         postgres = ./modules/services/postgres;
         containerState = ./modules/services/container-state.nix;
         podman = ./modules/runtime/podman.nix;
+        docker = ./modules/runtime/docker.nix;
         network = ./modules/networking/network.nix;
         netbird = ./modules/networking/netbird.nix;
         tailscale = ./modules/networking/tailscale.nix;
@@ -55,6 +56,7 @@
         breakGlassSsh = ./modules/networking/break-glass-ssh.nix;
         cloudVps = ./modules/platforms/cloud-vps.nix;
         forgejoRunner = ./modules/profiles/forgejo-runner.nix;
+        discourseApp = ./modules/profiles/discourse-app.nix;
         singleInstanceApp = ./modules/profiles/single-instance-app.nix;
       };
 
@@ -79,6 +81,19 @@
           inherit self;
           system = "aarch64-linux";
           hostModule = ./hosts/local-vm.nix;
+          restoreMode = true;
+        };
+
+        discourse-local-vm = pvlib.mkHost {
+          inherit self;
+          system = "aarch64-linux";
+          hostModule = ./hosts/discourse-local-vm.nix;
+        };
+
+        discourse-local-vm-restore = pvlib.mkHost {
+          inherit self;
+          system = "aarch64-linux";
+          hostModule = ./hosts/discourse-local-vm.nix;
           restoreMode = true;
         };
       };

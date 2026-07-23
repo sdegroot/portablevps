@@ -34,6 +34,23 @@ run_hooks() {
   done < <(find "$hook_dir" -mindepth 1 -maxdepth 1 ! -type d | sort)
 }
 
+post_backup_ran=0
+run_post_backup() {
+  local rc=$?
+  local hook_rc=0
+
+  if [ "$post_backup_ran" = 0 ]; then
+    post_backup_ran=1
+    run_hooks "$BACKUP_CONFIG_DIR/post-backup.d" || hook_rc=$?
+  fi
+
+  if [ "$rc" -eq 0 ] && [ "$hook_rc" -ne 0 ]; then
+    rc="$hook_rc"
+  fi
+  exit "$rc"
+}
+trap run_post_backup EXIT
+
 read_paths() {
   local paths_dir="$1"
 

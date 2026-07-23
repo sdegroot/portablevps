@@ -90,10 +90,14 @@ require_remote_tools() {
 # Run the REAL production backup path — the systemd service (which self-inits the
 # repo via ExecStartPre) — rather than invoking backup.sh directly, so the test
 # exercises the same execution environment (service PATH, EnvironmentFile) as a
-# live host. Assert the postgres backup mode from the journal.
+# live host. When a PostgreSQL component is present, assert its backup mode from
+# the journal; appliance-style apps may not register a PostgreSQL component.
 run_backup() {
-  local target="$1" expected="$2"
+  local target="$1" expected="${2:-}"
   remote "$target" "sudo systemctl start portablevps-backup.service"
+  if [ -z "$expected" ]; then
+    return
+  fi
   local mode
   mode="$(remote "$target" "sudo journalctl -u portablevps-backup.service -o cat --no-pager | grep -oE 'postgres backup mode: (full|incremental)' | tail -1")"
   printf '%s\n' "$mode"
@@ -102,6 +106,11 @@ run_backup() {
     remote "$target" "sudo journalctl -u portablevps-backup.service -o cat --no-pager | tail -40" >&2
     exit 1
   fi
+}
+
+has_postgres_component() {
+  local target="$1"
+  remote "$target" "test -e /etc/portablevps/backups/paths.d/postgres"
 }
 
 # Seed a marker into every non-postgres backup path the running config declares.
@@ -151,7 +160,39 @@ verify_component_markers() {
   "
 }
 
-echo "test: fresh server can restore PostgreSQL data from backup"
+run_dr_hooks() {
+  local target="$1" phase="$2" marker="$3"
+  remote "$target" "
+    set -eu
+    hook_dir=/etc/portablevps/dr/$phase.d
+    [ -d \"\$hook_dir\" ] || exit 0
+    for hook in \$(find \"\$hook_dir\" -mindepth 1 -maxdepth 1 ! -type d | sort); do
+      sudo \"\$hook\" '$marker'
+    done
+  "
+}
+
+verify_discourse_archive_retention() {
+  local target="$1"
+  remote "$target" "
+    set -eu
+    if [ ! -e /etc/portablevps/backups/paths.d/discourse ]; then
+      exit 0
+    fi
+    keep=\"\$(cat /etc/portablevps/dr/discourse-local-archives-to-keep 2>/dev/null || printf '2')\"
+    while IFS= read -r p; do
+      [ -n \"\$p\" ] || continue
+      count=\"\$(find \"\$p\" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l)\"
+      if [ \"\$count\" -gt \"\$keep\" ]; then
+        echo \"FAIL: Discourse backup archive retention kept \$count archives in \$p, expected <= \$keep\" >&2
+        exit 1
+      fi
+      echo \"ok: Discourse backup archive retention kept \$count archives in \$p\"
+    done < /etc/portablevps/backups/paths.d/discourse
+  "
+}
+
+echo "test: fresh server can restore declared app state from backup"
 echo "initial marker: $INITIAL_MARKER"
 echo "marker: $MARKER"
 echo "restic repository: $RESTIC_REPOSITORY"
@@ -159,12 +200,9 @@ echo "restic repository: $RESTIC_REPOSITORY"
 require_remote_tools "$VM_A_SSH"
 require_remote_tools "$VM_B_SSH"
 
-# Reset VM A's data so the target config's postgres initialises fresh with its
-# own database/user. Reused VMs may hold a previous run's cluster (postgres only
-# initdb's an empty data dir), which would otherwise reject the app's role. Clear
-# the *contents* and keep the dirs: nixos-rebuild switch does not re-run
-# systemd-tmpfiles, so a removed /data/postgres would leave postgres.service
-# skipped (ConditionPathIsDirectory unmet).
+# Reset VM A's data so the target config initialises fresh. Reused VMs may hold
+# a previous run's cluster or appliance state. Clear the *contents* of generic
+# dirs and known app roots before switching into the tested config.
 echo "resetting VM A data for a clean ${CONFIG} install"
 remote "$VM_A_SSH" "
   sudo systemctl stop apps.target >/dev/null 2>&1 || true
@@ -174,11 +212,18 @@ remote "$VM_A_SSH" "
   # data immediately then races a live container into 'Directory not empty' ->
   # 'PostgreSQL is not ready'. Wait for the app containers to actually exit first
   # (generic: no per-app knowledge, just 'no app containers left').
-  for _ in \$(seq 1 30); do [ -z \"\$(sudo podman ps -q)\" ] && break; sleep 1; done
+  for _ in \$(seq 1 30); do
+    podman_running=\"\$(command -v podman >/dev/null 2>&1 && sudo podman ps -q || true)\"
+    docker_running=\"\$(command -v docker >/dev/null 2>&1 && sudo docker ps -q || true)\"
+    [ -z \"\$podman_running\$docker_running\" ] && break
+    sleep 1
+  done
   sudo mkdir -p /data/postgres /data/container-state
   sudo find /data/postgres -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   sudo find /data/container-state -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  sudo rm -rf /data/discourse
   sudo rm -rf /var/lib/portablevps-backups/postgres-physical
+  sudo systemctl mask --runtime portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true
 "
 
 echo "configuring VM A in normal mode"
@@ -189,16 +234,20 @@ remote "$VM_A_SSH" "sudo systemctl start apps.target"
 # full/incremental backups and make journal-mode assertions non-deterministic.
 remote "$VM_A_SSH" "sudo systemctl stop portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true"
 
-echo "inserting initial marker on VM A"
-remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
-remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$INITIAL_MARKER'"
+if has_postgres_component "$VM_A_SSH"; then
+  echo "inserting initial PostgreSQL marker on VM A"
+  remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$INITIAL_MARKER'"
+  remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$INITIAL_MARKER'"
 
-echo "creating full backup on VM A (portablevps-backup.service)"
-run_backup "$VM_A_SSH" full
+  echo "creating full backup on VM A (portablevps-backup.service)"
+  run_backup "$VM_A_SSH" full
 
-echo "inserting final marker on VM A"
-remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$MARKER'"
-remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$MARKER'"
+  echo "inserting final PostgreSQL marker on VM A"
+  remote_repo "$VM_A_SSH" "sudo insert-test-data.sh '$MARKER'"
+  remote_repo "$VM_A_SSH" "sudo verify-test-data.sh '$MARKER'"
+else
+  echo "no PostgreSQL backup component registered; skipping PostgreSQL marker seed"
+fi
 
 echo "writing container file state on VM A"
 remote "$VM_A_SSH" "sudo mkdir -p /data/container-state/demo && printf '%s\n' '$MARKER' | sudo tee /data/container-state/demo/marker.txt >/dev/null"
@@ -206,25 +255,39 @@ remote "$VM_A_SSH" "sudo mkdir -p /data/container-state/demo && printf '%s\n' '$
 echo "seeding a marker into every app-registered backup path on VM A"
 seed_component_markers "$VM_A_SSH" "$MARKER"
 
-echo "creating incremental backup on VM A (portablevps-backup.service)"
-run_backup "$VM_A_SSH" incremental
+echo "running app-owned DR seed hooks on VM A"
+run_dr_hooks "$VM_A_SSH" seed "$MARKER"
+
+if has_postgres_component "$VM_A_SSH"; then
+  echo "creating incremental backup on VM A (portablevps-backup.service)"
+  run_backup "$VM_A_SSH" incremental
+else
+  echo "creating backup on VM A (portablevps-backup.service)"
+  run_backup "$VM_A_SSH"
+fi
+verify_discourse_archive_retention "$VM_A_SSH"
 
 echo "using shared restic repository directly: $RESTIC_REPOSITORY"
 
 echo "configuring VM B in restore mode"
 remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}-restore"
-remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started in restore mode' >&2; exit 1; fi"
+remote "$VM_B_SSH" "if systemctl list-unit-files postgres.service >/dev/null 2>&1 && sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started in restore mode' >&2; exit 1; fi"
 
 echo "restoring VM B before apps start"
 remote "$VM_B_SSH" "sudo restore.sh"
-remote "$VM_B_SSH" "if sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started during restore' >&2; exit 1; fi"
+remote "$VM_B_SSH" "if systemctl list-unit-files postgres.service >/dev/null 2>&1 && sudo systemctl is-active --quiet postgres.service; then echo 'postgres.service started during restore' >&2; exit 1; fi"
 
 echo "switching VM B to normal mode"
 remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_B_SSH" "sudo systemctl start apps.target"
+verify_discourse_archive_retention "$VM_B_SSH"
 
-echo "verifying restored PostgreSQL marker on VM B"
-remote_repo "$VM_B_SSH" "sudo verify-test-data.sh '$MARKER'"
+if has_postgres_component "$VM_B_SSH"; then
+  echo "verifying restored PostgreSQL marker on VM B"
+  remote_repo "$VM_B_SSH" "sudo verify-test-data.sh '$MARKER'"
+else
+  echo "no PostgreSQL backup component registered; skipping PostgreSQL marker verify"
+fi
 
 echo "verifying restored container file state on VM B"
 remote "$VM_B_SSH" "test \"\$(sudo cat /data/container-state/demo/marker.txt)\" = '$MARKER'"
@@ -232,4 +295,7 @@ remote "$VM_B_SSH" "test \"\$(sudo cat /data/container-state/demo/marker.txt)\" 
 echo "verifying every app-registered backup path was restored on VM B"
 verify_component_markers "$VM_B_SSH" "$MARKER"
 
-echo "PASS: fresh server restored PostgreSQL data from backup"
+echo "running app-owned DR verify hooks on VM B"
+run_dr_hooks "$VM_B_SSH" verify "$MARKER"
+
+echo "PASS: fresh server restored declared app state from backup"

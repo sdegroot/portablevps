@@ -23,6 +23,12 @@ let
         description = "Shell hook run before restic backup.";
       };
 
+      postBackup = lib.mkOption {
+        type = lib.types.lines;
+        default = "";
+        description = "Shell hook run after restic backup, even when backup fails.";
+      };
+
       preRestore = lib.mkOption {
         type = lib.types.lines;
         default = "";
@@ -109,6 +115,7 @@ let
         (pathsFile component)
         (clearFile component)
         (hookFile "pre-backup" "preBackup" component)
+        (hookFile "post-backup" "postBackup" component)
         (hookFile "pre-restore" "preRestore" component)
         (hookFile "post-restore" "postRestore" component)
       ])
@@ -229,6 +236,7 @@ in
       "d /etc/portablevps/backups/paths.d 0755 root root -"
       "d /etc/portablevps/backups/clear-before-restore.d 0755 root root -"
       "d /etc/portablevps/backups/pre-backup.d 0755 root root -"
+      "d /etc/portablevps/backups/post-backup.d 0755 root root -"
       "d /etc/portablevps/backups/pre-restore.d 0755 root root -"
       "d /etc/portablevps/backups/post-restore.d 0755 root root -"
     ];

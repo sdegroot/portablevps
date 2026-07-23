@@ -154,3 +154,66 @@ Requirements and behaviour:
 
 The proxy route lives in the server definition, not the app: the app owns the
 container and its state; the server owns the edge.
+
+## Built-in Discourse role
+
+Discourse has a first-party portablevps module because its supported runtime is
+the `discourse_docker` launcher rather than a normal single image. A future
+server should use the dedicated profile:
+
+```nix
+profile = "discourse-app";
+
+module = { ... }: {
+  portablevps.server.backupRepository = (import ../backup.nix).repo "discourse";
+  portablevps.backups.restic.region = (import ../backup.nix).region;
+
+  portablevps.apps.discourse = {
+    enable = true;
+    domain = "community.example.com";
+    developerEmails = [ "admin@example.com" ];
+    # Defaults to "latest"; set a Discourse tag or commit when you want
+    # upgrade rollouts to be exact and repeatable.
+    discourseVersion = "latest";
+    oidc = {
+      enable = true;
+      issuerBaseUrl = "https://auth.example.com";
+      clientId = "discourse";
+      clientSecretSecret = "discourse/oidc-client-secret";
+    };
+    smtp = {
+      enable = true;
+      host = "smtp.example.com";
+      notificationEmail = "noreply@example.com";
+      usernameSecret = "discourse/smtp-username";
+      passwordSecret = "discourse/smtp-password";
+    };
+  };
+
+  portablevps.proxy.http.services.discourse = {
+    domain = "community.example.com";
+    upstream = "http://127.0.0.1:3080";
+    visibility = "netbird-edge";
+  };
+};
+```
+
+The role enables Docker for this host and renders a standalone Discourse
+`app.yml` under `/data/discourse/docker`, with Discourse publishing HTTP only on
+loopback port `3080`. PostgreSQL, Redis, uploads, and plugin state are owned by
+Discourse inside that launcher-managed appliance.
+
+During the portablevps backup window, the module asks Discourse to create a
+normal local backup archive and stores that archive in the coordinated restic
+snapshot. Restore mode restores the archive first; the next normal activation
+bootstraps Discourse and runs Discourse's own restore command before serving
+traffic. The local DR profile verifies the restored Discourse database marker,
+an uploads-tree file marker, and the `/srv/status` HTTP endpoint.
+
+Discourse backup archives include the bundled PostgreSQL database, uploads,
+themes, and other Discourse-managed state under `/shared`. The launcher source,
+Docker images, and declared plugin checkout commands are regenerated from Nix
+and `app.yml`; do not treat manual edits under `/data/discourse/docker` as
+backed-up configuration. The module keeps only the newest local Discourse backup
+tarballs by default (`backup.localArchivesToKeep = 2`) so hourly restic
+snapshots do not keep re-uploading every historical Discourse archive.
