@@ -13,7 +13,7 @@ type fakeOp struct {
 	calls []string
 }
 
-func (f *fakeOp) Run(_ , name string, args ...string) (string, error) {
+func (f *fakeOp) Run(_, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	if f.err != nil {
 		return "", f.err
@@ -52,15 +52,40 @@ func TestAgeMaterialFallsBackToFile(t *testing.T) {
 }
 
 func TestSSHIdentityInteractiveUsesAgent(t *testing.T) {
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "web.pub")
+	if err := os.WriteFile(pub, []byte("ssh-ed25519 AAAATEST web\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	s := Store{AgentSock: "/tmp/agent.sock"}
-	opts, cleanup, err := s.SSHIdentity(Ref{OpItem: "op://Epistola/web", PubPath: "/keys/web.pub"}, Interactive)
-	defer cleanup()
+	opts, cleanup, err := s.SSHIdentity(Ref{OpItem: "op://Epistola/web", PubPath: pub}, Interactive)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	joined := strings.Join(opts, " ")
-	if !strings.Contains(joined, "IdentityAgent=/tmp/agent.sock") || !strings.Contains(joined, "-i /keys/web.pub") {
-		t.Fatalf("expected agent + pubkey selection, got %v", opts)
+	if !strings.Contains(joined, "IdentityAgent=/tmp/agent.sock") {
+		t.Fatalf("expected agent selection, got %v", opts)
+	}
+	var selector string
+	for i, o := range opts {
+		if o == "-i" {
+			selector = opts[i+1]
+		}
+	}
+	if selector == "" || selector == pub {
+		t.Fatalf("expected temp pubkey selector, got %v", opts)
+	}
+	info, err := os.Stat(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("temp pubkey selector mode = %v, want 0600", info.Mode().Perm())
+	}
+	cleanup()
+	if _, err := os.Stat(selector); !os.IsNotExist(err) {
+		t.Errorf("cleanup should have removed the temp public key selector")
 	}
 }
 

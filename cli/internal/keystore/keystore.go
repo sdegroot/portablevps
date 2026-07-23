@@ -75,11 +75,15 @@ func (s Store) SSHIdentity(ref Ref, mode Mode) (opts []string, cleanup func(), e
 	// Interactive with a 1Password item: use the agent, selecting the identity by
 	// its public key so only the right key is offered.
 	if mode == Interactive && ref.OpItem != "" && ref.PubPath != "" && s.AgentSock != "" {
+		pub, err := writeTempPublicKey(ref.PubPath)
+		if err != nil {
+			return nil, noop, err
+		}
 		return []string{
 			"-o", "IdentityAgent=" + s.AgentSock,
-			"-i", ref.PubPath,
+			"-i", pub,
 			"-o", "IdentitiesOnly=yes",
-		}, noop, nil
+		}, func() { shred(pub) }, nil
 	}
 
 	// Headless with a 1Password item: op read the private key to a shredded temp.
@@ -133,6 +137,14 @@ func writeTempKey(content string) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+func writeTempPublicKey(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading public key file %s: %w", path, err)
+	}
+	return writeTempKey(string(data))
 }
 
 // shred overwrites and removes a temp key file (best effort).

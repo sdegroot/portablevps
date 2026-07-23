@@ -90,21 +90,45 @@ func TestNixosAnywhereIdentityUsesPerServerAgentPublicKey(t *testing.T) {
 	t.Setenv("CLOUD_ADMIN_PUBKEY", "")
 	t.Setenv("PORTABLEVPS_1P_AGENT_SOCK", "/tmp/onepassword.sock")
 	root := t.TempDir()
+	pubPath := filepath.Join(root, "keys/servers/web-admin.pub")
 	touchTestFile(t, root, "keys/servers/web-admin.pub")
+	if err := os.Chmod(pubPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	touchTestFile(t, root, ".local/ssh/servers/web_ed25519")
 	ctx := &config.Context{RepoRoot: root, Vault: "Epistola"}
 
 	opts, cleanup, err := nixosAnywhereIdentity(&globalOptions{interactiveFlag: true}, ctx, "web", "", "")
-	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	joined := strings.Join(opts, " ")
 	if !strings.Contains(joined, "--ssh-option IdentityAgent=/tmp/onepassword.sock") {
 		t.Fatalf("missing 1Password agent option: %v", opts)
 	}
-	if !strings.Contains(joined, "-i "+filepath.Join(root, "keys/servers/web-admin.pub")) {
-		t.Fatalf("missing per-server public key selector: %v", opts)
+	var selector string
+	for i, o := range opts {
+		if o == "-i" {
+			selector = opts[i+1]
+		}
+	}
+	if selector == "" || selector == pubPath {
+		t.Fatalf("expected temp per-server public key selector: %v", opts)
+	}
+	data, err := os.ReadFile(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "test\n" {
+		t.Fatalf("selector content = %q", data)
+	}
+	info, err := os.Stat(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("selector mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 
