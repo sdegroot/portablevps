@@ -51,48 +51,46 @@ func TestAgeMaterialFallsBackToFile(t *testing.T) {
 	}
 }
 
-func TestSSHIdentityInteractiveUsesAgent(t *testing.T) {
+func TestSSHIdentityInteractivePrefersLocalPrivateKey(t *testing.T) {
 	dir := t.TempDir()
-	pub := filepath.Join(dir, "web.pub")
-	if err := os.WriteFile(pub, []byte("ssh-ed25519 AAAATEST web\n"), 0o644); err != nil {
+	key := filepath.Join(dir, "web")
+	if err := os.WriteFile(key, []byte("PRIVATE-KEY-BODY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := Store{AgentSock: "/tmp/agent.sock"}
-	opts, cleanup, err := s.SSHIdentity(Ref{OpItem: "op://Epistola/web", PubPath: pub}, Interactive)
+	s := Store{}
+	opts, cleanup, err := s.SSHIdentity(Ref{OpItem: "op://Epistola/web", FilePath: key, PubPath: key + ".pub"}, Interactive)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	joined := strings.Join(opts, " ")
-	if !strings.Contains(joined, "IdentityAgent=/tmp/agent.sock") {
-		t.Fatalf("expected agent selection, got %v", opts)
+	if strings.Join(opts, " ") != "-i "+key+" -o IdentitiesOnly=yes" {
+		t.Fatalf("expected local private key, got %v", opts)
 	}
-	var selector string
-	for i, o := range opts {
-		if o == "-i" {
-			selector = opts[i+1]
-		}
-	}
-	if selector == "" || selector == pub {
-		t.Fatalf("expected temp pubkey selector, got %v", opts)
-	}
-	if strings.HasSuffix(selector, ".pub") {
-		t.Fatalf("ssh -i selector must be the identity basename, got public key path %q", selector)
-	}
-	if _, err := os.Stat(selector); !os.IsNotExist(err) {
-		t.Fatalf("temp identity basename must not exist as a private key")
-	}
-	pubSelector := selector + ".pub"
-	info, err := os.Stat(pubSelector)
+}
+
+func TestSSHIdentityInteractiveOpReadsToTempFileWhenLocalKeyMissing(t *testing.T) {
+	op := &fakeOp{reads: map[string]string{"op://Epistola/web/private key": "PRIVATE-KEY-BODY"}}
+	s := Store{Runner: op}
+	opts, cleanup, err := s.SSHIdentity(Ref{OpItem: "op://Epistola/web", FilePath: "/missing/web"}, Interactive)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("temp pubkey selector mode = %v, want 0600", info.Mode().Perm())
+	var tmp string
+	for i, o := range opts {
+		if o == "-i" {
+			tmp = opts[i+1]
+		}
+	}
+	if tmp == "" {
+		t.Fatalf("expected a temp key file, got %v", opts)
+	}
+	data, _ := os.ReadFile(tmp)
+	if !strings.Contains(string(data), "PRIVATE-KEY-BODY") {
+		t.Errorf("temp key content wrong: %q", data)
 	}
 	cleanup()
-	if _, err := os.Stat(pubSelector); !os.IsNotExist(err) {
-		t.Errorf("cleanup should have removed the temp public key selector")
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("cleanup should have removed the temp key")
 	}
 }
 

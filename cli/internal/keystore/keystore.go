@@ -41,7 +41,6 @@ type Ref struct {
 type Store struct {
 	Runner    Runner
 	OpAccount string // 1Password account for `op`
-	AgentSock string // 1Password SSH agent socket (Interactive mode)
 }
 
 // ErrNoKey means neither 1Password nor a file fallback yielded the key.
@@ -72,22 +71,16 @@ func (s Store) AgeMaterial(ref Ref) (string, error) {
 func (s Store) SSHIdentity(ref Ref, mode Mode) (opts []string, cleanup func(), err error) {
 	noop := func() {}
 
-	// Interactive with a 1Password item: use the agent, selecting the identity by
-	// its public key so only the right key is offered.
-	if mode == Interactive && ref.OpItem != "" && ref.PubPath != "" && s.AgentSock != "" {
-		identity, err := writeTempPublicKey(ref.PubPath)
-		if err != nil {
-			return nil, noop, err
+	// Interactive operators prefer the local break-glass key when present. This
+	// avoids relying on OpenSSH's public-key IdentityFile agent-selection edge.
+	if mode == Interactive && ref.FilePath != "" {
+		if _, statErr := os.Stat(ref.FilePath); statErr == nil {
+			return []string{"-i", ref.FilePath, "-o", "IdentitiesOnly=yes"}, noop, nil
 		}
-		return []string{
-			"-o", "IdentityAgent=" + s.AgentSock,
-			"-i", identity,
-			"-o", "IdentitiesOnly=yes",
-		}, func() { shred(identity + ".pub") }, nil
 	}
 
-	// Headless with a 1Password item: op read the private key to a shredded temp.
-	if mode == Headless && ref.OpItem != "" {
+	// With a 1Password item: op read the private key to a shredded temp.
+	if ref.OpItem != "" {
 		key, readErr := s.opRead(ref.OpItem + "/private key")
 		if readErr == nil {
 			tmp, err := writeTempKey(key)
@@ -137,41 +130,6 @@ func writeTempKey(content string) (string, error) {
 		return "", err
 	}
 	return name, nil
-}
-
-func writeTempPublicKey(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading public key file %s: %w", path, err)
-	}
-	f, err := os.CreateTemp("", "portablevps-key-*")
-	if err != nil {
-		return "", err
-	}
-	identity := f.Name()
-	pub := identity + ".pub"
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Remove(identity); err != nil {
-		return "", err
-	}
-	f, err = os.OpenFile(pub, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", err
-	}
-	if err := os.Chmod(pub, 0o600); err != nil {
-		f.Close()
-		return "", err
-	}
-	if _, err := f.WriteString(strings.TrimRight(string(data), "\n") + "\n"); err != nil {
-		f.Close()
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	return identity, nil
 }
 
 // shred overwrites and removes a temp key file (best effort).

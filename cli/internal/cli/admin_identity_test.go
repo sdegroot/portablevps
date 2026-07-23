@@ -85,10 +85,9 @@ func TestResolveAdminIdentityPublicOverridePairsPerServerPrivate(t *testing.T) {
 	}
 }
 
-func TestNixosAnywhereIdentityUsesPerServerAgentPublicKey(t *testing.T) {
+func TestNixosAnywhereIdentityUsesPerServerLocalPrivateKey(t *testing.T) {
 	t.Setenv("CLOUD_ADMIN_KEY", "")
 	t.Setenv("CLOUD_ADMIN_PUBKEY", "")
-	t.Setenv("PORTABLEVPS_1P_AGENT_SOCK", "/tmp/onepassword.sock")
 	root := t.TempDir()
 	pubPath := filepath.Join(root, "keys/servers/web-admin.pub")
 	touchTestFile(t, root, "keys/servers/web-admin.pub")
@@ -104,38 +103,12 @@ func TestNixosAnywhereIdentityUsesPerServerAgentPublicKey(t *testing.T) {
 	}
 	defer cleanup()
 	joined := strings.Join(opts, " ")
-	if !strings.Contains(joined, "--ssh-option IdentityAgent=/tmp/onepassword.sock") {
-		t.Fatalf("missing 1Password agent option: %v", opts)
+	if strings.Contains(joined, "IdentityAgent=") {
+		t.Fatalf("unexpected SSH agent option with local key present: %v", opts)
 	}
-	var selector string
-	for i, o := range opts {
-		if o == "-i" {
-			selector = opts[i+1]
-		}
-	}
-	if selector == "" || selector == pubPath {
-		t.Fatalf("expected temp per-server public key selector: %v", opts)
-	}
-	if strings.HasSuffix(selector, ".pub") {
-		t.Fatalf("ssh -i selector must be the identity basename, got public key path %q", selector)
-	}
-	if _, err := os.Stat(selector); !os.IsNotExist(err) {
-		t.Fatalf("temp identity basename must not exist as a private key")
-	}
-	pubSelector := selector + ".pub"
-	data, err := os.ReadFile(pubSelector)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "test\n" {
-		t.Fatalf("selector content = %q", data)
-	}
-	info, err := os.Stat(pubSelector)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("selector mode = %v, want 0600", info.Mode().Perm())
+	want := "-i " + filepath.Join(root, ".local/ssh/servers/web_ed25519")
+	if !strings.Contains(joined, want) {
+		t.Fatalf("missing per-server private key %q: %v", want, opts)
 	}
 }
 

@@ -75,7 +75,7 @@ func ageKeyMaterial(ctx *config.Context, server string) (string, error) {
 // nixosAnywhereIdentity resolves the SSH identity for nixos-anywhere from the
 // keystore and converts ssh -o/-i options into nixos-anywhere args.
 func nixosAnywhereIdentity(g *globalOptions, ctx *config.Context, server, adminKey, adminPub string) ([]string, func(), error) {
-	store := keystore.Store{Runner: adapters.ExecRunner{}, OpAccount: ctx.OpAccount, AgentSock: onePasswordAgentSock()}
+	store := keystore.Store{Runner: adapters.ExecRunner{}, OpAccount: ctx.OpAccount}
 	mode := keystore.Headless
 	if g.interactive() {
 		mode = keystore.Interactive

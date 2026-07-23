@@ -55,7 +55,6 @@ func (h *hostFlags) sshAdapter(g *globalOptions, ctx *config.Context, server str
 	store := keystore.Store{
 		Runner:    adapters.ExecRunner{},
 		OpAccount: ctx.OpAccount,
-		AgentSock: onePasswordAgentSock(),
 	}
 	mode := keystore.Headless
 	if g.interactive() {
@@ -74,16 +73,6 @@ func repoRelOrAbs(root, p string) string {
 		return p
 	}
 	return filepath.Join(root, p)
-}
-
-// onePasswordAgentSock returns the 1Password SSH agent socket (override with
-// PORTABLEVPS_1P_AGENT_SOCK). Only used in interactive+vault mode.
-func onePasswordAgentSock() string {
-	if s := os.Getenv("PORTABLEVPS_1P_AGENT_SOCK"); s != "" {
-		return s
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".1password", "agent.sock")
 }
 
 func newServerDeployCmd(g *globalOptions) *cobra.Command {
