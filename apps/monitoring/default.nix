@@ -132,6 +132,11 @@ let
     ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupPresenceFile} "$out/backup-presence.yml"''}
   '';
 
+  vlogsAlertsDir = pkgs.runCommand "portablevps-monitoring-vlogs-rules" { } ''
+    mkdir -p "$out"
+    cp ${./rules-vlogs}/*.yml "$out"/
+  '';
+
   # Alertmanager config carries the SMTP password, so in normal mode it is a
   # sops template rendered to a 0400 file; in prototype mode a demo file.
   alertmanagerConfigPath =
@@ -444,6 +449,20 @@ in
         publishPorts = publishLoopbackAnd 8880 8880;
         volumes = [ "${alertsDir}:/etc/alerts:ro" ];
         exec = "-httpListenAddr=:8880 -datasource.url=http://victoriametrics:8428 -remoteWrite.url=http://victoriametrics:8428 -remoteRead.url=http://victoriametrics:8428 -notifier.url=http://alertmanager:9093 -rule=/etc/alerts/*.yml -evaluationInterval=30s";
+        timeoutStart = 60;
+      };
+
+      environment.etc."containers/systemd/vmalert-logs.container".text = mkContainer {
+        name = "vmalert-logs";
+        image = cfg.images.vmalert;
+        ip = "10.89.0.15";
+        uid = 10002;
+        network = "${net}:ip=10.89.0.15";
+        requires = [ "monitoring-network.service" ];
+        after = [ "monitoring-network.service" "victorialogs.service" "victoriametrics.service" "alertmanager.service" ];
+        publishPorts = publishLoopbackAnd 8881 8881;
+        volumes = [ "${vlogsAlertsDir}:/etc/alerts-vlogs:ro" ];
+        exec = "-httpListenAddr=:8881 -datasource.url=http://victorialogs:9428 -remoteWrite.url=http://victoriametrics:8428 -remoteRead.url=http://victoriametrics:8428 -notifier.url=http://alertmanager:9093 -rule=/etc/alerts-vlogs/*.yml -evaluationInterval=30s";
         timeoutStart = 60;
       };
 

@@ -1,0 +1,22 @@
+# Application log alerts. Evaluated by the dedicated vmalert-logs instance
+# against VictoriaLogs, not VictoriaMetrics.
+groups:
+  - name: application-logs
+    type: vlogs
+    interval: 30s
+    rules:
+      - alert: ApplicationErrorLogs
+        expr: |
+          _time:5m (_msg:" ERROR " OR _msg:Exception OR _msg:FlywayValidateException OR _msg:FATAL OR _msg:PANIC OR PRIORITY:~"[0-3]")
+          | stats by (host.name, service.name, SYSLOG_IDENTIFIER, _SYSTEMD_UNIT) count() as errors
+          | rename host.name as host_name, service.name as service_name
+          | filter errors:>0
+          | fields host_name, service_name, SYSLOG_IDENTIFIER, _SYSTEMD_UNIT, errors
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Error logs from {{ $labels.service_name }} on {{ $labels.host_name }}"
+          description: >-
+            VictoriaLogs saw {{ $value }} error-like journal lines in the last 5m
+            from {{ $labels.SYSLOG_IDENTIFIER }} ({{ $labels._SYSTEMD_UNIT }}) on {{ $labels.host_name }}.
