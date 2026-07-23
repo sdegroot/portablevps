@@ -238,7 +238,8 @@ new image, waits for health, flips, then drains the old colour. Notes:
 Opt-in per box via `portablevps.autoUpgrade` (ADR 0003). An enabled box rebuilds
 *itself* from the committed flake on `main` on a timer — no operator deploy, no
 inbound access to the box, and no deploy key in CI. Currently enabled on the
-**website** (`hetzner-fsn-20260710a`, 2-minute poll).
+**website** (`hetzner-fsn-20260710a`, 2-minute poll) and the **demo host**
+(`hetzner-fsn-c4r8d160-20260710c`, 10-minute poll).
 
 ### How it works (end to end)
 
@@ -249,15 +250,16 @@ inbound access to the box, and no deploy key in CI. Currently enabled on the
    advanced (see "Bumping the pin").
 3. Each enabled box runs the `nixos-upgrade` unit on its timer: it fetches the
    flake (`github:epistola-app/epistola-nix-infra?dir=epistola`), evaluates
-   `#<hostname>`, and `nixos-rebuild switch`es. No change → no-op; pin moved → the
-   podman restart-on-change step rolls the container (blue-green flips,
-   health-gated, so a broken image never takes traffic).
+   `#<hostname>`, and `nixos-rebuild switch`es. No change -> no-op; pin moved ->
+   the podman restart-on-change step rolls the container. The website uses
+   blue-green and health-gated flips; the demo apps currently use restart-based
+   rollouts, so expect a brief blip during a demo image bump.
 4. Outcome is stamped to `portablevps_deploy_last_{success,failure}_timestamp_
    seconds` (same as an operator deploy) → the `DeployFailing` alert.
 
 Pull, not push: the box needs only *outbound* read access to GitHub (a read-only
 PAT); nothing reaches into the box and no operator SSH/age key lands in CI. The
-price is up-to-poll-interval latency (2 min for the website).
+price is up-to-poll-interval latency (2 min for the website, 10 min for demos).
 
 ### Enabling it on a box
 
@@ -286,50 +288,65 @@ Auto-disabled in restore mode and in prototype/local-VM mode.
 
 ### Bumping the pin (GitHub Actions)
 
-The pin is advanced by the **`website-pin-bump`** workflow
-(`.github/workflows/website-pin-bump.yml`) — GitHub-native, no Renovate, no PATs
-in this repo (it uses the built-in `GITHUB_TOKEN`). It edits the one-line
-`portablevps.apps.website.image` pin and commits it to `main`; the box's
-`autoUpgrade` poll then rolls it via blue-green. Two triggers:
+Pins are advanced by GitHub-native workflows, with no Renovate and no PATs in
+this repo (they use the built-in `GITHUB_TOKEN`).
 
-- **`workflow_dispatch` (fast path):** the website repo's CI calls it the moment a
-  release is published, passing the freshly-built tag as the `tag` input. This is
-  the event-driven trigger — a release cut → the pin bumps → the box rolls, within
-  ~CI-time + ≤2 min.
-- **`schedule` (fallback):** hourly, it queries ghcr for the newest
-  `<version>-<sha>` tag (e.g. `1.0.1-ad50b71`) and bumps if it differs — a safety
-  net if a dispatch is missed.
+The **`app-pin-bump`** workflow (`.github/workflows/app-pin-bump.yml`) edits the
+configured app image pin(s) and commits them to `main`; each app's host applies
+the change on its next `autoUpgrade` poll. Two triggers:
+
+- **`workflow_dispatch` (fast path):** an app repo's CI calls it the moment a
+  release is published, passing `app=<website|epistola-suite|valtimo>` and the
+  freshly-built `tag`. This is the event-driven trigger — a release cut -> the
+  pin bumps -> the box rolls, within ~CI-time + the host's poll interval.
+- **`schedule` (fallback):** hourly, it queries ghcr for every known app and
+  commits one combined bump if any pin differs — a safety net if a dispatch is
+  missed.
 
 No PR/eval gate is used: a pin bump is a one-line string change that can't break
 evaluation, and the real gate is on the box — blue-green won't flip to an image
 that fails its health check, so a bad tag leaves the old colour serving.
 
+The website is the only blue-green app here: its host rolls via health-gated
+colour flips. The demos are restart-based: `epistola-suite` bumps one image, and
+`valtimo` bumps backend and frontend together only when the same target tag
+exists on both images. A successful demo switch restarts the changed Quadlet
+container(s), and a broken runtime image is caught by monitoring/manual smoke
+tests rather than by a flip gate.
+
 **Setup (one-time):**
 
-1. **Website repo → dispatch token.** Create a fine-grained PAT with only
+1. **App repo -> dispatch token.** Create a fine-grained PAT with only
    `Actions: Read and write` on `epistola-app/epistola-nix-infra`, add it as a
-   website-repo Actions secret (e.g. `INFRA_DISPATCH_TOKEN`), and add a step after
+   source repo Actions secret (e.g. `INFRA_DISPATCH_TOKEN`), and add a step after
    the image push:
    ```yaml
    - name: Trigger infra pin bump
      env:
        GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
      run: |
-       gh workflow run website-pin-bump.yml -R epistola-app/epistola-nix-infra \
+       gh workflow run app-pin-bump.yml -R epistola-app/epistola-nix-infra \
+         -f app=website \
          -f tag="${{ needs.version.outputs.version }}-${{ needs.version.outputs.short_sha }}"
    ```
    (Pins the readable `<version>-<sha>` tag, e.g. `1.0.1-ad50b71` — the version for
    understandability plus the sha for exact traceability. The website build already
    publishes it via docker/metadata-action's
    `type=raw,value=${version}-${short_sha}`.)
+   Demo repositories use the same pattern with `-f app=epistola-suite` or
+   `-f app=valtimo`.
 2. **Package read for the schedule path.** Grant this repo read access to the
-   private `website` package: org → Packages → `website` → *Manage Actions access*
-   → add `epistola-nix-infra`. Without it, scheduled runs soft-skip (no failure);
-   the dispatch path needs no package access.
+   private packages: org -> Packages -> package -> *Manage Actions access* -> add
+   `epistola-nix-infra`. Required packages are `website`, `epistola-suite`,
+   `valtimo/demo-backend`, and `valtimo/demo-frontend`. Without it, scheduled
+   runs soft-skip (no failure); the dispatch path needs no package access for
+   website/epistola-suite explicit tags, while Valtimo still checks that the
+   paired frontend/backend tag exists.
 
-**Manual bump** (no CI needed): edit `portablevps.apps.website.image`, commit, and
-push to `main` — the box applies it on the next tick. Or run the workflow by hand:
-`gh workflow run website-pin-bump.yml -f tag=<version>-<sha>` (empty `tag` = newest).
+**Manual bump** (no CI needed): edit the relevant image pin, commit, and push to
+`main` — the box applies it on the next tick. Or run a workflow by hand:
+`gh workflow run app-pin-bump.yml -f app=<website|epistola-suite|valtimo>
+-f tag=<tag>` (empty `tag` = newest).
 
 ### Observing a deploy
 
@@ -359,9 +376,11 @@ push to `main` — the box applies it on the next tick. Or run the workflow by h
 
 - **Build/eval fails:** the switch never happens (safe); the box keeps running and
   self-corrects when a good commit lands. `DeployFailing` fires.
-- **Clean switch, unhealthy app:** blue-green won't flip to an unhealthy colour, so
-  the site stays on the old image — but `nixos-upgrade` reports *success*, so watch
-  the deploy dashboard/logs, not just `DeployFailing`.
+- **Clean switch, unhealthy app:** on blue-green apps, an unhealthy idle colour
+  does not take traffic, but `nixos-upgrade` reports *success*, so watch the
+  deploy dashboard/logs, not just `DeployFailing`. On restart-based demo apps, a
+  builds-fine but unhealthy image can restart into a bad runtime state; revert the
+  pin on `main` or roll back locally, then fix forward.
 - **Blast radius:** any `main` commit touching the box's config or a shared
   `portablevps` module auto-rolls to every enabled box within a tick — keep `main`
   deployable.

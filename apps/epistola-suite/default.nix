@@ -268,7 +268,7 @@ in
         TimeoutStartSec=300
 
         [Install]
-        WantedBy=apps.target
+        ${lib.optionalString (!prototype) "WantedBy=apps.target"}
       '';
 
       # Normal mode: declare the referenced sops secrets and render the env file
