@@ -23,20 +23,36 @@ func newTestCmd(g *globalOptions) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&g.serverFlag, "server", "",
 		"target server (default: default_server in portablevps.toml)")
-	cmd.AddCommand(newTestDRCmd(g))
+	cmd.AddCommand(newDRCommand(g, "dr [server]", false))
 	return cmd
 }
 
-func newTestDRCmd(g *globalOptions) *cobra.Command {
-	var portablevpsDir, sourceHost, restoreHost, sshPort, adminKey string
+type drFlags struct {
+	mode           string
+	portablevpsDir string
+	sourceHost     string
+	restoreHost    string
+	sourceServer   string
+	restoreServer  string
+	sshPort        string
+	adminKey       string
+}
+
+func newDRCmd(g *globalOptions) *cobra.Command {
+	return newDRCommand(g, "dr [server]", true)
+}
+
+func newDRCommand(g *globalOptions, use string, addServerFlag bool) *cobra.Command {
+	flags := drFlags{sshPort: "22"}
 	cmd := &cobra.Command{
-		Use:   "dr [server]",
+		Use:   use,
 		Short: "Disaster-recovery drill: prove backup/restore (local QEMU, or remote hosts)",
 		Long: "Proves the server's backups actually restore, end to end.\n\n" +
 			"Default (local): boots two throwaway QEMU VMs sharing the monorepo, runs the " +
 			"backup->restore->verify cycle against the <server>-local-vm config, and tears " +
 			"everything down — no real infrastructure touched.\n\n" +
-			"Remote (--source-host + --restore-host): runs the SAME proof against real hosts — " +
+			"Remote (--source-server + --restore-server, or --source-host + --restore-host): " +
+			"runs the SAME proof against real hosts — " +
 			"seed a marker in the source's live data, back it up, restore onto the restore host, " +
 			"and verify the marker survived. The source is only seeded (non-destructive); the " +
 			"restore host's data is WIPED, so it should be a spare/candidate box.",
@@ -46,33 +62,47 @@ func newTestDRCmd(g *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if sourceHost != "" || restoreHost != "" {
-				return runRemoteDR(g, cmd, ctx, server, sshPort, adminKey, sourceHost, restoreHost)
+			mode, err := resolveDRMode(flags)
+			if err != nil {
+				return err
 			}
-			return runLocalDR(cmd, ctx, server, portablevpsDir)
+			if mode == "remote" {
+				return runRemoteDR(g, cmd, ctx, server, flags)
+			}
+			return runLocalDR(cmd, ctx, server, flags.portablevpsDir)
 		},
 	}
-	cmd.Flags().StringVar(&portablevpsDir, "portablevps-dir", "",
+	if addServerFlag {
+		cmd.Flags().StringVar(&g.serverFlag, "server", "",
+			"target server (default: default_server in portablevps.toml)")
+	}
+	cmd.Flags().StringVar(&flags.mode, "mode", "", "DR mode: qemu or remote (default: qemu, remote when source/restore flags are set)")
+	cmd.Flags().StringVar(&flags.portablevpsDir, "portablevps-dir", "",
 		"(local mode) path to the portablevps checkout providing scripts/ (default: the ../portablevps sibling)")
-	cmd.Flags().StringVar(&sourceHost, "source-host", "", "(remote mode) live host to seed a marker on and back up")
-	cmd.Flags().StringVar(&restoreHost, "restore-host", "", "(remote mode) host to restore onto and verify (its data is wiped)")
-	cmd.Flags().StringVar(&sshPort, "ssh-port", "22", "admin SSH port (remote mode)")
-	cmd.Flags().StringVar(&adminKey, "admin-key", "", "admin SSH private key override in remote mode (default: 1Password/per-server file/cloud-admin fallback)")
+	cmd.Flags().StringVar(&flags.sourceServer, "source-server", "", "(remote mode) live source server name; resolves to <server>.<mesh_domain> and uses that server's admin key")
+	cmd.Flags().StringVar(&flags.restoreServer, "restore-server", "", "(remote mode) restore target server name; resolves to <server>.<mesh_domain> and uses that server's admin key")
+	cmd.Flags().StringVar(&flags.sourceHost, "source-host", "", "(remote mode) live host to seed a marker on and back up")
+	cmd.Flags().StringVar(&flags.restoreHost, "restore-host", "", "(remote mode) host to restore onto and verify (its data is wiped)")
+	cmd.Flags().StringVar(&flags.sshPort, "ssh-port", "22", "admin SSH port (remote mode)")
+	cmd.Flags().StringVar(&flags.adminKey, "admin-key", "", "single admin SSH private key override in remote mode (default: per-server key resolution)")
 	return cmd
 }
 
 // runRemoteDR seeds + backs up the source, then restores onto the restore host
 // and verifies the marker — the real-infrastructure DR proof.
-func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, server, sshPort, adminKey, sourceHost, restoreHost string) error {
+func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, server string, flags drFlags) error {
+	sourceHost, restoreHost, err := resolveDRRemoteHosts(ctx, flags)
+	if err != nil {
+		return err
+	}
 	if sourceHost == "" || restoreHost == "" {
-		return ExitError{Code: 64, Message: "remote DR needs both --source-host and --restore-host"}
+		return ExitError{Code: 64, Message: "remote DR needs source and restore targets (--source-server/--restore-server or --source-host/--restore-host)"}
 	}
 	// The restore host is rebuilt from the backup — its data is wiped.
 	if err := confirmDestroyTarget(g, cmd, restoreHost); err != nil {
 		return err
 	}
-	hf := hostFlags{sshPort: sshPort, adminKey: adminKey}
-	ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
+	hostRunner, cleanup, err := drHostRunner(g, ctx, server, flags, sourceHost, restoreHost)
 	if err != nil {
 		return err
 	}
@@ -81,7 +111,7 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 	prog := output.NewProgress(cmd.OutOrStdout(), "test.dr", server, g.json)
 	env := core.ServiceEnv{
 		RepoRoot: ctx.RepoRoot,
-		Host:     ssh,
+		Host:     hostRunner,
 		Stream:   adapters.ExecRunner{},
 		Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
 	}
@@ -94,6 +124,55 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 		fmt.Sprintf("restored %s onto %s and verified marker %s", sourceHost, restoreHost, marker),
 		0, "marker", marker)
 	return nil
+}
+
+func resolveDRMode(flags drFlags) (string, error) {
+	remoteRequested := flags.sourceHost != "" || flags.restoreHost != "" || flags.sourceServer != "" || flags.restoreServer != ""
+	switch flags.mode {
+	case "", "auto":
+		if remoteRequested {
+			return "remote", nil
+		}
+		return "qemu", nil
+	case "qemu":
+		if remoteRequested {
+			return "", ExitError{Code: 64, Message: "--mode qemu cannot be combined with remote source/restore flags"}
+		}
+		return "qemu", nil
+	case "remote":
+		return "remote", nil
+	default:
+		return "", ExitError{Code: 64, Message: "unknown DR mode " + flags.mode + " (expected qemu or remote)"}
+	}
+}
+
+func resolveDRRemoteHosts(ctx *config.Context, flags drFlags) (sourceHost, restoreHost string, err error) {
+	sourceHost, err = resolveDRRemoteHost(ctx, "source", flags.sourceServer, flags.sourceHost)
+	if err != nil {
+		return "", "", err
+	}
+	restoreHost, err = resolveDRRemoteHost(ctx, "restore", flags.restoreServer, flags.restoreHost)
+	if err != nil {
+		return "", "", err
+	}
+	return sourceHost, restoreHost, nil
+}
+
+func resolveDRRemoteHost(ctx *config.Context, role, serverName, host string) (string, error) {
+	if serverName != "" && host != "" {
+		return "", ExitError{Code: 64, Message: "pass either --" + role + "-server or --" + role + "-host, not both"}
+	}
+	if host != "" {
+		return host, nil
+	}
+	if serverName == "" {
+		return "", nil
+	}
+	resolved := defaultMeshHost(serverName, ctx)
+	if resolved == "" {
+		return "", ExitError{Code: 64, Message: "no mesh host could be derived for " + role + " server " + serverName + "; pass --" + role + "-host"}
+	}
+	return resolved, nil
 }
 
 // runLocalDR boots two throwaway QEMU VMs and runs the backup/restore proof

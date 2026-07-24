@@ -46,3 +46,56 @@ func TestMigrateAbortsIfTargetNotInRestoreMode(t *testing.T) {
 		t.Error("must not restore when the target is not confirmed in restore mode")
 	}
 }
+
+type routedHost struct {
+	fakeHost
+}
+
+func (r *routedHost) NixSSHOptsFor(host string) string {
+	return "-i key-for-" + host
+}
+
+func TestRestoreUsesHostSpecificNixSSHOptsWhenAvailable(t *testing.T) {
+	host := &routedHost{}
+	stream := &recordRunner{}
+	err := Restore(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: stream},
+		RestoreOpts{Server: "svc", Host: "restore-host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stream.sawContaining("NIX_SSHOPTS=-i key-for-restore-host") {
+		t.Fatalf("expected restore host SSH options, got %v", stream.calls)
+	}
+}
+
+type switchingHost struct {
+	fakeHost
+	switched bool
+}
+
+func (s *switchingHost) NixSSHOptsFor(host string) string {
+	if s.switched {
+		return "-i after-switch-for-" + host
+	}
+	return "-i before-switch-for-" + host
+}
+
+func (s *switchingHost) SwitchedTo(_profile, _host string) {
+	s.switched = true
+}
+
+func TestRestoreCanChangeSSHOptsAfterFirstSwitch(t *testing.T) {
+	host := &switchingHost{}
+	stream := &recordRunner{}
+	err := Restore(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: stream},
+		RestoreOpts{Server: "svc", Host: "restore-host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stream.sawContaining("NIX_SSHOPTS=-i before-switch-for-restore-host") {
+		t.Fatalf("expected initial restore-host SSH options, got %v", stream.calls)
+	}
+	if !stream.sawContaining("NIX_SSHOPTS=-i after-switch-for-restore-host") {
+		t.Fatalf("expected post-switch service SSH options, got %v", stream.calls)
+	}
+}

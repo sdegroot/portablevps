@@ -46,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	pf.StringVar(&opts.confirm, "confirm", "", "confirm a destructive action non-interactively (must equal the target host/server)")
 
 	root.AddCommand(newDoctorCmd(opts))
+	root.AddCommand(newDRCmd(opts))
 	root.AddCommand(newSSHCmd(opts))
 	root.AddCommand(newSecretCmd(opts))
 	root.AddCommand(newServerCmd(opts))

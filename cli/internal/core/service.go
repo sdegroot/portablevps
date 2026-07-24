@@ -22,14 +22,24 @@ func (env ServiceEnv) report() func(string, string, string) {
 // switchTo runs an in-place nixos-rebuild switch to profile on host, built on
 // the remote.
 func (env ServiceEnv) switchTo(profile, host string) error {
-	return env.Stream.Stream(env.RepoRoot,
-		map[string]string{"NIX_SSHOPTS": env.Host.NixSSHOpts()},
+	nixSSHOpts := env.Host.NixSSHOpts()
+	if routed, ok := env.Host.(interface{ NixSSHOptsFor(string) string }); ok {
+		nixSSHOpts = routed.NixSSHOptsFor(host)
+	}
+	if err := env.Stream.Stream(env.RepoRoot,
+		map[string]string{"NIX_SSHOPTS": nixSSHOpts},
 		"nix", "--extra-experimental-features", "nix-command flakes",
 		"run", "nixpkgs#nixos-rebuild", "--", "switch",
 		"--flake", env.RepoRoot+"#"+profile,
 		"--target-host", "admin@"+host,
 		"--build-host", "admin@"+host,
-		"--elevate=sudo", "--no-reexec")
+		"--elevate=sudo", "--no-reexec"); err != nil {
+		return err
+	}
+	if switched, ok := env.Host.(interface{ SwitchedTo(profile, host string) }); ok {
+		switched.SwitchedTo(profile, host)
+	}
+	return nil
 }
 
 // MigrateOpts parameterises a service move between two running hosts.
