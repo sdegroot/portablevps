@@ -7,7 +7,7 @@ groups:
     rules:
       - alert: ApplicationErrorLogs
         expr: |
-          _time:5m (_msg:" ERROR " OR _msg:Exception OR _msg:FlywayValidateException OR _msg:FATAL OR _msg:PANIC OR PRIORITY:~"[0-3]")
+          _time:5m (_msg:" ERROR " OR _msg:"\"level\": \"error\"" OR _msg:Exception OR _msg:FlywayValidateException OR _msg:FATAL OR _msg:PANIC)
           | stats by (host.name, service.name, SYSLOG_IDENTIFIER, _SYSTEMD_UNIT) count() as errors
           | rename host.name as host_name, service.name as service_name
           | filter errors:>0
