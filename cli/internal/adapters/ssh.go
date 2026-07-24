@@ -51,6 +51,12 @@ func (s SSH) baseArgs(host string) []string {
 	return append(args, "admin@"+host)
 }
 
+// CommandArgs returns ssh(1) arguments for an operator-facing SSH session.
+func (s SSH) CommandArgs(host string, remoteCommand ...string) []string {
+	args := s.baseArgs(host)
+	return append(args, remoteCommand...)
+}
+
 // Run executes command on host over admin SSH and returns trimmed stdout.
 func (s SSH) Run(host, command string) (string, error) {
 	args := append(s.baseArgs(host), command)
