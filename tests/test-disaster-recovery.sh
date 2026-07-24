@@ -200,12 +200,16 @@ echo "restic repository: $RESTIC_REPOSITORY"
 require_remote_tools "$VM_A_SSH"
 require_remote_tools "$VM_B_SSH"
 
-# Reset VM A's data so the target config initialises fresh. Reused VMs may hold
-# a previous run's cluster or appliance state. Clear the *contents* of generic
-# dirs and known app roots before switching into the tested config.
-echo "resetting VM A data for a clean ${CONFIG} install"
-remote "$VM_A_SSH" "
+reset_vm_data() {
+  local target="$1" label="$2"
+
+  # Reused QEMU disks may hold a previous run's cluster, appliance state, or
+  # container runtime store. Clear test-owned data before switching into the
+  # target config so each rehearsal behaves like a fresh host.
+  echo "resetting $label data for a clean ${CONFIG} rehearsal"
+  remote "$target" "
   sudo systemctl stop apps.target >/dev/null 2>&1 || true
+  sudo systemctl stop podman.service podman.socket docker.service docker.socket containerd.service >/dev/null 2>&1 || true
   # 'systemctl stop apps.target' propagates a stop to its PartOf members but
   # returns without waiting for those container units to finish stopping, so the
   # app containers can still be 'deactivating' (and writing) here. Wiping their
@@ -223,8 +227,12 @@ remote "$VM_A_SSH" "
   sudo find /data/container-state -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   sudo rm -rf /data/discourse
   sudo rm -rf /var/lib/portablevps-backups/postgres-physical
+  sudo rm -rf /var/lib/containers/storage /var/lib/docker /var/lib/containerd
   sudo systemctl mask --runtime portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true
 "
+}
+
+reset_vm_data "$VM_A_SSH" "VM A"
 
 echo "configuring VM A in normal mode"
 remote "$VM_A_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
@@ -268,6 +276,8 @@ fi
 verify_discourse_archive_retention "$VM_A_SSH"
 
 echo "using shared restic repository directly: $RESTIC_REPOSITORY"
+
+reset_vm_data "$VM_B_SSH" "VM B"
 
 echo "configuring VM B in restore mode"
 remote "$VM_B_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}-restore"
