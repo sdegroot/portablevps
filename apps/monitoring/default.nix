@@ -155,7 +155,7 @@ let
 
     route:
       receiver: email
-      group_by: ['alertname', 'host_name']
+      group_by: ['alertname', 'host_name', 'service_name', 'SYSLOG_IDENTIFIER', '_SYSTEMD_UNIT']
       group_wait: 30s
       group_interval: 5m
       repeat_interval: ${cfg.alertRepeatInterval}
@@ -165,6 +165,14 @@ let
         email_configs:
           - to: "${cfg.alertEmailTo}"
             send_resolved: true
+            headers:
+              Subject: '{{ if eq .Status "firing" }}[FIRING:{{ len .Alerts.Firing }}]{{ else }}[RESOLVED]{{ end }} {{ with index .CommonLabels "service_name" }}{{ . }}{{ else }}{{ with index .CommonLabels "job" }}{{ . }}{{ else }}{{ index .CommonLabels "alertname" }}{{ end }}{{ end }}{{ with index .CommonLabels "SYSLOG_IDENTIFIER" }}/{{ . }}{{ end }}{{ with index .CommonLabels "_SYSTEMD_UNIT" }} ({{ . }}){{ end }}{{ with index .CommonLabels "host_name" }} on {{ . }}{{ end }}'
+            text: |-
+              {{ range .Alerts }}
+              {{ .Annotations.summary }}
+              {{ .Annotations.description }}
+              service_name={{ index .Labels "service_name" }} syslog={{ index .Labels "SYSLOG_IDENTIFIER" }} unit={{ index .Labels "_SYSTEMD_UNIT" }} host={{ index .Labels "host_name" }}
+              {{ end }}
 
     inhibit_rules:
       - source_matchers: ['severity="critical"']
