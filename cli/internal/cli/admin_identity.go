@@ -14,6 +14,14 @@ const (
 	legacyAdminPublicRel  = "keys/cloud-admin.pub"
 )
 
+func perServerAdminPrivateRel(server string) string {
+	return filepath.Join(".local", "ssh", "servers", server+"_ed25519")
+}
+
+func perServerAdminPublicRel(server string) string {
+	return filepath.Join("keys", "servers", server+"-admin.pub")
+}
+
 type adminIdentity struct {
 	privateRel string
 	publicRel  string
@@ -33,7 +41,7 @@ func resolveAdminIdentity(ctx *config.Context, server, privateOverride, publicOv
 	publicRel := publicOverride
 	if publicRel == "" {
 		publicRel = firstExistingRel(ctx.RepoRoot,
-			filepath.Join("keys", "servers", server+"-admin.pub"),
+			perServerAdminPublicRel(server),
 			filepath.Join("keys", server+"-admin.pub"),
 			legacyAdminPublicRel,
 		)
@@ -42,7 +50,7 @@ func resolveAdminIdentity(ctx *config.Context, server, privateOverride, publicOv
 	privateRel := privateForPublic(server, publicRel)
 	if privateRel == "" || !fileExistsCli(repoRelOrAbs(ctx.RepoRoot, privateRel)) {
 		privateRel = firstExistingRel(ctx.RepoRoot,
-			filepath.Join(".local", "ssh", "servers", server+"_ed25519"),
+			perServerAdminPrivateRel(server),
 			legacyAdminPrivateRel,
 		)
 	}
@@ -85,9 +93,9 @@ func privateForPublic(server, publicRel string) string {
 		return ""
 	case legacyAdminPublicRel:
 		return legacyAdminPrivateRel
-	case filepath.ToSlash(filepath.Join("keys", "servers", server+"-admin.pub")),
+	case filepath.ToSlash(perServerAdminPublicRel(server)),
 		filepath.ToSlash(filepath.Join("keys", server+"-admin.pub")):
-		return filepath.Join(".local", "ssh", "servers", server+"_ed25519")
+		return perServerAdminPrivateRel(server)
 	default:
 		if strings.HasSuffix(publicRel, ".pub") {
 			return strings.TrimSuffix(publicRel, ".pub")

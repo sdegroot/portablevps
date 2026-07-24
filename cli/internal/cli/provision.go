@@ -237,6 +237,14 @@ func registerProvisionFlags(cmd *cobra.Command, pf *provisionFlags, adopt bool) 
 }
 
 func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, server, target string, pf *provisionFlags) error {
+	prog := output.NewProgress(cmd.OutOrStdout(), "server.install", server, g.json)
+	if shouldAutoGenerateAdminKey(pf.adminPub) {
+		if created, pair, err := ensureServerAdminKeypair(ctx, server); err != nil {
+			return err
+		} else if created {
+			prog.Phase("keygen", "ok", "created "+pair.publicRel)
+		}
+	}
 	ageKey, err := ageKeyMaterial(ctx, server)
 	if err != nil {
 		return err
@@ -247,7 +255,6 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 	}
 	defer cleanup()
 
-	prog := output.NewProgress(cmd.OutOrStdout(), "server.install", server, g.json)
 	env := core.InstallEnv{
 		FlakeDir: ctx.RepoRoot,
 		Stream:   adapters.ExecRunner{},
@@ -273,6 +280,13 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 // bootstrapAdminKey installs the admin public key onto login_user@host over a
 // one-off credential (initial key, agent, or password).
 func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, prog *output.Progress) error {
+	if shouldAutoGenerateAdminKey(pf.adminPub) {
+		if created, pair, err := ensureServerAdminKeypair(ctx, server); err != nil {
+			return err
+		} else if created {
+			prog.Phase("keygen", "ok", "created "+pair.publicRel)
+		}
+	}
 	pubPath := repoRelOrAbs(ctx.RepoRoot, resolveAdminIdentity(ctx, server, "", pf.adminPub).publicRel)
 	pub, err := os.ReadFile(pubPath)
 	if err != nil {
