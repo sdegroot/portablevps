@@ -244,7 +244,6 @@ reset_vm_data() {
   sudo rm -rf /data/discourse
   sudo rm -rf /var/lib/portablevps-backups/postgres-physical
   sudo rm -rf /var/lib/containers/storage /var/lib/docker /var/lib/containerd
-  sudo systemctl mask --runtime portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true
 "
 }
 
@@ -253,10 +252,12 @@ reset_vm_data "$VM_A_SSH" "VM A"
 echo "configuring VM A in normal mode"
 remote "$VM_A_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_A_SSH" "sudo systemctl start apps.target"
-# The scheduled timers are enabled in normal mode. Disable them for this
-# controlled sequence so a Persistent= true timer cannot race the manual
-# full/incremental backups and make journal-mode assertions non-deterministic.
-remote "$VM_A_SSH" "sudo systemctl stop portablevps-backup.timer portablevps-backup-maintenance.timer >/dev/null 2>&1 || true"
+remote "$VM_A_SSH" "
+  if sudo systemctl is-active --quiet portablevps-backup.timer portablevps-backup-maintenance.timer; then
+    echo 'scheduled backup timer active in controlled DR test' >&2
+    exit 1
+  fi
+"
 
 if has_postgres_component "$VM_A_SSH"; then
   echo "inserting initial PostgreSQL marker on VM A"

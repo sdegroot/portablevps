@@ -15,4 +15,12 @@
   portablevps.base.adminAuthorizedKeyFiles = [ ../../keys/qemu-test.pub ];
 
   portablevps.base.allowedTCPPorts = lib.mkDefault [ 22 ];
+
+  # The DR harness drives the real backup service explicitly (full, then
+  # incremental). A Persistent timer can otherwise fire during
+  # `nixos-rebuild switch`, before the harness can stop it, and race that
+  # controlled sequence. Keep only automatic scheduling off in disposable
+  # QEMU configurations; the production service and all of its hooks remain
+  # exactly the same.
+  portablevps.backups.scheduling.enable = lib.mkForce false;
 }

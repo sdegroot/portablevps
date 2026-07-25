@@ -178,6 +178,16 @@ in
       description = "Stateful backup and restore components.";
     };
 
+    scheduling.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Enable the automatic backup, maintenance, and immutability-probe
+        timers. The backup and maintenance services remain available for
+        explicit operator or disaster-recovery runs when this is disabled.
+      '';
+    };
+
     retention = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -325,7 +335,7 @@ in
     };
 
     systemd.timers.portablevps-backup = {
-      wantedBy = lib.optional (hasComponents && !config.portablevps.restoreMode) "timers.target";
+      wantedBy = lib.optional (hasComponents && cfg.scheduling.enable && !config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "hourly";
         Persistent = true;
@@ -359,7 +369,7 @@ in
     };
 
     systemd.timers.portablevps-backup-maintenance = {
-      wantedBy = lib.optional (hasComponents && !config.portablevps.restoreMode) "timers.target";
+      wantedBy = lib.optional (hasComponents && cfg.scheduling.enable && !config.portablevps.restoreMode) "timers.target";
       timerConfig = {
         OnCalendar = "weekly";
         RandomizedDelaySec = "1h";
@@ -421,7 +431,7 @@ in
 
     systemd.timers.portablevps-backup-immutability-probe =
       lib.mkIf (hasComponents && cfg.immutability.deleteDenyProbe.enable) {
-        wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+        wantedBy = lib.optional (cfg.scheduling.enable && !config.portablevps.restoreMode) "timers.target";
         timerConfig = {
           OnCalendar = cfg.immutability.deleteDenyProbe.schedule;
           RandomizedDelaySec = "1h";

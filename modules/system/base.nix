@@ -54,6 +54,16 @@ in
       settings.Resolve.FallbackDNS = [ "1.1.1.1" "9.9.9.9" ];
     };
 
+    # NixOS 26.05 changed this default to dbus-broker, but a 25.05 system does
+    # not carry the new switch-inhibitor metadata. Its first live
+    # `nixos-rebuild switch` therefore attempts to reload the old dbus-daemon
+    # through the new broker unit, waits 90 seconds, and leaves an otherwise
+    # applied deployment with exit status 4. Keep the supported classic daemon
+    # explicit for the 25.05 -> 26.05 fleet upgrade. Moving to dbus-broker must
+    # be a separately rehearsed boot + reboot rollout after every host is on
+    # 26.05, where the inhibitor can enforce the reboot boundary.
+    services.dbus.implementation = "dbus";
+
     services.openssh = {
       enable = true;
       openFirewall = false;
