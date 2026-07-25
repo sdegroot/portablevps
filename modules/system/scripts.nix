@@ -5,6 +5,7 @@ let
   scriptPackage = pkgs.runCommand "portablevps-dr-scripts" { } ''
     mkdir -p "$out/bin"
     cp ${../../scripts/lib/runtime-env.sh} "$out/bin/runtime-env.sh"
+    cp ${../../scripts/lib/restore-paths.sh} "$out/bin/restore-paths.sh"
     cp ${../../scripts/create-zpool.sh} "$out/bin/create-zpool.sh"
     cp ${../../scripts/init-backup-repo.sh} "$out/bin/init-backup-repo.sh"
     cp ${../../scripts/backup.sh} "$out/bin/backup.sh"

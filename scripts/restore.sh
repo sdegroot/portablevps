@@ -7,9 +7,13 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -r "$script_dir/lib/runtime-env.sh" ]; then
   # shellcheck disable=SC1091
   source "$script_dir/lib/runtime-env.sh"
+  # shellcheck disable=SC1091
+  source "$script_dir/lib/restore-paths.sh"
 else
   # shellcheck disable=SC1091
   source "$script_dir/runtime-env.sh"
+  # shellcheck disable=SC1091
+  source "$script_dir/restore-paths.sh"
 fi
 
 load_restic_env
@@ -63,23 +67,12 @@ read_paths() {
     sort -u
 }
 
-require_safe_clear_path() {
-  local path="$1"
-
-  case "$path" in
-    "" | / | /data | /var | /var/lib | /home | /root | /etc | /run | /tmp)
-      echo "error: refusing unsafe restore clear path: $path" >&2
-      exit 78
-      ;;
-  esac
-}
-
 run_hooks "$BACKUP_CONFIG_DIR/pre-restore.d"
 
 mapfile -t clear_paths < <(read_paths "$BACKUP_CONFIG_DIR/clear-before-restore.d")
 for path in "${clear_paths[@]}"; do
-  require_safe_clear_path "$path"
-  rm -rf "$path"
+  safe_path="$(canonical_restore_clear_path "$path")"
+  rm -rf -- "$safe_path"
 done
 
 # Which snapshot to restore. Defaults to the newest, but an operator recovering

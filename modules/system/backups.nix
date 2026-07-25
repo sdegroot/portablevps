@@ -109,6 +109,20 @@ let
         lib.concatMapStringsSep "\n" (path: path) component.clearBeforeRestore + "\n";
     };
 
+  isSafeClearPath = path:
+    let
+      descendantsOnly =
+        lib.hasPrefix "/data/" path || lib.hasPrefix "/var/lib/" path;
+      segments = lib.drop 1 (lib.splitString "/" path);
+      canonicalSegments =
+        lib.all (segment: segment != "" && segment != "." && segment != "..") segments;
+    in
+    descendantsOnly && canonicalSegments;
+
+  unsafeClearPaths = lib.concatMap
+    (component: lib.filter (path: !isSafeClearPath path) component.clearBeforeRestore)
+    componentList;
+
   etcEntries = lib.mkMerge (
     lib.concatMap
       (component: [
@@ -225,6 +239,17 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = unsafeClearPaths == [ ];
+        message = ''
+          portablevps backup clearBeforeRestore paths must be canonical
+          descendants of /data or /var/lib; unsafe paths:
+          ${lib.concatStringsSep ", " unsafeClearPaths}
+        '';
+      }
+    ];
+
     environment.systemPackages =
       [ pkgs.restic ]
       ++ lib.unique (lib.concatMap (component: component.packages) componentList);
