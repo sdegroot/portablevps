@@ -92,10 +92,21 @@ func stageFlake(repoRoot string, runner EnvRunner) (string, func(), error) {
 		cleanup()
 		return "", noop, err
 	}
-	_ = os.Remove(filepath.Join(tmp, "flake.lock"))
-	if _, err := runner.Run(tmp, "nix", "--extra-experimental-features", "nix-command flakes", "flake", "lock", tmp); err != nil {
+	// Keep every committed transitive pin. Only refresh the path inputs whose
+	// locations changed from ../<name> to ./.vendor/<name>; deleting the complete
+	// lock here would silently upgrade nixpkgs and every other dependency during a
+	// destructive install.
+	lockArgs := []string{
+		"--extra-experimental-features", "nix-command flakes",
+		"flake", "lock",
+	}
+	for _, name := range names {
+		lockArgs = append(lockArgs, "--update-input", name)
+	}
+	lockArgs = append(lockArgs, tmp)
+	if _, err := runner.Run(tmp, "nix", lockArgs...); err != nil {
 		cleanup()
-		return "", noop, provisionErr(70, "re-locking vendored flake: %v", err)
+		return "", noop, provisionErr(70, "re-locking vendored path inputs: %v", err)
 	}
 	return tmp, cleanup, nil
 }
@@ -129,19 +140,33 @@ type InstallOpts struct {
 	IdentityArgs   []string // nixos-anywhere identity args (e.g. ["-i","key"] or ["--ssh-option","IdentityAgent=…"])
 	BuildOnRemote  bool     // build the closure on the target (cross-arch)
 	RestoreMode    bool     // install the <server>-restore profile
+	HostKeyFile    string   // independently verified OpenSSH known_hosts file
+	InsecureSSH    bool     // explicit escape hatch for providers with no key-verification channel
 }
 
 // nixosAnywhereArgs builds the `nix run nixos-anywhere` argument vector. Pure, so
 // it is unit-tested.
-func nixosAnywhereArgs(flakeDir, profile, sshPort, extraFiles string, identity []string, buildOnRemote bool, target string) []string {
+func nixosAnywhereArgs(
+	flakeDir, profile, sshPort, extraFiles, hostKeyFile string,
+	identity []string,
+	buildOnRemote, insecureSSH bool,
+	target string,
+) []string {
 	args := []string{
 		"--extra-experimental-features", "nix-command flakes",
-		"run", "github:nix-community/nixos-anywhere", "--",
+		"run", NixosAnywhereFlake, "--",
 		"--flake", flakeDir + "#" + profile,
 		"--ssh-port", sshPort,
-		"--ssh-option", "StrictHostKeyChecking=no",
-		"--ssh-option", "UserKnownHostsFile=/dev/null",
 		"--extra-files", extraFiles,
+	}
+	if insecureSSH {
+		args = append(args,
+			"--ssh-option", "StrictHostKeyChecking=no",
+			"--ssh-option", "UserKnownHostsFile=/dev/null")
+	} else {
+		args = append(args,
+			"--ssh-option", "StrictHostKeyChecking=yes",
+			"--ssh-option", "UserKnownHostsFile="+hostKeyFile)
 	}
 	args = append(args, identity...)
 	if buildOnRemote {
@@ -164,6 +189,14 @@ func Install(env InstallEnv, opts InstallOpts) error {
 	}
 	if opts.AgeKeyMaterial == "" {
 		return provisionErr(66, "no host age key resolved for %s (1Password/file)", opts.Server)
+	}
+	if !opts.InsecureSSH {
+		if opts.HostKeyFile == "" {
+			return provisionErr(64, "an independently verified SSH host key is required; pass --host-key-file or explicitly acknowledge the risk with --insecure-skip-host-key-check")
+		}
+		if info, statErr := os.Stat(opts.HostKeyFile); statErr != nil || info.IsDir() || info.Size() == 0 {
+			return provisionErr(66, "SSH host-key file is missing or empty: %s", opts.HostKeyFile)
+		}
 	}
 	port := opts.SSHPort
 	if port == "" {
@@ -211,7 +244,8 @@ func Install(env InstallEnv, opts InstallOpts) error {
 		profile = opts.Server + "-restore"
 	}
 	args := nixosAnywhereArgs(flakeDir, profile, port,
-		filepath.Join(tmp, "extra-files"), opts.IdentityArgs, opts.BuildOnRemote, opts.Target)
+		filepath.Join(tmp, "extra-files"), opts.HostKeyFile, opts.IdentityArgs,
+		opts.BuildOnRemote, opts.InsecureSSH, opts.Target)
 
 	report("install", "run", fmt.Sprintf("nixos-anywhere .#%s -> %s (built on the remote)", profile, opts.Target))
 	if err := env.Stream.Stream(env.FlakeDir, nil, "nix", args...); err != nil {

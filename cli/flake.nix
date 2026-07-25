@@ -7,9 +7,13 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixos-anywhere = {
+      url = "github:nix-community/nixos-anywhere";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nixos-anywhere }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -24,7 +28,16 @@
             src = ./.;
             vendorHash = null; # dependencies are vendored in ./vendor
             subPackages = [ "cmd/portablevps" ];
-            doCheck = true; # runs `go test ./...`, so nix flake check covers the CLI
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              go test ./...
+              runHook postCheck
+            '';
+            ldflags = [
+              "-X github.com/epistola-app/portablevps/internal/core.NixpkgsFlake=${nixpkgs}"
+              "-X github.com/epistola-app/portablevps/internal/core.NixosAnywhereFlake=${nixos-anywhere}"
+            ];
             meta = {
               description = "Operate and migrate portable single-instance VPS servers";
               mainProgram = "portablevps";

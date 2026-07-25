@@ -29,7 +29,7 @@ func (env ServiceEnv) switchTo(profile, host string) error {
 	if err := env.Stream.Stream(env.RepoRoot,
 		map[string]string{"NIX_SSHOPTS": nixSSHOpts},
 		"nix", "--extra-experimental-features", "nix-command flakes",
-		"run", "nixpkgs#nixos-rebuild", "--", "switch",
+		"run", NixpkgsFlake+"#nixos-rebuild", "--", "switch",
 		"--flake", env.RepoRoot+"#"+profile,
 		"--target-host", "admin@"+host,
 		"--build-host", "admin@"+host,

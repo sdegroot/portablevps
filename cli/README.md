@@ -22,6 +22,29 @@ go run ./cmd/portablevps doctor
 The CLI operates on the consumer repo given by `--project` (default:
 `$PORTABLEVPS_PROJECT`, else the current directory).
 
+## Install a host safely
+
+`server install` and `server adopt` send the server's age private key to the
+target, so SSH host-key verification is mandatory by default. Obtain the rescue
+environment's SSH host-key fingerprint from an independent provider channel,
+create a dedicated OpenSSH `known_hosts` file, and pass it to the command:
+
+```sh
+portablevps server install my-server \
+  --target root@203.0.113.10 \
+  --host-key-file .local/known_hosts/my-server-rescue \
+  --confirm root@203.0.113.10
+```
+
+The Nix package pins both nixpkgs and nixos-anywhere through its lock file, and
+the installer preserves the consumer flake's committed transitive pins while
+vendoring monorepo path inputs.
+
+Only when a provider offers no independent way to verify the rescue host key,
+the explicit `--insecure-skip-host-key-check` escape hatch restores the old
+trust-on-first-use behavior. It can expose the age private key and should not be
+used in production provisioning.
+
 ## Design
 
 A serious CLI is not one big file. It is split into layers so no file is large,

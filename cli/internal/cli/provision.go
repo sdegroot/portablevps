@@ -50,6 +50,8 @@ type provisionFlags struct {
 	disk          string // informational; the disk is set in the server config
 	buildOnRemote bool
 	restoreMode   bool
+	hostKeyFile   string
+	insecureSSH   bool
 	// adopt-only
 	loginUser  string
 	initialKey string
@@ -226,6 +228,8 @@ func registerProvisionFlags(cmd *cobra.Command, pf *provisionFlags, adopt bool) 
 	f.StringVar(&pf.sshPort, "ssh-port", "22", "SSH port")
 	f.BoolVar(&pf.buildOnRemote, "build-on-remote", true, "build the system closure on the target (cross-arch)")
 	f.BoolVar(&pf.restoreMode, "restore", false, "install the <server>-restore profile")
+	f.StringVar(&pf.hostKeyFile, "host-key-file", "", "independently verified OpenSSH known_hosts file for the install target (required by default)")
+	f.BoolVar(&pf.insecureSSH, "insecure-skip-host-key-check", false, "disable install-target SSH host-key verification (age key may be exposed to a MITM)")
 	f.StringVar(&pf.adminPub, "admin-pubkey", "", "admin public key override shipped/authorized on the host (default: per-server/cloud-admin fallback)")
 	if adopt {
 		f.StringVar(&pf.loginUser, "login-user", "root", "existing login user on the foreign host")
@@ -254,6 +258,7 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 		return err
 	}
 	defer cleanup()
+	hostKeyFile := repoRelOrAbs(ctx.RepoRoot, pf.hostKeyFile)
 
 	env := core.InstallEnv{
 		FlakeDir: ctx.RepoRoot,
@@ -269,6 +274,8 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 		IdentityArgs:   identity,
 		BuildOnRemote:  pf.buildOnRemote,
 		RestoreMode:    pf.restoreMode,
+		HostKeyFile:    hostKeyFile,
+		InsecureSSH:    pf.insecureSSH,
 	}); err != nil {
 		prog.Result("fail", err.Error(), exitCodeOf(err))
 		return silentExit(err)
@@ -295,7 +302,20 @@ func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, p
 	target := pf.loginUser + "@" + pf.host
 	remote := "set -eu; mkdir -p ~/.ssh; chmod 700 ~/.ssh; touch ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; " +
 		`key="$(cat)"; grep -qxF "$key" ~/.ssh/authorized_keys || printf '%s\n' "$key" >> ~/.ssh/authorized_keys`
-	sshOpts := []string{"-p", pf.sshPort, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=20"}
+	sshOpts := []string{"-p", pf.sshPort, "-o", "ConnectTimeout=20"}
+	if pf.insecureSSH {
+		sshOpts = append(sshOpts,
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null")
+	} else {
+		hostKeyFile := repoRelOrAbs(ctx.RepoRoot, pf.hostKeyFile)
+		if info, statErr := os.Stat(hostKeyFile); statErr != nil || info.IsDir() || info.Size() == 0 {
+			return ExitError{Code: 66, Message: fmt.Sprintf("SSH host-key file is missing or empty: %s", hostKeyFile)}
+		}
+		sshOpts = append(sshOpts,
+			"-o", "StrictHostKeyChecking=yes",
+			"-o", "UserKnownHostsFile="+hostKeyFile)
+	}
 
 	var c *exec.Cmd
 	switch {

@@ -64,7 +64,7 @@ func Deploy(env DeployEnv, server, host string) error {
 	err := env.Runner.Stream(env.RepoRoot,
 		map[string]string{"NIX_SSHOPTS": env.Host.NixSSHOpts()},
 		"nix", "--extra-experimental-features", "nix-command flakes",
-		"run", "nixpkgs#nixos-rebuild", "--", action,
+		"run", NixpkgsFlake+"#nixos-rebuild", "--", action,
 		"--flake", env.RepoRoot+"#"+server,
 		"--target-host", "admin@"+host,
 		"--build-host", "admin@"+host,

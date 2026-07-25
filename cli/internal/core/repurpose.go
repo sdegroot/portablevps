@@ -76,7 +76,7 @@ func Repurpose(env RepurposeEnv, opts RepurposeOpts) error {
 	err := env.Stream.Stream(env.RepoRoot,
 		map[string]string{"NIX_SSHOPTS": env.Host.NixSSHOpts()},
 		"nix", "--extra-experimental-features", "nix-command flakes",
-		"run", "nixpkgs#nixos-rebuild", "--", "switch",
+		"run", NixpkgsFlake+"#nixos-rebuild", "--", "switch",
 		"--flake", env.RepoRoot+"#"+opts.Server,
 		"--target-host", "admin@"+opts.Host,
 		"--build-host", "admin@"+opts.Host,
