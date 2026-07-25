@@ -153,8 +153,12 @@ Reboot if the failed upgrade affected the kernel, bootloader, drivers, or core
 networking:
 
 ```sh
-sudo reboot
+portablevps server reboot <server>
 ```
+
+The command waits for a changed kernel boot ID, then requires the booted and
+current NixOS generations to match and rejects a host that returns with failed
+system services.
 
 If SSH is unavailable but the provider console works, reboot and select the
 previous NixOS generation in the bootloader menu. After the machine is reachable,

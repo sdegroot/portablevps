@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +26,7 @@ func newServerCmd(g *globalOptions) *cobra.Command {
 	cmd.AddCommand(
 		newServerListCmd(g),
 		newServerDeployCmd(g),
+		newServerRebootCmd(g),
 		newServerRollbackCmd(g),
 		newServerInstallCmd(g),
 		newServerAdoptCmd(g),
@@ -73,6 +75,61 @@ func repoRelOrAbs(root, p string) string {
 		return p
 	}
 	return filepath.Join(root, p)
+}
+
+func newServerRebootCmd(g *globalOptions) *cobra.Command {
+	var hf hostFlags
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "reboot [server]",
+		Short: "Reboot a server and verify the new boot and system generation",
+		Long: "Reboots a running server over admin SSH, waits for a distinct boot " +
+			"ID, then verifies that /run/booted-system matches /run/current-system " +
+			"and that no system services are failed.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server, ctx, err := serverArg(g, args)
+			if err != nil {
+				return err
+			}
+			host := hf.host
+			if host == "" {
+				host = defaultMeshHost(server, ctx)
+			}
+			if host == "" {
+				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
+			}
+			if timeout <= 0 {
+				return ExitError{Code: 64, Message: "--timeout must be greater than zero"}
+			}
+
+			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			const pollDelay = 2 * time.Second
+			attempts := int((timeout + pollDelay - 1) / pollDelay)
+			prog := output.NewProgress(cmd.OutOrStdout(), "server.reboot", server, g.json)
+			result, err := core.Reboot(core.RebootEnv{
+				Host:     ssh,
+				Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
+				Attempts: attempts,
+				Delay:    pollDelay,
+			}, host)
+			if err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
+			prog.Result("pass", host+" completed a verified reboot", 0,
+				"host", host, "bootID", result.BootID, "system", result.System)
+			return nil
+		},
+	}
+	hf.register(cmd)
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "maximum time to wait for a changed boot ID")
+	return cmd
 }
 
 func newServerDeployCmd(g *globalOptions) *cobra.Command {
