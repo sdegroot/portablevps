@@ -34,12 +34,11 @@ groups:
             No successful restic backup on {{ $labels.host_name }} for {{ $value | humanizeDuration }}.
             The offsite recovery point is aging out — investigate now.
 
-      # A backup you have never restored is hope, not a backup. A restore drill
-      # stamps portablevps_backup_restore_drill_timestamp_seconds on a clean
-      # restore; this fires when the last drill is older than ~a quarter + grace.
-      # It only arms AFTER the first drill (no series → nothing to compare).
+      # A backup you have never restored is hope, not a backup. The drill metric
+      # is pushed once per rehearsal, so last_over_time is required: an instant
+      # vector would disappear after the normal query lookback window.
       - alert: RestoreDrillStale
-        expr: time() - portablevps_backup_restore_drill_timestamp_seconds > 100 * 86400
+        expr: time() - last_over_time(portablevps_backup_restore_drill_timestamp_seconds[100d]) > 90 * 86400
         for: 1h
         labels:
           severity: warning
@@ -47,4 +46,15 @@ groups:
           summary: "Restore drill overdue on {{ $labels.host_name }}"
           description: >-
             The last successful restore drill on {{ $labels.host_name }} was {{ $value | humanizeDuration }}
-            ago (target: quarterly).
+            ago (target: quarterly). A generated presence rule separately catches hosts with no sample in 100 days.
+
+      - alert: BackupImmutabilityProbeStale
+        expr: time() - last_over_time(portablevps_backup_immutability_probe_timestamp_seconds[3d]) > 2 * 86400
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup immutability probe stale on {{ $labels.host_name }}"
+          description: >-
+            The last successful S3 delete-deny probe on {{ $labels.host_name }} was
+            {{ $value | humanizeDuration }} ago. Verify the probe timer and bucket policy.

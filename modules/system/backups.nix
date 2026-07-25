@@ -236,6 +236,19 @@ in
         maintenance. Set to null to verify repository structure only.
       '';
     };
+
+    immutability.deleteDenyProbe = {
+      enable = lib.mkEnableOption ''
+        a scheduled S3 policy probe that requires DeleteObject to be denied for
+        restic data objects. This is for append-only repositories; it is
+        intentionally incompatible with in-place restic retention/pruning
+      '';
+      schedule = lib.mkOption {
+        type = lib.types.str;
+        default = "daily";
+        description = "systemd OnCalendar schedule for the non-destructive delete-deny policy probe.";
+      };
+    };
   };
 
   config = {
@@ -246,6 +259,16 @@ in
           portablevps backup clearBeforeRestore paths must be canonical
           descendants of /data or /var/lib; unsafe paths:
           ${lib.concatStringsSep ", " unsafeClearPaths}
+        '';
+      }
+      {
+        assertion = !cfg.immutability.deleteDenyProbe.enable || !cfg.retention.enable;
+        message = ''
+          portablevps backup immutability probing is enabled, but restic
+          retention is also enabled. An append-only policy denies the deletes
+          required by `restic forget --prune`; disable
+          portablevps.backups.retention.enable and rotate repositories out of
+          band.
         '';
       }
     ];
@@ -343,5 +366,67 @@ in
         Persistent = true;
       };
     };
+
+    # Prove the host's own S3 credentials cannot delete backup data. The probe
+    # deletes a deliberately nonexistent key, so a correct explicit deny makes
+    # no change; a misconfigured permissive policy returns success and fails the
+    # unit without risking a real restic object.
+    systemd.services.portablevps-backup-immutability-probe =
+      lib.mkIf (hasComponents && cfg.immutability.deleteDenyProbe.enable) {
+        description = "Verify the backup credentials cannot delete restic data";
+        path = [ pkgs.awscli2 pkgs.coreutils pkgs.gnugrep ];
+        serviceConfig = {
+          Type = "oneshot";
+          EnvironmentFile = [ "/etc/portablevps/restic.env" ];
+        };
+        script = ''
+          set -euo pipefail
+          repository="''${RESTIC_REPOSITORY#s3:}"
+          case "$repository" in
+            http://*|https://*) ;;
+            *)
+              echo "error: immutability probe requires an s3:https://... restic repository" >&2
+              exit 2
+              ;;
+          esac
+          withoutScheme="''${repository#*://}"
+          path="''${withoutScheme#*/}"
+          bucket="''${path%%/*}"
+          prefix="''${path#*/}"
+          endpoint="''${repository%/$path}"
+          if [ -z "$bucket" ] || [ "$prefix" = "$path" ] || [ -z "$prefix" ]; then
+            echo "error: cannot parse bucket/prefix from RESTIC_REPOSITORY" >&2
+            exit 2
+          fi
+
+          errorFile="$(${pkgs.coreutils}/bin/mktemp)"
+          trap '${pkgs.coreutils}/bin/rm -f "$errorFile"' EXIT
+          probeKey="$prefix/data/portablevps-delete-deny-policy-probe"
+          if aws s3api delete-object \
+            --endpoint-url "$endpoint" \
+            --bucket "$bucket" \
+            --key "$probeKey" \
+            >/dev/null 2>"$errorFile"; then
+            echo "error: backup credentials can delete restic data objects; append-only policy is not enforced" >&2
+            exit 1
+          fi
+          if ! ${pkgs.gnugrep}/bin/grep -Eqi 'AccessDenied|Forbidden|status code: 403' "$errorFile"; then
+            echo "error: delete probe failed for a reason other than an explicit policy denial:" >&2
+            ${pkgs.coreutils}/bin/cat "$errorFile" >&2
+            exit 1
+          fi
+          echo "ok: backup data deletion is explicitly denied for host credentials"
+        '';
+      };
+
+    systemd.timers.portablevps-backup-immutability-probe =
+      lib.mkIf (hasComponents && cfg.immutability.deleteDenyProbe.enable) {
+        wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+        timerConfig = {
+          OnCalendar = cfg.immutability.deleteDenyProbe.schedule;
+          RandomizedDelaySec = "1h";
+          Persistent = true;
+        };
+      };
   };
 }

@@ -13,6 +13,8 @@ let
   cfg = config.portablevps.telemetry;
   enabled = cfg.endpoint != "";
   backupsPresent = (config.portablevps.backups.components or { }) != { };
+  immutabilityProbeEnabled =
+    config.portablevps.backups.immutability.deleteDenyProbe.enable or false;
 
   # When the proxy exposes a loopback Prometheus endpoint, scrape it here so its
   # series get the same host.name/service.* resource attributes as everything else
@@ -182,6 +184,12 @@ in
         ExecStart = "${reportMetric} portablevps_backup_restore_drill_timestamp_seconds";
       };
     };
+
+    systemd.services.portablevps-backup-immutability-probe =
+      lib.mkIf immutabilityProbeEnabled {
+        serviceConfig.ExecStartPost =
+          "${reportMetric} portablevps_backup_immutability_probe_timestamp_seconds";
+      };
 
     # Publish deploy outcomes so failures are noticed. ANY system deploy — the
     # unattended pull (system.autoUpgrade / nixos-upgrade) OR an operator

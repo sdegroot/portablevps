@@ -276,12 +276,22 @@ per repository:
   (`portablevps.backups.retention.enable = true`). Protect against deletion with
   versioning or replication to a second locked bucket instead.
 - **Append-only repository**: apply the deny-delete policy and set
-  `portablevps.backups.retention.enable = false`. Rotate to a fresh repository
-  periodically and delete the old one with elevated (non-host) credentials.
+  `portablevps.backups.retention.enable = false`, then enable
+  `portablevps.backups.immutability.deleteDenyProbe.enable`. The daily probe
+  requests deletion only for the known nonexistent
+  `data/portablevps-delete-deny-policy-probe` key and succeeds exclusively when
+  S3 returns an explicit 403/AccessDenied. Network and credential errors do not
+  count as proof. Rotate to a fresh repository periodically and delete the old
+  one with elevated (non-host) credentials.
 
 If bucket-wide object lock cannot exclude `lock/*`, use a live operational
 bucket for restic and replicate immutable backup objects into a locked archive
 bucket.
+
+The fleet must not enable the probe merely to make monitoring green: first
+apply the provider-side deny policy, run the probe manually, then deploy the
+option and add the host to
+`portablevps.apps.monitoring.immutableBackupHosts`.
 
 ## Critical Rules
 

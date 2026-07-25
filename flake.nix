@@ -63,11 +63,38 @@
       # Hermetic NixOS VM tests. These boot Linux VMs, so they are exposed only
       # for Linux systems and run in CI; `nix flake check` on macOS skips them.
       # (The CLI has its own flake at ./cli with its own checks.)
-      checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
-        restore-mode = import ./tests/vm/restore-mode.nix {
+      checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system:
+        let
           pkgs = nixpkgs.legacyPackages.${system};
-        };
-      });
+          immutabilityProbeConfig = nixpkgs.lib.nixosSystem {
+            inherit system;
+            modules = [
+              ./modules/system/restore-mode.nix
+              ./modules/system/backups.nix
+              {
+                system.stateVersion = "25.05";
+                portablevps.backups = {
+                  components.probe.paths = [ "/data/probe" ];
+                  restic.repository = "s3:https://s3.example.invalid/backups/service/restic";
+                  retention.enable = false;
+                  immutability.deleteDenyProbe.enable = true;
+                };
+              }
+            ];
+          };
+        in
+        {
+          restore-mode = import ./tests/vm/restore-mode.nix {
+            inherit pkgs;
+          };
+          immutability-probe = pkgs.runCommand "portablevps-immutability-probe-check" { } ''
+            ${pkgs.bash}/bin/bash -n -c ${
+              nixpkgs.lib.escapeShellArg
+                immutabilityProbeConfig.config.systemd.services.portablevps-backup-immutability-probe.script
+            }
+            touch "$out"
+          '';
+        });
 
       # The tool's own disaster-recovery test hosts (local QEMU, aarch64).
       nixosConfigurations = {

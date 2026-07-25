@@ -125,11 +125,43 @@ let
     }) cfg.backupHosts;
   };
 
+  restoreDrillPresenceFile = mkPresenceFile "restore-drill-presence.yml" {
+    name = "restore-drill-presence";
+    interval = "1h";
+    rules = map (host: {
+      alert = "RestoreDrillMetricAbsent";
+      expr = ''absent_over_time(portablevps_backup_restore_drill_timestamp_seconds{host_name="${host}"}[100d])'';
+      "for" = "1h";
+      labels = { severity = "warning"; host_name = host; };
+      annotations = {
+        summary = "No recent restore drill for ${host}";
+        description = "VictoriaMetrics has no successful restore-drill metric for ${host} in the last 100 days. Run a separate-host restore rehearsal and investigate the metric reporter if the drill succeeded.";
+      };
+    }) cfg.restoreDrillHosts;
+  };
+
+  immutabilityPresenceFile = mkPresenceFile "backup-immutability-presence.yml" {
+    name = "backup-immutability-presence";
+    interval = "30m";
+    rules = map (host: {
+      alert = "BackupImmutabilityProbeAbsent";
+      expr = ''absent_over_time(portablevps_backup_immutability_probe_timestamp_seconds{host_name="${host}"}[2d])'';
+      "for" = "1h";
+      labels = { severity = "critical"; host_name = host; };
+      annotations = {
+        summary = "Backup immutability is unverified on ${host}";
+        description = "No successful S3 delete-deny policy probe has been reported by ${host} in two days. The host may be able to delete its own backups.";
+      };
+    }) cfg.immutableBackupHosts;
+  };
+
   alertsDir = pkgs.runCommand "portablevps-monitoring-rules" { } ''
     mkdir -p "$out"
     cp ${./rules}/*.yml "$out"/
     ${lib.optionalString (cfg.monitoredHosts != [ ]) ''cp ${fleetPresenceFile} "$out/fleet-presence.yml"''}
     ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupPresenceFile} "$out/backup-presence.yml"''}
+    ${lib.optionalString (cfg.restoreDrillHosts != [ ]) ''cp ${restoreDrillPresenceFile} "$out/restore-drill-presence.yml"''}
+    ${lib.optionalString (cfg.immutableBackupHosts != [ ]) ''cp ${immutabilityPresenceFile} "$out/backup-immutability-presence.yml"''}
   '';
 
   vlogsAlertsDir = pkgs.runCommand "portablevps-monitoring-vlogs-rules" { } ''
@@ -266,6 +298,18 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = "Hosts expected to push a backup-success metric. One BackupMetricAbsent alert generated per host (catches a reporter broken since deploy, which a staleness rule cannot).";
+    };
+
+    restoreDrillHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Hosts expected to report a successful separate-host restore drill at least every 100 days.";
+    };
+
+    immutableBackupHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Hosts whose backup credentials must pass the scheduled S3 DeleteObject-deny probe.";
     };
 
     alertEmailFrom = lib.mkOption { type = lib.types.str; default = ""; example = "alerts@example.com"; description = "Alert email From address. Required when monitoring is enabled."; };

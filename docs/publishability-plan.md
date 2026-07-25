@@ -51,8 +51,10 @@ are implemented as code + tests only.
 - [ ] Make **Tailscale the beginner default** backend; NetBird the fleet option.
 - [ ] Decide + implement an explicit **no-mesh mode** (public HTTPS + hardened
       SSH) for the hobbyist tier.
-- [ ] Bucket + deny-delete/object-lock + scoped keys created by the tool
-      (Terranix resource plane, ADR 0001).
+- [~] Bucket + deny-delete/object-lock + scoped keys created by the tool
+      (Terranix resource plane, ADR 0001). A scheduled, alertable host-credential
+      delete-deny probe now verifies the resulting policy; provider-side
+      bucket/key creation and policy application are still external.
 - [ ] First-class lego DNS providers (Cloudflare at least); generate the CNAME
       instructions from the domain plan.
 
