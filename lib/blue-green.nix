@@ -95,23 +95,32 @@ let
       return 1
     }
 
-    # Steady state / idempotent re-run: active already on the target image.
+    # Steady state / idempotent re-run: active already on the target image. Do
+    # not let a broken current container turn a deploy into a false success.
     if running "$activeCtr" && [ "$(imageof "$activeCtr")" = "$targetImage" ]; then
-      exit 0
+      if wait_healthy "$activeCtr" "$activePort"; then
+        exit 0
+      fi
+      echo "blue-green($name): active colour $active is on target image but unhealthy" >&2
+      exit 1
     fi
 
     # Boot / first enable: active not running -> start it (nothing to drain).
     if ! running "$activeCtr"; then
       echo "blue-green($name): starting active colour $active"
-      systemctl start "$activeUnit" || true
-      wait_healthy "$activeCtr" "$activePort" \
-        || echo "blue-green($name): active colour $active not healthy yet; Restart=always will retry" >&2
-      exit 0
+      systemctl start "$activeUnit"
+      if wait_healthy "$activeCtr" "$activePort"; then
+        exit 0
+      fi
+      echo "blue-green($name): initial active colour $active failed health check" >&2
+      systemctl stop "$activeUnit" || true
+      systemctl reset-failed "$activeUnit" 2>/dev/null || true
+      exit 1
     fi
 
     # Version change: active runs an older image -> warm idle, flip, drain.
     echo "blue-green($name): flipping $active -> $idle onto $targetImage"
-    podman pull ${lib.optionalString (pullAuthFile != null) "--authfile=${pullAuthFile} "}"$targetImage" || true
+    podman pull ${lib.optionalString (pullAuthFile != null) "--authfile=${pullAuthFile} "}"$targetImage"
     systemctl restart "$idleUnit"
     if wait_healthy "$idleCtr" "$idlePort"; then
       printf '%s' "$idle" > "$stateFile"

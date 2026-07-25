@@ -81,7 +81,8 @@
   # tag or changed env silently has no effect until a manual restart or reboot.
   #
   # This activation step closes that gap: it hashes each rendered .container and,
-  # when one changes, `try-restart`s that unit (only the changed ones bounce).
+  # when one changes, `try-restart`s that unit (only the changed ones bounce)
+  # and waits for its container health before committing the new hash.
   # `try-restart` never STARTS a container, so restore-mode / apps.target gating
   # and first-boot ordering are respected. The FIRST run on any box only seeds the
   # hashes (no restarts), so rolling this out doesn't bounce already-running
@@ -101,6 +102,7 @@
       [ -d "$stateDir" ] || seed=1
       ${pkgs.coreutils}/bin/mkdir -p "$stateDir"
       changed=""
+      failed=0
       for unit in /etc/containers/systemd/*.container; do
         [ -e "$unit" ] || continue
         name="$(${pkgs.coreutils}/bin/basename "$unit" .container)"
@@ -124,19 +126,58 @@
         old=""
         [ -f "$hashFile" ] && old="$(${pkgs.coreutils}/bin/cat "$hashFile")"
         if [ "$new" != "$old" ]; then
-          ${pkgs.coreutils}/bin/printf '%s' "$new" > "$hashFile"
-          [ "$seed" = "0" ] && changed="$changed $name.service"
+          if [ "$seed" = "1" ]; then
+            ${pkgs.coreutils}/bin/printf '%s' "$new" > "$hashFile"
+          else
+            # Commit only after restart + health succeeds. A failed rollout
+            # retains the old hash, so the next deploy retries it.
+            ${pkgs.coreutils}/bin/printf '%s' "$new" > "$hashFile.pending"
+            changed="$changed $name"
+          fi
         fi
       done
       if [ -n "$changed" ]; then
         # Regenerate the .service units from the new .container files, then bounce
         # only the changed units that are currently running.
         ${pkgs.systemd}/bin/systemctl daemon-reload
-        for svc in $changed; do
+        for name in $changed; do
+          svc="$name.service"
+          unit="/etc/containers/systemd/$name.container"
+          container="$(${pkgs.gnused}/bin/sed -n 's/^ContainerName=//p' "$unit" | ${pkgs.coreutils}/bin/head -n1)"
+          [ -n "$container" ] || container="$name"
+          wasActive=0
+          ${pkgs.systemd}/bin/systemctl is-active --quiet "$svc" && wasActive=1
           echo "portablevps: quadlet $svc definition changed -> try-restart"
-          ${pkgs.systemd}/bin/systemctl try-restart "$svc" || true
+          if ! ${pkgs.systemd}/bin/systemctl try-restart "$svc"; then
+            echo "portablevps: quadlet $svc restart failed" >&2
+            failed=1
+            continue
+          fi
+          if [ "$wasActive" = "1" ]; then
+            ready=0
+            n=0
+            while [ "$n" -lt 60 ]; do
+              running="$(${pkgs.podman}/bin/podman inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)"
+              health="$(${pkgs.podman}/bin/podman inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || true)"
+              if [ "$running" = true ]; then
+                case "$health" in
+                  healthy|""|"<no value>"|none) ready=1; break ;;
+                  unhealthy) break ;;
+                esac
+              fi
+              n=$((n + 1))
+              ${pkgs.coreutils}/bin/sleep 2
+            done
+            if [ "$ready" != "1" ]; then
+              echo "portablevps: quadlet $svc failed its post-restart health gate" >&2
+              failed=1
+              continue
+            fi
+          fi
+          ${pkgs.coreutils}/bin/mv "$stateDir/$name.pending" "$stateDir/$name"
         done
       fi
+      [ "$failed" = "0" ]
     '';
   };
   };
