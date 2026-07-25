@@ -113,7 +113,10 @@ has_postgres_component() {
   remote "$target" "test -e /etc/portablevps/backups/paths.d/postgres"
 }
 
-# Seed a marker into every non-postgres backup path the running config declares.
+# Seed a marker into every non-postgres backup directory the running config
+# declares. A registered file (for example Traefik's acme.json) cannot safely be
+# modified, so print its sha256sum as exact source evidence for post-restore
+# comparison.
 # The backup coordinator materialises each component's paths at
 # /etc/portablevps/backups/paths.d/<component>, so this exercises each app's
 # registered file state (e.g. authentik's media + custom-templates) generically,
@@ -128,15 +131,21 @@ seed_component_markers() {
       if [ \"\$(basename \"\$f\")\" = postgres ]; then continue; fi
       while IFS= read -r p; do
         [ -n \"\$p\" ] || continue
-        sudo mkdir -p \"\$p\"
-        printf '%s\n' '$marker' | sudo tee \"\$p/dr-marker.txt\" >/dev/null
+        if [ -d \"\$p\" ]; then
+          printf '%s\n' '$marker' | sudo tee \"\$p/dr-marker.txt\" >/dev/null
+        elif [ -f \"\$p\" ]; then
+          sudo sha256sum \"\$p\"
+        else
+          echo \"FAIL: registered backup path does not exist: \$p\" >&2
+          exit 1
+        fi
       done < \"\$f\"
     done
   "
 }
 
-# Assert every seeded marker survived the restore. Reads the same manifest on the
-# restored host (both VMs run the same config, so the declared paths match).
+# Assert every directory marker survived and print restored registered-file
+# checksums for comparison with the source evidence.
 verify_component_markers() {
   local target="$1" marker="$2"
   remote "$target" "
@@ -147,12 +156,19 @@ verify_component_markers() {
       if [ \"\$(basename \"\$f\")\" = postgres ]; then continue; fi
       while IFS= read -r p; do
         [ -n \"\$p\" ] || continue
-        got=\"\$(sudo cat \"\$p/dr-marker.txt\" 2>/dev/null || true)\"
-        if [ \"\$got\" != '$marker' ]; then
-          echo \"FAIL: dr-marker in \$p is '\$got', expected '$marker'\" >&2
-          rc=1
+        if [ -d \"\$p\" ]; then
+          got=\"\$(sudo cat \"\$p/dr-marker.txt\" 2>/dev/null || true)\"
+          if [ \"\$got\" != '$marker' ]; then
+            echo \"FAIL: dr-marker in \$p is '\$got', expected '$marker'\" >&2
+            rc=1
+          else
+            echo \"ok: \$p/dr-marker.txt survived restore\" >&2
+          fi
+        elif [ -f \"\$p\" ]; then
+          sudo sha256sum \"\$p\"
         else
-          echo \"ok: \$p/dr-marker.txt survived restore\"
+          echo \"FAIL: registered backup path was not restored: \$p\" >&2
+          rc=1
         fi
       done < \"\$f\"
     done
@@ -261,7 +277,7 @@ echo "writing container file state on VM A"
 remote "$VM_A_SSH" "sudo mkdir -p /data/container-state/demo && printf '%s\n' '$MARKER' | sudo tee /data/container-state/demo/marker.txt >/dev/null"
 
 echo "seeding a marker into every app-registered backup path on VM A"
-seed_component_markers "$VM_A_SSH" "$MARKER"
+component_file_evidence="$(seed_component_markers "$VM_A_SSH" "$MARKER")"
 
 echo "running app-owned DR seed hooks on VM A"
 run_dr_hooks "$VM_A_SSH" seed "$MARKER"
@@ -303,7 +319,12 @@ echo "verifying restored container file state on VM B"
 remote "$VM_B_SSH" "test \"\$(sudo cat /data/container-state/demo/marker.txt)\" = '$MARKER'"
 
 echo "verifying every app-registered backup path was restored on VM B"
-verify_component_markers "$VM_B_SSH" "$MARKER"
+restored_file_evidence="$(verify_component_markers "$VM_B_SSH" "$MARKER")"
+if [ "$restored_file_evidence" != "$component_file_evidence" ]; then
+  echo "FAIL: registered file content differs after restore" >&2
+  diff -u <(printf '%s\n' "$component_file_evidence") <(printf '%s\n' "$restored_file_evidence") >&2 || true
+  exit 1
+fi
 
 echo "running app-owned DR verify hooks on VM B"
 run_dr_hooks "$VM_B_SSH" verify "$MARKER"

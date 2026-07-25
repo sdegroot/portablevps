@@ -1,6 +1,11 @@
 package core
 
-import "strings"
+import (
+	"crypto/rand"
+	"fmt"
+	"strings"
+	"time"
+)
 
 // ServiceEnv drives service data-movement (migrate/restore) over admin SSH. The
 // HostRunner is host-parameterised, so one adapter reaches both source and
@@ -155,35 +160,211 @@ type DrillOpts struct {
 	Server      string
 	SourceHost  string // live host to seed a marker on and back up (left otherwise untouched)
 	RestoreHost string // host to restore onto and verify (destructive to its data)
+	Marker      string // optional deterministic marker (tests); generated when empty
+}
+
+func newDrillMarker() (string, error) {
+	var suffix [6]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("dr-%s-%x", time.Now().UTC().Format("20060102T150405Z"), suffix), nil
+}
+
+func backupComponentsPresent(env ServiceEnv, host string) (bool, error) {
+	out, err := env.Host.Run(host, `if find /etc/portablevps/backups/paths.d -mindepth 1 -maxdepth 1 ! -type d -print -quit 2>/dev/null | grep -q .; then echo yes; else echo no; fi`)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "yes", nil
+}
+
+func postgresBackupPresent(env ServiceEnv, host string) (bool, error) {
+	out, err := env.Host.Run(host, `if test -e /etc/portablevps/backups/paths.d/postgres; then echo yes; else echo no; fi`)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "yes", nil
+}
+
+func verifyDistinctDrillMachines(env ServiceEnv, sourceHost, restoreHost string) error {
+	sourceID, err := env.Host.Run(sourceHost, "cat /etc/machine-id")
+	if err != nil {
+		return fmt.Errorf("reading source machine-id: %w", err)
+	}
+	restoreID, err := env.Host.Run(restoreHost, "cat /etc/machine-id")
+	if err != nil {
+		return fmt.Errorf("reading restore machine-id: %w", err)
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	restoreID = strings.TrimSpace(restoreID)
+	if sourceID == "" || restoreID == "" {
+		return fmt.Errorf("source or restore machine-id is empty")
+	}
+	if sourceID == restoreID {
+		return provisionErr(64, "source and restore targets resolve to the same machine")
+	}
+	return nil
+}
+
+// seedBackupPathMarkers writes markers inside registered directories and
+// returns sha256sum evidence for registered files. Files such as Traefik's
+// acme.json cannot safely be modified just to plant a marker, so their exact
+// pre-backup content becomes the evidence verified after restore.
+func seedBackupPathMarkers(env ServiceEnv, host, marker string) (string, error) {
+	command := `set -eu
+marker=` + shellQuote(marker) + `
+for manifest in /etc/portablevps/backups/paths.d/*; do
+  [ -e "$manifest" ] || continue
+  [ "$(basename "$manifest")" != postgres ] || continue
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -d "$path" ]; then
+      printf '%s\n' "$marker" | sudo tee "$path/dr-marker.txt" >/dev/null
+    elif [ -f "$path" ]; then
+      sudo sha256sum "$path"
+    else
+      echo "registered backup path does not exist: $path" >&2
+      exit 1
+    fi
+  done < "$manifest"
+done`
+	out, err := env.Host.Run(host, command)
+	return strings.TrimSpace(out), err
+}
+
+func verifyBackupPathMarkers(env ServiceEnv, host, marker, expectedFileEvidence string) error {
+	command := `set -eu
+marker=` + shellQuote(marker) + `
+rc=0
+for manifest in /etc/portablevps/backups/paths.d/*; do
+  [ -e "$manifest" ] || continue
+  [ "$(basename "$manifest")" != postgres ] || continue
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -d "$path" ]; then
+      got="$(sudo cat "$path/dr-marker.txt" 2>/dev/null || true)"
+      if [ "$got" != "$marker" ]; then
+        echo "DR marker missing from $path" >&2
+        rc=1
+      fi
+    elif [ -f "$path" ]; then
+      sudo sha256sum "$path"
+    else
+      echo "registered backup path was not restored: $path" >&2
+      rc=1
+    fi
+  done < "$manifest"
+done
+exit "$rc"`
+	out, err := env.Host.Run(host, command)
+	if err != nil {
+		return err
+	}
+	actualFileEvidence := strings.TrimSpace(out)
+	if actualFileEvidence != expectedFileEvidence {
+		return fmt.Errorf("registered file content differs after restore")
+	}
+	return nil
+}
+
+func runDrillHooks(env ServiceEnv, host, phase, marker string) error {
+	command := `set -eu
+hook_dir=/etc/portablevps/dr/` + phase + `.d
+[ -d "$hook_dir" ] || exit 0
+find "$hook_dir" -mindepth 1 -maxdepth 1 ! -type d -print | sort |
+while IFS= read -r hook; do
+  sudo "$hook" ` + shellQuote(marker) + `
+done`
+	_, err := env.Host.Run(host, command)
+	return err
 }
 
 // RestoreDrill proves backups actually restore, end to end, against real hosts:
-// it seeds a unique verification marker into the source's live data, backs the
-// source up, then restores that backup onto RestoreHost and verifies the marker
-// survived the round trip. The source is only seeded (non-destructive); the
-// restore host is rebuilt from the backup. It returns the marker it used.
+// it seeds a unique marker into PostgreSQL (when registered), every declared
+// file backup path, and app-owned seed hooks; runs the production backup
+// service; then restores onto RestoreHost and verifies every marker and
+// app-owned hook. The source is only seeded (non-destructive); the restore host
+// is rebuilt from the backup. It returns the marker it used.
 func RestoreDrill(env ServiceEnv, o DrillOpts) (string, error) {
 	report := env.report()
-
-	report("seed", "run", "seeding a verification marker on "+o.SourceHost)
-	out, err := env.Host.Run(o.SourceHost, "sudo insert-test-data.sh | tail -n 1")
-	if err != nil {
-		return "", provisionErr(70, "seeding marker on %s: %v", o.SourceHost, err)
+	if o.SourceHost == "" || o.RestoreHost == "" {
+		return "", provisionErr(64, "source and restore hosts are required")
 	}
-	marker := strings.TrimSpace(out)
+	if o.SourceHost == o.RestoreHost {
+		return "", provisionErr(64, "source and restore hosts must be different")
+	}
+	if err := verifyDistinctDrillMachines(env, o.SourceHost, o.RestoreHost); err != nil {
+		if _, ok := err.(*ProvisionError); ok {
+			return "", err
+		}
+		return "", provisionErr(70, "verifying distinct source and restore machines: %v", err)
+	}
+
+	components, err := backupComponentsPresent(env, o.SourceHost)
+	if err != nil {
+		return "", provisionErr(70, "checking backup components on %s: %v", o.SourceHost, err)
+	}
+	if !components {
+		return "", provisionErr(69, "no backup components are registered on %s", o.SourceHost)
+	}
+	hasPostgres, err := postgresBackupPresent(env, o.SourceHost)
+	if err != nil {
+		return "", provisionErr(70, "checking PostgreSQL backup registration on %s: %v", o.SourceHost, err)
+	}
+
+	marker := o.Marker
 	if marker == "" {
-		return "", provisionErr(70, "insert-test-data.sh returned an empty marker on %s", o.SourceHost)
+		marker, err = newDrillMarker()
+		if err != nil {
+			return "", provisionErr(70, "generating restore-drill marker: %v", err)
+		}
+	}
+	report("seed", "run", "seeding declared state on "+o.SourceHost)
+	if hasPostgres {
+		if _, err := env.Host.Run(o.SourceHost, "sudo insert-test-data.sh "+shellQuote(marker)+" >/dev/null"); err != nil {
+			return marker, provisionErr(70, "seeding PostgreSQL marker on %s: %v", o.SourceHost, err)
+		}
+	}
+	fileEvidence, err := seedBackupPathMarkers(env, o.SourceHost, marker)
+	if err != nil {
+		return marker, provisionErr(70, "seeding registered backup paths on %s: %v", o.SourceHost, err)
+	}
+	if err := runDrillHooks(env, o.SourceHost, "seed", marker); err != nil {
+		return marker, provisionErr(70, "running app DR seed hooks on %s: %v", o.SourceHost, err)
 	}
 	report("seed", "ok", "marker "+marker)
 
-	report("backup", "run", "backing up "+o.SourceHost)
-	if _, err := env.Host.Run(o.SourceHost, "sudo init-backup-repo.sh; sudo backup.sh"); err != nil {
+	report("backup", "run", "starting production backup service on "+o.SourceHost)
+	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl start portablevps-backup.service"); err != nil {
 		return marker, provisionErr(70, "backup on %s: %v", o.SourceHost, err)
 	}
 
 	// Restore onto the (separate) restore host and verify the marker survived.
-	if err := Restore(env, RestoreOpts{Server: o.Server, Host: o.RestoreHost, Marker: marker}); err != nil {
+	restoreMarker := ""
+	if hasPostgres {
+		restoreMarker = marker
+	}
+	if err := Restore(env, RestoreOpts{Server: o.Server, Host: o.RestoreHost, Marker: restoreMarker}); err != nil {
 		return marker, err
+	}
+	report("verify", "run", "verifying all declared state on "+o.RestoreHost)
+	if err := verifyBackupPathMarkers(env, o.RestoreHost, marker, fileEvidence); err != nil {
+		return marker, provisionErr(71, "registered backup-path verification failed on %s: %v", o.RestoreHost, err)
+	}
+	if err := runDrillHooks(env, o.RestoreHost, "verify", marker); err != nil {
+		return marker, provisionErr(71, "app DR verification hooks failed on %s: %v", o.RestoreHost, err)
+	}
+	report("verify", "ok", "all declared state contains marker "+marker)
+
+	metricOut, err := env.Host.Run(o.RestoreHost, `if sudo systemctl cat portablevps-backup-restore-drill-report.service >/dev/null 2>&1; then sudo systemctl start portablevps-backup-restore-drill-report.service; echo reported; else echo unavailable; fi`)
+	if err != nil {
+		return marker, provisionErr(70, "reporting successful restore drill from %s: %v", o.RestoreHost, err)
+	}
+	if strings.TrimSpace(metricOut) == "reported" {
+		report("metric", "ok", "published restore-drill success metric")
+	} else {
+		report("metric", "info", "restore-drill metric unit is not configured on "+o.RestoreHost)
 	}
 	return marker, nil
 }

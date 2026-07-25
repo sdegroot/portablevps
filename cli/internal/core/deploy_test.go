@@ -11,6 +11,9 @@ type fakeHost struct {
 	failRestoreModeCheck bool
 	journal              string // returned for journalctl commands
 	probeOut             string // returned for the failed-unit health probe
+	outputs              map[string]string
+	failContaining       string
+	machineIDs           map[string]string
 }
 
 func (f *fakeHost) Run(host, command string) (string, error) {
@@ -21,11 +24,25 @@ func (f *fakeHost) Run(host, command string) (string, error) {
 	if f.failRestoreModeCheck && strings.Contains(command, "restore-mode") {
 		return "", &DeployError{Code: 1, Msg: "not in restore mode"}
 	}
+	if f.failContaining != "" && strings.Contains(command, f.failContaining) {
+		return "", &DeployError{Code: 1, Msg: "command failed"}
+	}
+	if command == "cat /etc/machine-id" {
+		if id := f.machineIDs[host]; id != "" {
+			return id, nil
+		}
+		return "machine-" + host, nil
+	}
 	if strings.Contains(command, "journalctl") {
 		return f.journal, nil
 	}
 	if strings.Contains(command, "--state=failed") {
 		return f.probeOut, nil
+	}
+	for match, output := range f.outputs {
+		if strings.Contains(command, match) {
+			return output, nil
+		}
 	}
 	return "", nil
 }

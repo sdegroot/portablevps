@@ -53,8 +53,9 @@ func newDRCommand(g *globalOptions, use string, addServerFlag bool) *cobra.Comma
 			"everything down — no real infrastructure touched.\n\n" +
 			"Remote (--source-server + --restore-server, or --source-host + --restore-host): " +
 			"runs the SAME proof against real hosts — " +
-			"seed a marker in the source's live data, back it up, restore onto the restore host, " +
-			"and verify the marker survived. The source is only seeded (non-destructive); the " +
+			"seed markers into PostgreSQL, every declared backup path, and app-owned hooks; " +
+			"run the production backup service; restore onto the restore host; verify every " +
+			"declared component; and publish the restore-drill metric. The source is only seeded; the " +
 			"restore host's data is WIPED, so it should be a spare/candidate box.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
