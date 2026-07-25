@@ -28,8 +28,8 @@ type SecretError struct {
 	Msg  string
 }
 
-func (e *SecretError) Error() string   { return e.Msg }
-func (e *SecretError) ExitCode() int   { return e.Code }
+func (e *SecretError) Error() string { return e.Msg }
+func (e *SecretError) ExitCode() int { return e.Code }
 func secretErr(code int, format string, a ...any) *SecretError {
 	return &SecretError{Code: code, Msg: fmt.Sprintf(format, a...)}
 }

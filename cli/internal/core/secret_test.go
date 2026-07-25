@@ -14,7 +14,7 @@ import (
 // touching real tools.
 type fakeEnvRunner struct{ calls [][]string }
 
-func (f *fakeEnvRunner) Run(_ , name string, args ...string) (string, error) {
+func (f *fakeEnvRunner) Run(_, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
 	if name == "age-keygen" && len(args) >= 2 && args[0] == "-o" {
 		_ = os.WriteFile(args[1], []byte("AGE-SECRET-KEY-1TEST\n"), 0o600)

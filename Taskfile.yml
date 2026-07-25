@@ -13,11 +13,15 @@ tasks:
       - task --list
 
   check:
-    desc: Run shell syntax, Python, and Nix flake checks
+    desc: Run shell, Python, Go CLI, and Nix flake checks
     cmds:
       - bash -n scripts/*.sh scripts/lib/*.sh tests/test-disaster-recovery.sh
       - python3 -m py_compile scripts/cloud.py scripts/portablevps_cloud/*.py tests/test_cloud.py tests/test_secrets.py
       - python3 -m unittest discover -s tests -p 'test_*.py'
+      - test -z "$(gofmt -l cli/cmd cli/internal)"
+      - cd cli && go test ./...
+      - cd cli && go vet ./...
+      - nix --extra-experimental-features 'nix-command flakes' flake check ./cli
       - nix --extra-experimental-features 'nix-command flakes' flake check
 
   flake-check:
