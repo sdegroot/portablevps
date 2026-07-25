@@ -224,6 +224,11 @@ reset_vm_data() {
   # target config so each rehearsal behaves like a fresh host.
   echo "resetting $label data for a clean ${CONFIG} rehearsal"
   remote "$target" "
+  # A timer already active under the VM's previous generation remains active
+  # across a switch even when the test generation removes its WantedBy link.
+  # Stop inherited scheduling before clearing data; the declarative QEMU
+  # setting keeps it stopped after the switch.
+  sudo systemctl stop portablevps-backup.timer portablevps-backup-maintenance.timer portablevps-backup-immutability-probe.timer >/dev/null 2>&1 || true
   sudo systemctl stop apps.target >/dev/null 2>&1 || true
   sudo systemctl stop podman.service podman.socket docker.service docker.socket containerd.service >/dev/null 2>&1 || true
   # 'systemctl stop apps.target' propagates a stop to its PartOf members but
@@ -253,7 +258,7 @@ echo "configuring VM A in normal mode"
 remote "$VM_A_SSH" "cd '$FLAKE_DIR' && sudo nixos-rebuild switch --flake .#${CONFIG}"
 remote "$VM_A_SSH" "sudo systemctl start apps.target"
 remote "$VM_A_SSH" "
-  if sudo systemctl is-active --quiet portablevps-backup.timer portablevps-backup-maintenance.timer; then
+  if sudo systemctl is-active --quiet portablevps-backup.timer portablevps-backup-maintenance.timer portablevps-backup-immutability-probe.timer; then
     echo 'scheduled backup timer active in controlled DR test' >&2
     exit 1
   fi
