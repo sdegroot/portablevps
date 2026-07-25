@@ -51,7 +51,7 @@ in
       enable = true;
       # Insurance: if the DHCP-provided upstream isn't picked up, resolved still
       # has working public resolvers so ACME / egress DNS never breaks.
-      fallbackDns = [ "1.1.1.1" "9.9.9.9" ];
+      settings.Resolve.FallbackDNS = [ "1.1.1.1" "9.9.9.9" ];
     };
 
     services.openssh = {

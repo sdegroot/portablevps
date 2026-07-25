@@ -7,7 +7,7 @@
   description = "portablevps — portable single-instance VPS installations on NixOS";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     nixpkgs-postgres.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixpkgs-netbird.url = "github:NixOS/nixpkgs/nixos-unstable";
     disko.url = "github:nix-community/disko";
