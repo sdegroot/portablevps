@@ -17,6 +17,7 @@
     ../modules/networking/network.nix
     ../modules/system/telemetry.nix
     ../modules/system/scripts.nix
+    ../modules/system/migration.nix
     ../modules/platforms/qemu-test-access.nix
   ];
 

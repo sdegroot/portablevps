@@ -422,6 +422,8 @@ in
         paths = [ dataRoot ];
         clearBeforeRestore = [ dataRoot ];
       };
+
+      portablevps.migration.quiesceUnits = [ "forgejo.service" ];
     }
 
     (lib.mkIf (!prototype) {

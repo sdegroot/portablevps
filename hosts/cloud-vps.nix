@@ -12,6 +12,7 @@ in
     ../modules/networking/network.nix
     ../modules/system/telemetry.nix
     ../modules/system/scripts.nix
+    ../modules/system/migration.nix
   ];
 
   portablevps.cloud = {

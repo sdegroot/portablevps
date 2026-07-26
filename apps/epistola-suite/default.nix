@@ -236,6 +236,7 @@ in
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
+      portablevps.migration.quiesceUnits = [ "${cfg.containerName}.service" ];
       assertions = [
         {
           assertion = !oidcEnabled || (cfg.oidc.issuerUri != "" && cfg.oidc.clientId != "");

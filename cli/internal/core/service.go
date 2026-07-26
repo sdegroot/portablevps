@@ -56,14 +56,36 @@ type MigrateOpts struct {
 }
 
 // Migrate moves a service from SourceHost to TargetHost via its backup
-// repository: put the target in restore mode, stop the source, take a final
-// source backup, restore onto the target, switch the target to normal, and
-// verify. The source is stopped BEFORE the final backup so no writes land
-// between the snapshot and the cutover (backing up a still-live source would
-// lose any write made in that window). DNS repointing is left to
-// `network dns-sync` (printed as the final step).
+// repository. It quiesces only source application writers while PostgreSQL
+// remains live for the final physical backup, then stops the complete source
+// stack, restores and starts the target. DNS repointing remains the final
+// operator action, after this function has verified the target.
 func Migrate(env ServiceEnv, o MigrateOpts) error {
 	report := env.report()
+	if o.Server == "" || o.SourceHost == "" || o.TargetHost == "" {
+		return provisionErr(64, "target server, source host, and target host are required")
+	}
+	if err := verifyDistinctDrillMachines(env, o.SourceHost, o.TargetHost); err != nil {
+		return provisionErr(64, "source and target identity check: %v", err)
+	}
+
+	sourceQuiesced := false
+	targetStarted := false
+	rollback := func(cause error) error {
+		report("rollback", "run", "returning service ownership to "+o.SourceHost)
+		if targetStarted {
+			if _, err := env.Host.Run(o.TargetHost, "sudo systemctl stop apps.target"); err != nil {
+				return provisionErr(70, "%v; rollback also failed stopping target apps: %v", cause, err)
+			}
+		}
+		if sourceQuiesced {
+			if _, err := env.Host.Run(o.SourceHost, "sudo systemctl start apps.target portablevps-backup.timer"); err != nil {
+				return provisionErr(70, "%v; rollback also failed restarting source apps: %v", cause, err)
+			}
+		}
+		report("rollback", "ok", "source stack restarted")
+		return cause
+	}
 
 	report("prepare-target", "run", "switching "+o.TargetHost+" to restore mode")
 	if err := env.switchTo(o.Server+"-restore", o.TargetHost); err != nil {
@@ -79,34 +101,47 @@ func Migrate(env ServiceEnv, o MigrateOpts) error {
 		}
 	}
 
-	// Quiesce the source first so the final backup is a consistent snapshot with
-	// no concurrent writes. A failed stop aborts the migration — proceeding would
-	// back up (and cut over to) a still-live source and silently lose writes.
-	report("cutover", "run", "stopping app services on "+o.SourceHost)
-	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl stop apps.target"); err != nil {
-		return provisionErr(70, "stopping source apps: %v", err)
+	// A scheduled backup after this point would make the target's selected final
+	// snapshot ambiguous. Any currently-running backup remains serialized by its
+	// lock and the explicit final backup below waits for it.
+	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl stop portablevps-backup.timer"); err != nil {
+		return provisionErr(70, "stopping source backup timer: %v", err)
+	}
+
+	report("quiesce", "run", "stopping source writers while PostgreSQL remains live")
+	// A failed quiesce may already have stopped some writers, so every outcome
+	// from this point must restart the source stack on rollback.
+	sourceQuiesced = true
+	if _, err := env.Host.Run(o.SourceHost, "sudo portablevps-quiesce-writers"); err != nil {
+		return rollback(provisionErr(70, "quiescing source writers: %v", err))
 	}
 
 	report("backup", "run", "final source backup on "+o.SourceHost)
 	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl start portablevps-backup.service"); err != nil {
-		return provisionErr(70, "final source backup failed: %v", err)
+		return rollback(provisionErr(70, "final source backup failed: %v", err))
+	}
+
+	report("cutover", "run", "stopping complete source stack after final backup")
+	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl stop apps.target"); err != nil {
+		return rollback(provisionErr(70, "stopping source stack: %v", err))
 	}
 
 	report("restore", "run", "restoring the backup onto "+o.TargetHost)
 	if _, err := env.Host.Run(o.TargetHost, "sudo restore.sh"); err != nil {
-		return provisionErr(70, "restore on target failed: %v", err)
+		return rollback(provisionErr(70, "restore on target failed: %v", err))
 	}
 
 	report("finalize", "run", "switching "+o.TargetHost+" to normal and starting apps")
 	if err := env.switchTo(o.Server, o.TargetHost); err != nil {
-		return provisionErr(70, "switching target to normal: %v", err)
+		return rollback(provisionErr(70, "switching target to normal: %v", err))
 	}
 	if _, err := env.Host.Run(o.TargetHost, "sudo systemctl start apps.target"); err != nil {
-		return provisionErr(70, "starting apps on target: %v", err)
+		return rollback(provisionErr(70, "starting apps on target: %v", err))
 	}
+	targetStarted = true
 	if o.Marker != "" {
 		if _, err := env.Host.Run(o.TargetHost, "sudo verify-test-data.sh "+shellQuote(o.Marker)); err != nil {
-			return provisionErr(71, "target marker verification failed: %v", err)
+			return rollback(provisionErr(71, "target marker verification failed: %v", err))
 		}
 	}
 	report("done", "ok", "migrated to "+o.TargetHost+" — run `network dns-sync` to repoint DNS")

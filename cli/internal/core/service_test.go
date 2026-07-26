@@ -14,10 +14,10 @@ func TestMigrateOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	seq := strings.Join(host.runs, " | ")
-	// key ordering invariants: restore-mode check, stop source, source backup,
-	// restore on target, start apps.
+	// Key ordering invariants: restore-mode check, writer quiesce while
+	// PostgreSQL is live, source backup, then full source stop and restore.
 	for _, want := range []string{
-		"restore-mode", "stop apps.target", "portablevps-backup.service", "restore.sh", "start apps.target",
+		"restore-mode", "portablevps-quiesce-writers", "portablevps-backup.service", "stop apps.target", "restore.sh", "start apps.target",
 	} {
 		if !strings.Contains(seq, want) {
 			t.Errorf("migrate did not run %q; sequence: %s", want, seq)
@@ -27,10 +27,40 @@ func TestMigrateOrdering(t *testing.T) {
 	if !stream.sawContaining("#svc-restore") || !stream.sawContaining("#svc") {
 		t.Errorf("expected switches to svc-restore then svc: %v", stream.calls)
 	}
-	// the source is stopped BEFORE the final backup so the snapshot is consistent
-	// (no writes can land between the backup and the cutover).
-	if strings.Index(seq, "stop apps.target") > strings.Index(seq, "portablevps-backup.service") {
-		t.Errorf("source must be stopped before the final backup: %s", seq)
+	if strings.Index(seq, "portablevps-quiesce-writers") > strings.Index(seq, "portablevps-backup.service") {
+		t.Errorf("writers must be quiesced before the final backup: %s", seq)
+	}
+	if strings.Index(seq, "portablevps-backup.service") > strings.Index(seq, "stop apps.target") {
+		t.Errorf("full source stack must stop only after the final backup: %s", seq)
+	}
+}
+
+func TestMigrateRestartsSourceWhenFinalBackupFails(t *testing.T) {
+	host := &fakeHost{failContaining: "portablevps-backup.service"}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err == nil {
+		t.Fatal("expected final backup failure")
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if !strings.Contains(sequence, "portablevps-quiesce-writers") || !strings.Contains(sequence, "start apps.target portablevps-backup.timer") {
+		t.Fatalf("failed migration must restore the quiesced source: %s", sequence)
+	}
+	if strings.Contains(sequence, "restore.sh") {
+		t.Fatalf("migration must not restore target after final backup failure: %s", sequence)
+	}
+}
+
+func TestMigrateRejectsSameMachineBeforeSwitchingTarget(t *testing.T) {
+	host := &fakeHost{machineIDs: map[string]string{"src": "same", "dst": "same"}}
+	stream := &recordRunner{}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: stream},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err == nil {
+		t.Fatal("expected same-machine rejection")
+	}
+	if len(stream.calls) != 0 {
+		t.Fatalf("same-machine check must happen before target switch: %v", stream.calls)
 	}
 }
 

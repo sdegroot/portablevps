@@ -452,5 +452,10 @@ in
         paths = [ mediaDir ] ++ templateState;
         clearBeforeRestore = [ mediaDir ] ++ templateState;
       };
+
+    portablevps.migration.quiesceUnits = [
+      "authentik-server.service"
+      "authentik-worker.service"
+    ];
   };
 }

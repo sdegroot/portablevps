@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 
 	"github.com/epistola-app/portablevps/internal/adapters"
@@ -22,14 +25,15 @@ func newServiceCmd(g *globalOptions) *cobra.Command {
 }
 
 func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
-	var sourceHost, targetHost, marker string
+	var sourceServer, sourceHost, targetHost, marker string
 	var hf hostFlags
 	cmd := &cobra.Command{
 		Use:   "migrate [server]",
 		Short: "Move a service from one running host to another via its backup repo",
-		Long: "Puts the target in restore mode, takes a final source backup, stops " +
-			"the source, restores onto the target, switches it to normal, and " +
-			"verifies. DNS repointing is a follow-up (`network dns-sync`).",
+		Long: "Puts a warm target in restore mode, quiesces source writers while " +
+			"PostgreSQL remains online for the final backup, restores onto the target, " +
+			"switches it to normal, and verifies. DNS repointing is a follow-up " +
+			"(`network dns-sync`).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server, ctx, err := serverArg(g, args)
@@ -38,6 +42,24 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 			}
 			if sourceHost == "" || targetHost == "" {
 				return ExitError{Code: 64, Message: "migrate needs --source-host and --target-host"}
+			}
+			if sourceServer == "" {
+				return ExitError{Code: 64, Message: "migrate needs --source-server so both service definitions can be validated"}
+			}
+			servers, err := core.LoadServers(core.Env{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}, Getenv: os.Getenv})
+			if err != nil {
+				return ExitError{Code: 70, Message: fmt.Sprintf("loading server registry: %v", err)}
+			}
+			source, ok := servers[sourceServer]
+			if !ok {
+				return ExitError{Code: 64, Message: "unknown source server: " + sourceServer}
+			}
+			target, ok := servers[server]
+			if !ok {
+				return ExitError{Code: 64, Message: "unknown target server: " + server}
+			}
+			if source.BackupRepository == "" || target.BackupRepository == "" || source.BackupRepository != target.BackupRepository {
+				return ExitError{Code: 64, Message: "source and target must declare the same non-empty backupRepository"}
 			}
 			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
 			if err != nil {
@@ -63,6 +85,7 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&sourceHost, "source-host", "", "the current (source) host address")
+	cmd.Flags().StringVar(&sourceServer, "source-server", "", "the current source server definition (required for repository validation)")
 	cmd.Flags().StringVar(&targetHost, "target-host", "", "the destination (target) host address")
 	cmd.Flags().StringVar(&marker, "marker", "", "optional demo marker to verify before/after")
 	cmd.Flags().StringVar(&hf.sshPort, "ssh-port", "22", "admin SSH port")
