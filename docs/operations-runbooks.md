@@ -753,16 +753,24 @@ CONFIRM_DELETE=<provider-server-id>` once traffic has been repointed.
 
 ## Service Migration
 
-Use this to move a live service to a different already-provisioned machine
-identity. This is not a host replacement: the target keeps its own hostname,
+Use this to replace the host serving a live stateful service with a warm spare.
+This is not machine-identity replacement: the target keeps its own hostname,
 NetBird peer, sops age key, and secrets file. The service moves because both
 server configs point at the same service-keyed backup repository and the service
 DNS record is repointed after restore.
 
+Keep a small pool of suitably sized idle machines. Before the maintenance
+window, assign one spare the target workload in Git, add every required secret
+to that machine's sops file, and make sure its `backupRepository` equals the
+source's service-keyed repository. If no spare is suitable, create a new logical
+machine, complete its sops flow, and install it with `portablevps server adopt
+<target> --restore`; do not attempt that provider work after writes have been
+frozen.
+
 Prerequisites:
 
-- The target server config already runs the service and declares the same
-  `backupRepository` as the source service.
+- The target server config is the prepared spare workload and declares the same
+  non-empty `backupRepository` and `serviceKey` as the source service.
 - The target server has all required sops secrets. Shared proxy credentials such
   as `traefik/acme-env` must match the working fleet credential when the same
   delegated DNS provider is used.
@@ -774,32 +782,38 @@ Prerequisites:
 Run:
 
 ```sh
-mise exec -- task cloud:migrate-service \
-  SOURCE_SERVER=old-service-host \
-  TARGET_SERVER=new-service-host \
-  SOURCE_HOST=old-service-host.example.internal \
-  TARGET_HOST=new-service-host.example.internal
+nix run ../portablevps/cli#portablevps -- service migrate new-service-host \
+  --source-server old-service-host \
+  --source-host old-service-host.epistola.int \
+  --target-host new-service-host.epistola.int
 ```
 
 The command performs the cutover in this order:
 
-1. Switch the target to `.#<target>-restore`.
-2. Verify restore mode is active and app/PostgreSQL units are not running.
-3. Pre-warm and verify target TLS for every proxy domain in the target plan.
-   This happens before source shutdown; if certificate validation fails, the
-   source remains untouched. Set `PREWARM_TLS=0` only when TLS is intentionally
-   out of scope for the move.
-4. Insert and verify a final PostgreSQL marker on the source.
-5. Run the real `portablevps-backup.service` on the source.
-6. Stop source app services.
-7. Run `restore.sh` on the target.
-8. Switch the target to normal `.#<target>` and start `apps.target`.
-9. Verify the final marker on the target.
-10. Sync internal NetBird DNS from the target proxy plan.
+1. Check the source and target machine IDs are distinct, then switch the target
+   to `.#<target>-restore` and prove its applications are stopped.
+2. Stop the source backup timer so no later snapshot can race the final one.
+3. Run `portablevps-quiesce-writers` on the source. Each workload declares its
+   API/worker writer units; PostgreSQL deliberately remains online.
+4. Run the real `portablevps-backup.service` and wait for its verified final
+   physical backup.
+5. Stop the complete source `apps.target`, restore the target, activate its
+   normal profile, start `apps.target`, and verify the requested marker.
+6. Update the stable NetBird service DNS from the target plan:
 
-After the command succeeds, verify the service endpoint from a mesh client and
-apply a follow-up config change for the retired host, usually the `idle` profile.
-Deploy that old host only after the target is healthy and DNS points at it.
+   ```sh
+   nix run ../portablevps/cli#portablevps -- network dns-sync new-service-host \
+     --host new-service-host.epistola.int
+   ```
+
+   The temporary public edge uses these stable service names rather than a
+   machine peer. Reload Traefik there after the DNS update if it has cached the
+   prior target, then probe both a mesh client and the public hostname.
+
+If the final backup, restore, or target verification fails, the command stops a
+partially started target and restarts the source apps and backup timer. Do not
+change DNS before the command succeeds. After the DNS and public probes pass,
+commit the old machine back to the `idle` profile and replenish spare capacity.
 
 Important details:
 
@@ -809,9 +823,10 @@ Important details:
   must still be healthy for future renewals.
 - The command refuses to proceed when `SOURCE_SERVER` and `TARGET_SERVER` both
   declare backup repositories and they differ.
-- The command is intentionally scoped to already-provisioned hosts. Creating a
-  new target machine, wiring sops recipients/secrets, and deciding which old
-  machine should become idle remain explicit operator steps.
+- The command is intentionally scoped to already-provisioned warm spares.
+  Creating/adopting a machine, wiring sops recipients/secrets, and choosing
+  which old machine becomes idle remain explicit operator steps completed
+  before the maintenance window.
 
 ## Operator Control Plane
 

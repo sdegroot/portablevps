@@ -61,6 +61,9 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 			if source.BackupRepository == "" || target.BackupRepository == "" || source.BackupRepository != target.BackupRepository {
 				return ExitError{Code: 64, Message: "source and target must declare the same non-empty backupRepository"}
 			}
+			if source.ServiceKey == "" || target.ServiceKey == "" || source.ServiceKey != target.ServiceKey {
+				return ExitError{Code: 64, Message: "source and target must declare the same non-empty serviceKey"}
+			}
 			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
 			if err != nil {
 				return err

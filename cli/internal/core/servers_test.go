@@ -28,7 +28,7 @@ func writeRegistry(t *testing.T, json string) func(string) string {
 func TestLoadServersParsesPurposeAndProvider(t *testing.T) {
 	getenv := writeRegistry(t, `{
 		"web":  {"name":"web","provider":"hetzner","purpose":"Website","netbird":{"groups":["portablevps-servers","web"]}},
-		"code": {"name":"code","placement":{"provider":"leaseweb"},"purpose":"Forgejo code hosting"},
+		"code": {"name":"code","placement":{"provider":"leaseweb"},"purpose":"Forgejo code hosting","serviceKey":"forgejo"},
 		"bare": {"name":"bare","provider":"hetzner"}
 	}`)
 	servers, err := LoadServers(Env{RepoRoot: "/nonexistent", Getenv: getenv})
@@ -44,6 +44,9 @@ func TestLoadServersParsesPurposeAndProvider(t *testing.T) {
 	// provider falls back to placement.provider when the top-level is empty.
 	if got := servers["code"].Provider; got != "leaseweb" {
 		t.Errorf("code provider = %q, want leaseweb", got)
+	}
+	if got := servers["code"].ServiceKey; got != "forgejo" {
+		t.Errorf("code service key = %q, want forgejo", got)
 	}
 	// a server with no purpose set parses to an empty string, not an error.
 	if got := servers["bare"].Purpose; got != "" {

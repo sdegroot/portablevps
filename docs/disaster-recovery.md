@@ -155,9 +155,10 @@ the two collide on the mesh.
 > operation: provision a **new** machine (`<provider>-<region>-<date><letter>`,
 > its own name), deploy the app, restore its service data, then flip the service
 > CNAME to the new machine and retire the old one. That path never renames a
-> machine. Use `task cloud:migrate-service` for that case; it switches the
-> target to restore mode, pre-warms TLS, takes a final source backup, stops the
-> source, restores the target, verifies the marker, and syncs NetBird DNS. See
+> machine. Use `portablevps service migrate` for that case; it switches the
+> target to restore mode, quiesces source application writers while PostgreSQL
+> remains live for a final backup, then stops the source, restores the target,
+> and verifies it. Sync NetBird DNS after the command succeeds. See
 > `docs/operations-runbooks.md#service-migration`.
 
 First, capture a fresh backup from the source (or use the last good one if the
