@@ -29,9 +29,11 @@ groups:
           description: "Traefik on {{ $labels.host_name }} has served {{ $value | humanizePercentage }} 5xx responses over the last 5m."
 
       - alert: ProxyHighLatencyP95
+        # SSE requests deliberately remain open while events stream, so their
+        # duration measures connection lifetime rather than request latency.
         expr: |
           histogram_quantile(0.95,
-            sum by (host_name, le) (rate(traefik_service_request_duration_seconds_bucket[5m]))
+            sum by (host_name, le) (rate(traefik_service_request_duration_seconds_bucket{protocol!="sse"}[5m]))
           ) > 2
         for: 10m
         labels:
