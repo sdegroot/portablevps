@@ -97,6 +97,20 @@ let
         '';
       };
 
+      maintenance = {
+        enable = lib.mkEnableOption "a planned-maintenance response for this HTTP service";
+
+        serviceName = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "Customer portal";
+          description = ''
+            Human-readable service name shown on the maintenance page. Defaults
+            to the service's primary domain.
+          '';
+        };
+      };
+
       visibility = lib.mkOption {
         type = visibilityType;
         default = "internal";
@@ -173,11 +187,18 @@ let
   };
 
   httpServicesConfig = cfg.http.services // testHttpServices;
+  serviceInMaintenance = service: service.maintenance.enable or false;
+  maintenanceServices = lib.filterAttrs
+    (_name: service: serviceInMaintenance service)
+    httpServicesConfig;
+  hasMaintenanceServices = maintenanceServices != { };
+  maintenanceUpstream = "http://127.0.0.1:${toString cfg.maintenanceBackendPort}";
   # A service points at either one `upstream` or a list of `upstreams`; resolve
   # to a canonical non-empty list, and a single representative URL for the
   # (single-target) NetBird DNS plan.
   serviceUpstreams = service:
-    if service.upstreams or [ ] != [ ] then service.upstreams
+    if serviceInMaintenance service then [ maintenanceUpstream ]
+    else if service.upstreams or [ ] != [ ] then service.upstreams
     else lib.optional (service.upstream or null != null) service.upstream;
   serviceUpstream = service: lib.head (serviceUpstreams service);
   normalizeDnsName = name:
@@ -226,7 +247,7 @@ let
       # backend is drained mid-deploy (blue-green flip), a request dispatched to
       # it before the health check catches up gets connection-refused; retry
       # re-dispatches to the healthy backend so the flip is truly zero-downtime.
-      // lib.optionalAttrs (service.healthCheck or null != null) {
+      // lib.optionalAttrs (service.healthCheck or null != null && !serviceInMaintenance service) {
         middlewares = [ "${name}-retry" ];
       }
       // service.extraRouterConfig)
@@ -234,7 +255,7 @@ let
 
   httpMiddlewares = lib.listToAttrs (lib.concatLists (lib.mapAttrsToList
     (name: service:
-      lib.optional (service.healthCheck or null != null) {
+      lib.optional (service.healthCheck or null != null && !serviceInMaintenance service) {
         name = "${name}-retry";
         value.retry = { attempts = 2; initialInterval = "100ms"; };
       })
@@ -262,7 +283,7 @@ let
     (_name: service: {
       loadBalancer = {
         servers = map (url: { inherit url; }) (serviceUpstreams service);
-      } // lib.optionalAttrs (service.healthCheck or null != null) {
+      } // lib.optionalAttrs (service.healthCheck or null != null && !serviceInMaintenance service) {
         healthCheck = {
           inherit (service.healthCheck) path interval timeout;
         };
@@ -379,6 +400,40 @@ let
     HTTPServer(("127.0.0.1", ${toString cfg.testBackend.port}), Handler).serve_forever()
   '';
 
+  escapeHtml = builtins.replaceStrings
+    [ "&" "<" ">" ''"'' "'" ]
+    [ "&amp;" "&lt;" "&gt;" "&quot;" "&#39;" ];
+  maintenancePage = service:
+    let
+      serviceName =
+        if service.maintenance.serviceName or null != null
+        then service.maintenance.serviceName
+        else service.domain;
+    in
+    pkgs.writeTextDir "maintenance.html" ''
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Planned maintenance</title>
+          <style>
+            :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+            body { display: grid; min-height: 100vh; margin: 0; place-items: center; }
+            main { max-width: 40rem; padding: 2rem; text-align: center; }
+            h1 { margin-bottom: .75rem; }
+            p { font-size: 1.125rem; line-height: 1.6; }
+          </style>
+        </head>
+        <body>
+          <main>
+            <h1>Planned maintenance</h1>
+            <p>${escapeHtml serviceName} is currently unavailable due to planned maintenance. Please try again later.</p>
+          </main>
+        </body>
+      </html>
+    '';
+
   testCertificate = pkgs.runCommand "portablevps-proxy-test-certificate"
     { nativeBuildInputs = [ pkgs.openssl ]; }
     ''
@@ -416,6 +471,12 @@ in
       type = lib.types.bool;
       default = false;
       description = "Open the proxy port on the public host firewall.";
+    };
+
+    maintenanceBackendPort = lib.mkOption {
+      type = lib.types.port;
+      default = 18081;
+      description = "Loopback port for the proxy's planned-maintenance HTTP backend.";
     };
 
     metrics = {
@@ -683,6 +744,30 @@ in
 
       environment.etc."portablevps/proxy-domains.json".source = domainPlanFile;
       environment.systemPackages = [ domainPlanCommand ];
+
+      services.nginx = lib.mkIf hasMaintenanceServices {
+        enable = true;
+        virtualHosts = lib.mapAttrs'
+          (name: service:
+            lib.nameValuePair "portablevps-maintenance-${name}" {
+              serverName = service.domain;
+              serverAliases = service.aliases;
+              listen = [{
+                addr = "127.0.0.1";
+                port = cfg.maintenanceBackendPort;
+              }];
+              root = maintenancePage service;
+              extraConfig = ''
+                error_page 503 /maintenance.html;
+                add_header Cache-Control "no-store" always;
+              '';
+              locations = {
+                "/".extraConfig = "return 503;";
+                "= /maintenance.html".extraConfig = "internal;";
+              };
+            })
+          maintenanceServices;
+      };
 
       # ACME certificates are service/proxy state. Backing up acme.json lets a
       # restored or migrated host present the existing certificate immediately,
