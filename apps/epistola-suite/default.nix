@@ -96,7 +96,7 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      example = "ghcr.io/epistola-app/epistola-suite:1.0.0-RC2";
+      example = "ghcr.io/epistola-app/epistola-suite:1.0.0";
       description = "Pinned epistola-suite image (use an immutable tag/digest, not :latest).";
     };
 
