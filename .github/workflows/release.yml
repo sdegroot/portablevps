@@ -28,7 +28,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: "~> v2.18"
           args: release --clean
           workdir: cli
         env:
