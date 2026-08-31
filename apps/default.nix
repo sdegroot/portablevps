@@ -8,7 +8,6 @@
     ./authentik
     ./custom
     ./discourse
-    ./epistola-suite
     ./forgejo
     ./forgejo-runner
     ./monitoring
