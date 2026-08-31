@@ -70,6 +70,98 @@ let
   # "attribute 'profile' missing" deep inside module evaluation.
   serverKeys = [ "name" "profile" "placement" "info" "module" ];
 
+  # Typed submodules for `placement` and `info` — the two nested fields whose
+  # keys previously went completely unchecked, so a typo (e.g.
+  # `info.netbirdame`) silently produced an attrset the tool never noticed was
+  # wrong until some much later, unrelated-looking evaluation failure.
+  # Deliberately NOT freeform: a freeform submodule accepts any undeclared
+  # key, including a typo of a real one, which would defeat the point. Both
+  # are declared exhaustively against every field actually read anywhere in
+  # this tool (`grep -rn 'serverConfig\.\|\.placement\.' modules lib` is the
+  # source of truth — currently just placement.provider and
+  # info.{netbirdName,hostname,name,proxy}); info.proxy is itself a real,
+  # already-loosely-typed override surface (single-instance-app.nix), so it
+  # stays an untyped passthrough rather than being exhaustively re-typed here.
+  placementType = lib.types.submodule {
+    options.provider = lib.mkOption {
+      type = lib.types.str;
+      description = "Provider adapter name (providers/<name>/provider.json).";
+    };
+  };
+
+  infoType = lib.types.submodule {
+    options = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        description = "Logical server name (matches the top-level `name`).";
+      };
+      provider = lib.mkOption {
+        type = lib.types.str;
+        description = "Provider adapter name (matches `placement.provider`).";
+      };
+      placement = lib.mkOption {
+        type = placementType;
+        default = { };
+        description = "Placement, duplicated here for the Go CLI's convenience.";
+      };
+      hostname = lib.mkOption {
+        type = lib.types.str;
+        description = "NixOS hostname.";
+      };
+      netbirdName = lib.mkOption {
+        type = lib.types.str;
+        description = "NetBird peer name.";
+      };
+      purpose = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Free-text description shown by `portablevps server list`.";
+      };
+      serviceKey = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Groups this server with others sharing one service-keyed backup repo.";
+      };
+      backupRepository = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "restic repository URL for this server's backups.";
+      };
+      netbird = lib.mkOption {
+        type = lib.types.submodule {
+          options.groups = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = "NetBird groups this server's peer should join.";
+          };
+        };
+        default = { };
+        description = "NetBird operator-plane settings.";
+      };
+      proxy = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+        description = ''
+          Optional proxy override consumed by the single-instance-app profile
+          (portablevps.proxy.{enable,acme*,dns*,testBackend}, plus
+          proxy.smokeTest.*) — an already-loosely-typed surface, deliberately
+          left untyped here rather than re-declared field-for-field.
+        '';
+      };
+    };
+  };
+
+  # Evaluate `value` against `type` for its typo/type-checking, outside of a
+  # real NixOS config — the standard technique for validating a plain
+  # attrset against a submodule type.
+  evalAgainstType = type: value:
+    (lib.evalModules {
+      modules = [
+        { options.value = lib.mkOption { inherit type; }; }
+        { inherit value; }
+      ];
+    }).config.value;
+
   validateServerShape = name: server:
     let
       keys = builtins.attrNames server;
@@ -84,7 +176,14 @@ let
     then throw "portablevps: server \"${name}\" has unknown field(s): ${lib.concatStringsSep ", " unknown} (allowed: ${lib.concatStringsSep ", " serverKeys}) — check for a typo"
     else if !(builtins.isAttrs server.placement && server.placement ? provider)
     then throw "portablevps: server \"${name}\" placement must be an attrset setting a provider, e.g. placement = { provider = \"hetzner\"; };"
-    else server;
+    else server // {
+      placement = builtins.addErrorContext
+        "while type-checking placement for portablevps server \"${name}\" (check for a typo'd key)"
+        (evalAgainstType placementType server.placement);
+      info = builtins.addErrorContext
+        "while type-checking info for portablevps server \"${name}\" (check for a typo'd key)"
+        (evalAgainstType infoType server.info);
+    };
 
   # Read logical servers (servers/<name>.nix) from a directory, validating each
   # one's shape as it is read.
