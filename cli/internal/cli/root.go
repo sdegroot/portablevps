@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sdegroot/portablevps/internal/core"
 )
 
 // globalOptions are flags available on every command.
@@ -33,6 +35,7 @@ func newRootCmd() *cobra.Command {
 		Long: "portablevps provisions, operates, and migrates single-instance " +
 			"application servers defined in a consumer repository. It is designed " +
 			"to be driven both interactively and from CI.",
+		Version:       core.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

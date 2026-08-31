@@ -17,6 +17,11 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      # A tagged release build (GoReleaser) injects the real semver tag via
+      # -X ...Version={{.Version}} instead; this is only what `nix build`/
+      # `nix run` see outside of a release — a git revision beats a
+      # permanently-stale hardcoded string.
+      devVersion = "0.0.0-dev." + (self.shortRev or self.dirtyShortRev or "unknown");
     in
     {
       packages = forAllSystems (system:
@@ -24,7 +29,7 @@
         rec {
           portablevps = pkgs.buildGoModule {
             pname = "portablevps";
-            version = "0.1.0";
+            version = devVersion;
             src = ./.;
             vendorHash = null; # dependencies are vendored in ./vendor
             subPackages = [ "cmd/portablevps" ];
@@ -37,6 +42,7 @@
             ldflags = [
               "-X github.com/sdegroot/portablevps/internal/core.NixpkgsFlake=${nixpkgs}"
               "-X github.com/sdegroot/portablevps/internal/core.NixosAnywhereFlake=${nixos-anywhere}"
+              "-X github.com/sdegroot/portablevps/internal/core.Version=${devVersion}"
             ];
             meta = {
               description = "Operate and migrate portable single-instance VPS servers";
