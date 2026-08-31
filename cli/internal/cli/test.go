@@ -48,9 +48,10 @@ func newDRCommand(g *globalOptions, use string, addServerFlag bool) *cobra.Comma
 		Use:   use,
 		Short: "Disaster-recovery drill: prove backup/restore (local QEMU, or remote hosts)",
 		Long: "Proves the server's backups actually restore, end to end.\n\n" +
-			"Default (local): boots two throwaway QEMU VMs sharing the monorepo, runs the " +
-			"backup->restore->verify cycle against the <server>-local-vm config, and tears " +
-			"everything down — no real infrastructure touched.\n\n" +
+			"Default (local): boots two throwaway QEMU VMs sharing a host directory with " +
+			"the consumer flake (see --portablevps-dir), runs the backup->restore->verify " +
+			"cycle against the <server>-local-vm config, and tears everything down — no " +
+			"real infrastructure touched.\n\n" +
 			"Remote (--source-server + --restore-server, or --source-host + --restore-host): " +
 			"runs the SAME proof against real hosts — " +
 			"seed markers into PostgreSQL, every declared backup path, and app-owned hooks; " +
