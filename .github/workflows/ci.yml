@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: portablevps checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Legacy Python CLI unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Go CLI formatting, tests, and vet
+        working-directory: cli
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go test ./...
+          go vet ./...
+      - name: GoReleaser config check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: check
+          workdir: cli
+      - name: Go CLI flake check
+        working-directory: cli
+        run: nix flake check --print-build-logs
+      - name: Flake check (evaluation, modules, VM tests)
+        run: nix flake check --print-build-logs
+      - name: Restore-mode VM test
+        run: nix build --print-build-logs .#checks.x86_64-linux.restore-mode
