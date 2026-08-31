@@ -55,8 +55,8 @@ type NetworkConfig struct {
 	MeshDomain string
 	// ManagedDNSZones are all the NetBird custom DNS zones the tool syncs proxy
 	// records into. This lets one host publish records across several zones —
-	// e.g. internal names into int.epistola.io and public split-horizon overrides
-	// (auth/code.epistola.app) into epistola.app. Empty falls back to [DNSZone].
+	// e.g. internal names into int.example.com and public split-horizon overrides
+	// (auth/code.example.com) into example.com. Empty falls back to [DNSZone].
 	ManagedDNSZones []string
 }
 

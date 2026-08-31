@@ -11,7 +11,7 @@
 #              root so a path:../portablevps flake input resolves.
 #   CONFIG     <server>-local-vm flake config to validate (default: local-vm).
 #   FLAKE_DIR  directory holding the flake inside the guest mount
-#              (default: /host; consumers use /host/<subdir>, e.g. /host/epistola).
+#              (default: /host; consumers use /host/<subdir>, e.g. /host/your-consumer).
 #   VM_A_PORT / VM_B_PORT   host SSH forward ports (default: 2224 / 2225).
 set -euo pipefail
 

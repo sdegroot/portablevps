@@ -1,19 +1,23 @@
 # portablevps CLI
 
 The operator and CI entrypoint for portablevps, written in Go. It runs against a
-**consumer repository** (the one holding `servers/`, `secrets/`, `.local/`) and
-is being built **in parallel to** the existing Python CLI (`../scripts/cloud.py`),
-which it will replace command by command (strangler migration) so nothing breaks
-mid-flight.
+**consumer repository** (the one holding `servers/`, `secrets/`, `.local/`). It
+now covers day-2 operations end to end (`server`, `service`, `secret`,
+`network`, `backup`, `key`, `test`, `doctor`); the legacy Python CLI
+(`../scripts/cloud.py`) remains alongside it for the handful of capabilities
+not yet ported — see the repo root `README.md` and `docs/publishability-plan.md`
+for the current split.
 
 ## Run it
 
 ```sh
 # via Nix (no toolchain needed) — the CI-friendly path.
-# From the monorepo root:
-nix run ./portablevps/cli#portablevps -- doctor --server test-vps
+nix run github:sdegroot/portablevps -- doctor --server test-vps
 # or from this directory (the CLI is its own flake):
 nix run .#portablevps -- doctor --json          # machine-readable
+
+# mise (see the repo root README's "Installing the CLI")
+mise use -g github:sdegroot/portablevps
 
 # from a checkout during development
 go run ./cmd/portablevps doctor
@@ -38,7 +42,8 @@ portablevps server install my-server \
 
 The Nix package pins both nixpkgs and nixos-anywhere through its lock file, and
 the installer preserves the consumer flake's committed transitive pins while
-vendoring monorepo path inputs.
+vendoring any `path:../<name>` inputs (so a remote/pure build can resolve them
+without seeing the operator's local sibling checkout).
 
 Only when a provider offers no independent way to verify the rescue host key,
 the explicit `--insecure-skip-host-key-check` escape hatch restores the old

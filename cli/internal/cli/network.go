@@ -83,8 +83,8 @@ func newNetworkDNSSyncCmd(g *globalOptions) *cobra.Command {
 			// Which NetBird zones to sync into. An explicit --zone forces a single
 			// zone (and keeps --zone-name meaningful); otherwise use the configured
 			// managed_dns_zones, falling back to the single dns_zone. This lets one
-			// host publish internal names (int.epistola.io) and public split-horizon
-			// overrides (auth/code.epistola.app) into their respective zones.
+			// host publish internal names (int.example.com) and public split-horizon
+			// overrides (auth/code.example.com) into their respective zones.
 			var zones []string
 			singleZoneName := ""
 			switch {

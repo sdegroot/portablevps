@@ -115,7 +115,7 @@ executable hooks under `/etc/portablevps/dr/seed.d` and
 hook, so an app can seed and verify its own database tables, uploads, or other
 state without hardcoding app logic into the test driver.
 
-**The tool's own demo** (from `portablevps/`):
+**The tool's own demo** (from this repo's root):
 
 ```sh
 scripts/qemu-create-vm.sh vm-a                  # once: create the VM disks
@@ -125,18 +125,18 @@ task qemu:boot-b                                # terminal 2
 task validate:qemu                              # terminal 3 (CONFIG defaults to local-vm)
 ```
 
-**A consumer server** (from the consumer repo, e.g. `epistola/`) — the flake
-references `path:../portablevps`, so the VMs share the monorepo root and the
-flake dir is the consumer subdir:
-
-```sh
-task dr:boot-a                                  # terminal 1
-task dr:boot-b                                  # terminal 2
-task dr:validate SERVER=<machine-name>          # terminal 3
-```
-
-`dr:validate` runs `validate:qemu CONFIG=<machine>-local-vm FLAKE_DIR=/host/epistola`.
-A green run ends with `PASS: fresh server restored PostgreSQL data from backup`.
+**A consumer server**, from the consumer repo: `qemu-validate.sh`/`task
+validate:qemu` take a `FLAKE_DIR=<path>` pointing at the consumer flake, so
+this works for any consumer regardless of how it depends on portablevps
+(`CONFIG=<machine>-local-vm FLAKE_DIR=<path-to-consumer-flake>`). The one
+thing that matters is that Nix can resolve `portablevps` *inside the QEMU
+VM's 9p-shared root* without needing outbound network access mid-test —
+either the shared root already contains a checkout of portablevps (a local
+`path:` input, or a `--override-input portablevps path:...`/local registry
+override on top of a `github:` input — see the root README's install section
+for the override technique), or the VM has real network access and can fetch
+it directly. A green run ends with `PASS: fresh server restored PostgreSQL
+data from backup`.
 
 Because this drives the same systemd units, PATH, and repo self-init
 (`ExecStartPre = init-backup-repo.sh`) as a live host, it catches

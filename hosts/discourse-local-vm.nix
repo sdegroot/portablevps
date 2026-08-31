@@ -2,7 +2,7 @@
 { lib, ... }:
 
 let
-  domain = "community.epistola.test";
+  domain = "community.example.test";
 in
 {
   imports = [
@@ -26,7 +26,7 @@ in
   portablevps.apps.discourse = {
     enable = true;
     inherit domain;
-    developerEmails = [ "admin@epistola.app" ];
+    developerEmails = [ "admin@example.com" ];
   };
 
   boot.loader.systemd-boot.enable = true;

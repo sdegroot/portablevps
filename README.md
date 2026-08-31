@@ -45,8 +45,26 @@ Each `servers/<name>.nix` selects a provider placement, a reusable profile
 (e.g. `single-instance-app`), the mesh peer name, its backup repository, and
 any proxy routes. See `templates/server/servers/example.nix`.
 
-The first consumer, `epistola/`, lives beside this tool in the same repository
-and is the reference for a real deployment.
+## Installing the CLI
+
+The `portablevps` CLI shells out to `nix build`/`nix eval`/`nixos-anywhere` to
+actually build and deploy your servers, so [Nix](https://nixos.org) is always
+a real prerequisite — that's true no matter how you get the CLI binary onto
+your machine. Three equivalent ways to get it, all built from the same
+tagged release:
+
+```sh
+# Already have Nix: run it directly, no separate install step
+nix run github:sdegroot/portablevps -- doctor
+
+# mise (https://mise.jdx.dev)
+mise use -g github:sdegroot/portablevps
+
+# raw binary: download the tar.gz for your OS/arch from the latest release
+# at https://github.com/sdegroot/portablevps/releases/latest and extract it
+```
+
+See `cli/README.md` for building from source.
 
 ## The tool's own test hosts
 

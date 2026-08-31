@@ -42,7 +42,7 @@ REMOTE_REPO="${REMOTE_REPO:-/home/admin/portablevps-nix-infra}"
 # Directory holding the flake to apply. Defaults to REMOTE_REPO (the tool's own
 # flake IS the shared dir). For a consumer whose flake references a sibling
 # (path:../portablevps), share the monorepo root as REMOTE_REPO and point
-# FLAKE_DIR at the consumer subdir, e.g. FLAKE_DIR=$REMOTE_REPO/epistola.
+# FLAKE_DIR at the consumer subdir, e.g. FLAKE_DIR=$REMOTE_REPO/your-consumer.
 FLAKE_DIR="${FLAKE_DIR:-$REMOTE_REPO}"
 MARKER="${MARKER:-fresh-server-restore-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
 INITIAL_MARKER="${INITIAL_MARKER:-fresh-server-full-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"

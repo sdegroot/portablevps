@@ -10,7 +10,7 @@
 # wherever you ARE: the nearest ancestor of $PWD that holds a portablevps.toml.
 # The CLI runs from there, so portablevps.toml, .local/ keys, and relative flags
 # resolve against the consumer you're in. So, from anywhere under a consumer:
-#   cd epistola && pvps doctor
+#   cd your-consumer && pvps doctor
 #   pvps server deploy hetzner-fsn-20260710a
 #   pvps server deploy hetzner-nbg1-20260707a --dry-run
 #
@@ -32,7 +32,7 @@ while :; do
   d="$(dirname -- "${d}")"
 done
 if [ -z "${project}" ]; then
-  echo "pvps: no portablevps.toml found from ${PWD} upward — cd into a consumer (e.g. epistola/) and retry." >&2
+  echo "pvps: no portablevps.toml found from ${PWD} upward — cd into a consumer (e.g. your-consumer/) and retry." >&2
   exit 1
 fi
 

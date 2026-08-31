@@ -32,7 +32,7 @@ const (
 
 // Ref identifies a server's keys: a 1Password item and a file fallback.
 type Ref struct {
-	OpItem   string // e.g. "op://Epistola/web" (the item; fields are /age-key, /"private key")
+	OpItem   string // e.g. "op://Acme/web" (the item; fields are /age-key, /"private key")
 	FilePath string // fallback private-key file (e.g. .local/ssh/web_ed25519 or .local/sops/servers/web/age-key.txt)
 	PubPath  string // public key file (non-secret) used to select the agent identity
 }

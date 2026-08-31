@@ -246,10 +246,10 @@ func newServerRollbackCmd(g *globalOptions) *cobra.Command {
 
 // defaultMeshHost derives the admin address "<server>.<mesh_domain>" — the
 // NetBird peer FQDN — matching the Taskfile's HOST default of
-// "<server>.epistola.int".
+// "<server>.example.int".
 func defaultMeshHost(server string, ctx *config.Context) string {
 	// The admin address is the mesh PEER domain (network.mesh_domain, e.g.
-	// "epistola.int"), NOT the service dns_zone (e.g. "int.epistola.io") — those
+	// "example.int"), NOT the service dns_zone (e.g. "int.example.com") — those
 	// are distinct: dns_zone holds published app hostnames, mesh_domain is where
 	// NetBird resolves peers for operator SSH. When mesh_domain is unset the
 	// operator must pass --host.

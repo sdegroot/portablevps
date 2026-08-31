@@ -253,7 +253,7 @@ inbound access to the box, and no deploy key in CI. Currently enabled on the
 2. On release, the app repo's CI publishes a new image and the pin on `main` is
    advanced (see "Bumping the pin").
 3. Each enabled box runs the `nixos-upgrade` unit on its timer: it fetches the
-   flake (`github:epistola-app/epistola-nix-infra?dir=epistola`), evaluates
+   flake (`github:you/your-servers`), evaluates
    `#<hostname>`, and `nixos-rebuild switch`es. No change -> no-op; pin moved ->
    the podman restart-on-change step rolls the container. The website uses
    blue-green and health-gated flips; the demo apps currently use restart-based
@@ -270,7 +270,7 @@ price is up-to-poll-interval latency (2 min for the website, 10 min for demos).
 ```nix
 portablevps.autoUpgrade = {
   enable = true;
-  flake = "github:epistola-app/epistola-nix-infra?dir=epistola";
+  flake = "github:you/your-servers";
   tokenSecret = "github/repo-token";   # sops key in this box's secrets file
   dates = "*:0/2";                     # poll interval (systemd OnCalendar)
   randomizedDelaySec = "20s";
@@ -280,7 +280,7 @@ portablevps.autoUpgrade = {
 Prerequisites:
 
 - **`github/repo-token`** in the box's sops file — a GitHub fine-grained PAT,
-  `Contents: Read-only`, scoped to `epistola-app/epistola-nix-infra`. It is handed
+  `Contents: Read-only`, scoped to your servers repo. It is handed
   to nix as `access-tokens = github.com=<token>` via a root-only (0400) sops
   EnvironmentFile on `nixos-upgrade`, so it never lands in the world-readable
   nix.conf. Rotate before it expires (≤1 yr); if it lapses, self-upgrade stops and
@@ -290,67 +290,21 @@ Prerequisites:
 
 Auto-disabled in restore mode and in prototype/local-VM mode.
 
-### Bumping the pin (GitHub Actions)
+### Bumping the pin
 
-Pins are advanced by GitHub-native workflows, with no Renovate and no PATs in
-this repo (they use the built-in `GITHUB_TOKEN`).
+portablevps only watches `main` — how the pin actually gets advanced is
+entirely up to your own CI. Any mechanism that ends in a commit to `main`
+works: a GitHub Actions workflow your app's CI dispatches on release, a
+scheduled job that checks a registry for new tags, Renovate/Dependabot, or
+just editing the pin by hand and pushing. There's no PR/eval gate needed
+either way — a pin bump is a one-line string change that can't break
+evaluation, and the real gate is on the box itself: a blue-green app (see
+above) won't flip to an image that fails its health check, so a bad tag
+leaves the old colour serving; a restart-based app is caught by monitoring
+or a manual smoke test instead.
 
-The **`app-pin-bump`** workflow (`.github/workflows/app-pin-bump.yml`) edits the
-configured app image pin(s) and commits them to `main`; each app's host applies
-the change on its next `autoUpgrade` poll. Two triggers:
-
-- **`workflow_dispatch` (fast path):** an app repo's CI calls it the moment a
-  release is published, passing `app=<website|epistola-suite|valtimo>` and the
-  freshly-built `tag`. This is the event-driven trigger — a release cut -> the
-  pin bumps -> the box rolls, within ~CI-time + the host's poll interval.
-- **`schedule` (fallback):** hourly, it queries ghcr for every known app and
-  commits one combined bump if any pin differs — a safety net if a dispatch is
-  missed.
-
-No PR/eval gate is used: a pin bump is a one-line string change that can't break
-evaluation, and the real gate is on the box — blue-green won't flip to an image
-that fails its health check, so a bad tag leaves the old colour serving.
-
-The website is the only blue-green app here: its host rolls via health-gated
-colour flips. The demos are restart-based: `epistola-suite` bumps one image, and
-`valtimo` bumps backend and frontend together only when the same target tag
-exists on both images. A successful demo switch restarts the changed Quadlet
-container(s), and a broken runtime image is caught by monitoring/manual smoke
-tests rather than by a flip gate.
-
-**Setup (one-time):**
-
-1. **App repo -> dispatch token.** Create a fine-grained PAT with only
-   `Actions: Read and write` on `epistola-app/epistola-nix-infra`, add it as a
-   source repo Actions secret (e.g. `INFRA_DISPATCH_TOKEN`), and add a step after
-   the image push:
-   ```yaml
-   - name: Trigger infra pin bump
-     env:
-       GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
-     run: |
-       gh workflow run app-pin-bump.yml -R epistola-app/epistola-nix-infra \
-         -f app=website \
-         -f tag="${{ needs.version.outputs.version }}-${{ needs.version.outputs.short_sha }}"
-   ```
-   (Pins the readable `<version>-<sha>` tag, e.g. `1.0.1-ad50b71` — the version for
-   understandability plus the sha for exact traceability. The website build already
-   publishes it via docker/metadata-action's
-   `type=raw,value=${version}-${short_sha}`.)
-   Demo repositories use the same pattern with `-f app=epistola-suite` or
-   `-f app=valtimo`.
-2. **Package read for the schedule path.** Grant this repo read access to the
-   private packages: org -> Packages -> package -> *Manage Actions access* -> add
-   `epistola-nix-infra`. Required packages are `website`, `epistola-suite`,
-   `valtimo/demo-backend`, and `valtimo/demo-frontend`. Without it, scheduled
-   runs soft-skip (no failure); the dispatch path needs no package access for
-   website/epistola-suite explicit tags, while Valtimo still checks that the
-   paired frontend/backend tag exists.
-
-**Manual bump** (no CI needed): edit the relevant image pin, commit, and push to
-`main` — the box applies it on the next tick. Or run a workflow by hand:
-`gh workflow run app-pin-bump.yml -f app=<website|epistola-suite|valtimo>
--f tag=<tag>` (empty `tag` = newest).
+**Manual bump** (no CI needed): edit the relevant image pin, commit, and push
+to `main` — the box applies it on its next poll.
 
 ### Observing a deploy
 
@@ -782,10 +736,10 @@ Prerequisites:
 Run:
 
 ```sh
-nix run ../portablevps/cli#portablevps -- service migrate new-service-host \
+portablevps#portablevps -- service migrate new-service-host \
   --source-server old-service-host \
-  --source-host old-service-host.epistola.int \
-  --target-host new-service-host.epistola.int
+  --source-host old-service-host.example.int \
+  --target-host new-service-host.example.int
 ```
 
 The command performs the cutover in this order:
@@ -802,8 +756,8 @@ The command performs the cutover in this order:
 6. Update the stable NetBird service DNS from the target plan:
 
    ```sh
-   nix run ../portablevps/cli#portablevps -- network dns-sync new-service-host \
-     --host new-service-host.epistola.int
+   portablevps#portablevps -- network dns-sync new-service-host \
+     --host new-service-host.example.int
    ```
 
    The temporary public edge uses these stable service names rather than a

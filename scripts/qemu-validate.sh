@@ -6,7 +6,7 @@ VM_A_SSH="${VM_A_SSH:--i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2224 
 VM_B_SSH="${VM_B_SSH:--i .local/qemu/test_ed25519 -o IdentitiesOnly=yes -p 2225 admin@127.0.0.1}"
 REMOTE_REPO="${REMOTE_REPO:-/host}"
 # Directory holding the flake to apply. Defaults to the mount root (the tool's
-# own flake IS the shared dir). Set to a subdir (e.g. /host/epistola) when the
+# own flake IS the shared dir). Set to a subdir (e.g. /host/your-consumer) when the
 # monorepo root is shared so a consumer flake can resolve its path: siblings.
 FLAKE_DIR="${FLAKE_DIR:-$REMOTE_REPO}"
 
@@ -48,7 +48,7 @@ mount_host_repo() {
     # The shared repo is not a git root, so nix would copy the whole tree into
     # the store, including the multi-GB .local test scratch (VM images, ISO,
     # MinIO data) and fill the guest disk. Mask every .local (the mount root and
-    # one level down, e.g. epistola/.local + portablevps/.local when the monorepo
+    # one level down, e.g. your-consumer/.local + portablevps/.local when the monorepo
     # root is shared) with an empty bind mount so the flake copy stays lean.
     sudo mkdir -p /run/empty-local
     for ld in '$REMOTE_REPO/.local' $REMOTE_REPO/*/.local; do

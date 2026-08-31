@@ -62,8 +62,8 @@ func RecordsFromPlan(planJSON []byte, zoneDomain string) ([]Record, error) {
 // RecordsFromPlanByZone buckets every NetBird record in the plan into the first
 // zone (of zones) it belongs to. Records matching no configured zone are
 // returned in `unmatched` so the caller can warn instead of silently dropping
-// them — a host's split-horizon overrides (e.g. auth.epistola.app) live in a
-// different zone (epistola.app) than its internal names (int.epistola.io), and
+// them — a host's split-horizon overrides (e.g. auth.example.com) live in a
+// different zone (example.com) than its internal names (int.example.com), and
 // both must be published.
 func RecordsFromPlanByZone(planJSON []byte, zones []string) (byZone map[string][]Record, unmatched []Record, err error) {
 	var plan domainPlan
