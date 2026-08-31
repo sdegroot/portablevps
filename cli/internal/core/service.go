@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,36 @@ type ServiceEnv struct {
 	Host     HostRunner
 	Stream   StreamRunner
 	Report   func(phase, status, msg string)
+	// Certs checks/primes TLS certificates on a migration target before the
+	// source is stopped, aborting the cutover early if none ever becomes
+	// valid. Nil skips this safety check.
+	Certs CertPrewarmer
+	// SyncDNS repoints internal mesh DNS to host after a successful
+	// migration. Nil leaves DNS repointing as a manual follow-up
+	// (`network dns-sync`).
+	SyncDNS func(host string) error
+	// Sleep is called between certificate-validity poll attempts. Nil uses
+	// time.Sleep; tests inject a no-op to avoid real delay.
+	Sleep func(time.Duration)
+}
+
+func (env ServiceEnv) sleep() func(time.Duration) {
+	if env.Sleep != nil {
+		return env.Sleep
+	}
+	return time.Sleep
+}
+
+// CertPrewarmer probes a host for a valid TLS certificate on domain, used by
+// Migrate to abort a cutover before the source is stopped if the target's
+// certificate never becomes ready (a target with no valid cert would go live
+// mid-outage-window with no earlier point to abort from).
+type CertPrewarmer interface {
+	// Prime makes an initial, unverified request to trigger certificate
+	// issuance/loading for domain on host.
+	Prime(domain, host string) error
+	// Valid reports whether host now serves a trusted certificate for domain.
+	Valid(domain, host string) (bool, error)
 }
 
 func (env ServiceEnv) report() func(string, string, string) {
@@ -95,6 +126,12 @@ func Migrate(env ServiceEnv, o MigrateOpts) error {
 		return provisionErr(71, "target %s is not in restore mode: %v", o.TargetHost, err)
 	}
 
+	if env.Certs != nil {
+		if err := prewarmProxyCertificates(env, o.TargetHost); err != nil {
+			return err
+		}
+	}
+
 	if o.Marker != "" {
 		if _, err := env.Host.Run(o.SourceHost, "sudo verify-test-data.sh "+shellQuote(o.Marker)); err != nil {
 			return provisionErr(71, "source marker verification failed: %v", err)
@@ -144,8 +181,109 @@ func Migrate(env ServiceEnv, o MigrateOpts) error {
 			return rollback(provisionErr(71, "target marker verification failed: %v", err))
 		}
 	}
-	report("done", "ok", "migrated to "+o.TargetHost+" — run `network dns-sync` to repoint DNS")
+	if env.SyncDNS != nil {
+		report("dns-sync", "run", "repointing internal DNS to "+o.TargetHost)
+		if err := env.SyncDNS(o.TargetHost); err != nil {
+			return provisionErr(70, "service migrated to %s but automatic DNS repoint failed: %v — run `network dns-sync` manually", o.TargetHost, err)
+		}
+		report("dns-sync", "ok", "internal DNS repointed to "+o.TargetHost)
+	}
+	reportMigrationDrill(env, o.TargetHost, report)
+
+	dnsNote := "run `network dns-sync` to repoint DNS"
+	if env.SyncDNS != nil {
+		dnsNote = "DNS repointed automatically"
+	}
+	report("done", "ok", "migrated to "+o.TargetHost+" — "+dnsNote)
 	return nil
+}
+
+// prewarmProxyCertificates triggers certificate issuance/loading for every
+// domain the target's proxy plan declares and waits (up to 5 minutes per
+// domain) for a trusted certificate to be served, before any source-side
+// mutation happens. A domain that never gets a valid certificate aborts the
+// migration early rather than cutting the service over into an outage.
+func prewarmProxyCertificates(env ServiceEnv, targetHost string) error {
+	report := env.report()
+	planJSON, err := env.Host.Run(targetHost, "portablevps-proxy-domain-plan")
+	if err != nil {
+		return provisionErr(70, "reading proxy domain plan from %s: %v", targetHost, err)
+	}
+	domains, err := proxyPlanDomains(planJSON)
+	if err != nil {
+		return provisionErr(70, "%v", err)
+	}
+	if len(domains) == 0 {
+		report("prewarm-tls", "info", "no proxy domains declared; skipping")
+		return nil
+	}
+	sleep := env.sleep()
+	for _, domain := range domains {
+		report("prewarm-tls", "run", "triggering certificate load/issuance for "+domain)
+		if err := env.Certs.Prime(domain, targetHost); err != nil {
+			return provisionErr(70, "priming certificate for %s on %s: %v", domain, targetHost, err)
+		}
+		ready := false
+		for attempt := 1; attempt <= 30; attempt++ {
+			ok, err := env.Certs.Valid(domain, targetHost)
+			if err != nil {
+				return provisionErr(70, "checking certificate for %s on %s: %v", domain, targetHost, err)
+			}
+			if ok {
+				ready = true
+				break
+			}
+			if attempt < 30 {
+				sleep(10 * time.Second)
+			}
+		}
+		if !ready {
+			return provisionErr(70, "%s did not present a valid TLS certificate for %s; aborting before stopping the source host", targetHost, domain)
+		}
+		report("prewarm-tls", "ok", "valid certificate for "+domain)
+	}
+	return nil
+}
+
+// proxyPlanDomains extracts the unique, non-empty domain names declared in a
+// `portablevps-proxy-domain-plan` JSON document.
+func proxyPlanDomains(planJSON string) ([]string, error) {
+	var plan struct {
+		Domains []struct {
+			Domain string `json:"domain"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return nil, fmt.Errorf("parsing proxy domain plan: %w", err)
+	}
+	seen := map[string]bool{}
+	var domains []string
+	for _, entry := range plan.Domains {
+		d := strings.TrimSpace(entry.Domain)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		domains = append(domains, d)
+	}
+	return domains, nil
+}
+
+// reportMigrationDrill best-effort-publishes the restore-drill success metric
+// on targetHost after a verified migration, mirroring RestoreDrill's own
+// report step. Failures here (including SSH errors) never fail the
+// migration itself — the data movement already succeeded.
+func reportMigrationDrill(env ServiceEnv, targetHost string, report func(phase, status, msg string)) {
+	metricOut, err := env.Host.Run(targetHost, `if sudo systemctl cat portablevps-backup-restore-drill-report.service >/dev/null 2>&1; then sudo systemctl start portablevps-backup-restore-drill-report.service; echo reported; else echo unavailable; fi`)
+	if err != nil {
+		report("metric", "info", "could not report restore-drill metric: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(metricOut) == "reported" {
+		report("metric", "ok", "published restore-drill success metric")
+	} else {
+		report("metric", "info", "restore-drill metric unit is not configured on "+targetHost)
+	}
 }
 
 // RestoreOpts parameterises restoring a service onto an already-installed host.

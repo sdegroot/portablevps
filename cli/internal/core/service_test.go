@@ -1,8 +1,10 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMigrateOrdering(t *testing.T) {
@@ -74,6 +76,130 @@ func TestMigrateAbortsIfTargetNotInRestoreMode(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(host.runs, " "), "restore.sh") {
 		t.Error("must not restore when the target is not confirmed in restore mode")
+	}
+}
+
+// fakeCertPrewarmer simulates certificate priming/validity for Migrate's
+// pre-cutover TLS check without touching the network.
+type fakeCertPrewarmer struct {
+	primed        []string // domains Prime was called for, in order
+	validAttempts int      // calls to Valid so far
+	validAfter    int      // Valid returns true starting at this call count (0 = always true, <0 = never)
+	primeErr      error
+	validErr      error
+}
+
+func (f *fakeCertPrewarmer) Prime(domain, _host string) error {
+	f.primed = append(f.primed, domain)
+	return f.primeErr
+}
+
+func (f *fakeCertPrewarmer) Valid(_domain, _host string) (bool, error) {
+	f.validAttempts++
+	if f.validErr != nil {
+		return false, f.validErr
+	}
+	if f.validAfter < 0 {
+		return false, nil
+	}
+	return f.validAttempts >= f.validAfter, nil
+}
+
+const planWithOneDomain = `{"domains":[{"domain":"svc.example.com"}]}`
+
+func TestMigratePrewarmsCertificatesBeforeQuiescingSource(t *testing.T) {
+	certs := &fakeCertPrewarmer{validAfter: 1}
+	host := &fakeHost{outputs: map[string]string{"portablevps-proxy-domain-plan": planWithOneDomain}}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Certs: certs},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(certs.primed) != 1 || certs.primed[0] != "svc.example.com" {
+		t.Fatalf("expected certificate priming for the plan's domain, got %v", certs.primed)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if strings.Index(sequence, "portablevps-proxy-domain-plan") > strings.Index(sequence, "portablevps-quiesce-writers") {
+		t.Errorf("certificate check must run before source writers are quiesced: %s", sequence)
+	}
+}
+
+func TestMigrateAbortsBeforeTouchingSourceWhenCertificateNeverBecomesValid(t *testing.T) {
+	certs := &fakeCertPrewarmer{validAfter: -1}
+	host := &fakeHost{outputs: map[string]string{"portablevps-proxy-domain-plan": planWithOneDomain}}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Certs: certs, Sleep: func(time.Duration) {}},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err == nil {
+		t.Fatal("expected abort when no valid certificate ever appears")
+	}
+	if certs.validAttempts != 30 {
+		t.Errorf("expected all 30 poll attempts, got %d", certs.validAttempts)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if strings.Contains(sequence, "portablevps-quiesce-writers") || strings.Contains(sequence, "portablevps-backup.service") {
+		t.Errorf("a failed certificate check must abort before any source-side mutation: %s", sequence)
+	}
+}
+
+func TestMigrateSkipsCertificateCheckWhenNoCertsInjected(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{"portablevps-proxy-domain-plan": planWithOneDomain}}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(host.runs, " | "), "portablevps-proxy-domain-plan") {
+		t.Error("must not fetch the proxy domain plan when Certs is nil")
+	}
+}
+
+func TestMigrateSyncsDNSAfterVerificationAndReportsDrillMetric(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"portablevps-backup-restore-drill-report": "reported\n",
+	}}
+	var syncedHost string
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, SyncDNS: func(h string) error {
+		syncedHost = h
+		return nil
+	}}, MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst", Marker: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncedHost != "dst" {
+		t.Fatalf("expected SyncDNS called with the target host, got %q", syncedHost)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if !strings.Contains(sequence, "portablevps-backup-restore-drill-report.service") {
+		t.Errorf("expected the restore-drill metric to be reported: %s", sequence)
+	}
+}
+
+func TestMigrateSurfacesSyncDNSFailureWithoutRollingBackAVerifiedTarget(t *testing.T) {
+	host := &fakeHost{}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, SyncDNS: func(string) error {
+		return fmt.Errorf("netbird: 401 unauthorized")
+	}}, MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err == nil {
+		t.Fatal("expected the DNS sync failure to surface")
+	}
+	if !strings.Contains(err.Error(), "netbird: 401 unauthorized") {
+		t.Errorf("expected the underlying DNS sync error in the message, got %v", err)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if strings.Contains(sequence, "stop apps.target") && strings.Count(sequence, "stop apps.target") > 1 {
+		t.Errorf("a DNS-sync failure after target verification must not roll back the already-verified target: %s", sequence)
+	}
+	if strings.Contains(sequence, "start apps.target portablevps-backup.timer") {
+		t.Errorf("a DNS-sync failure after target verification must not restart the (now stale) source: %s", sequence)
+	}
+}
+
+func TestMigrateDrillMetricFailureIsBestEffort(t *testing.T) {
+	host := &fakeHost{failContaining: "portablevps-backup-restore-drill-report"}
+	err := Migrate(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}},
+		MigrateOpts{Server: "svc", SourceHost: "src", TargetHost: "dst"})
+	if err != nil {
+		t.Fatalf("a failed metric report must not fail the migration: %v", err)
 	}
 }
 
