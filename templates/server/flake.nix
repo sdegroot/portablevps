@@ -6,7 +6,7 @@
   inputs = {
     # Pin portablevps from wherever you host it. During local development you
     # can point this at a checkout: url = "path:/path/to/portablevps";
-    portablevps.url = "github:OWNER/portablevps?dir=portablevps";
+    portablevps.url = "github:sdegroot/portablevps";
   };
 
   outputs = { self, portablevps }:

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epistola-app/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/config"
 )
 
 func touchTestFile(t *testing.T, root, rel string) {

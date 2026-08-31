@@ -9,12 +9,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/epistola-app/portablevps/internal/adapters"
-	"github.com/epistola-app/portablevps/internal/config"
-	"github.com/epistola-app/portablevps/internal/core"
-	"github.com/epistola-app/portablevps/internal/keystore"
-	"github.com/epistola-app/portablevps/internal/output"
-	"github.com/epistola-app/portablevps/internal/secrets"
+	"github.com/sdegroot/portablevps/internal/adapters"
+	"github.com/sdegroot/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/core"
+	"github.com/sdegroot/portablevps/internal/keystore"
+	"github.com/sdegroot/portablevps/internal/output"
+	"github.com/sdegroot/portablevps/internal/secrets"
 )
 
 // confirmDestroyTarget gates a disk-wiping operation on the resource name

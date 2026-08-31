@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/epistola-app/portablevps/internal/config"
-	"github.com/epistola-app/portablevps/internal/netbird"
+	"github.com/sdegroot/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/netbird"
 )
 
 // newNetworkCmd is the mesh-exposure noun. Backend-neutral by intent; the

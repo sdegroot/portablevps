@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/epistola-app/portablevps/internal/sopsconfig"
+	"github.com/sdegroot/portablevps/internal/sopsconfig"
 )
 
 // EnvRunner runs commands, optionally with extra environment (for sops/age which

@@ -4,7 +4,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/epistola-app/portablevps/internal/confirm"
+	"github.com/sdegroot/portablevps/internal/confirm"
 )
 
 // interactive reports whether the CLI should prompt the operator. Precedence:

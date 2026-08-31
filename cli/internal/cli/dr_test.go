@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/epistola-app/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/config"
 )
 
 func TestResolveDRModeDefaultsToQEMU(t *testing.T) {

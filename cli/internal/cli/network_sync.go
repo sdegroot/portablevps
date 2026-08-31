@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/epistola-app/portablevps/internal/adapters"
-	"github.com/epistola-app/portablevps/internal/config"
-	"github.com/epistola-app/portablevps/internal/core"
-	"github.com/epistola-app/portablevps/internal/netbird"
+	"github.com/sdegroot/portablevps/internal/adapters"
+	"github.com/sdegroot/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/core"
+	"github.com/sdegroot/portablevps/internal/netbird"
 )
 
 // managedSetupKeyName is the per-server reusable setup key this CLI owns.

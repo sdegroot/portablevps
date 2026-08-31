@@ -28,14 +28,14 @@ Key properties:
 Scaffold a consumer repository from the template:
 
 ```sh
-nix flake init -t github:OWNER/portablevps?dir=portablevps#server
+nix flake init -t github:sdegroot/portablevps#server
 ```
 
 A consumer flake is small — it points at portablevps and its own `servers/`:
 
 ```nix
 {
-  inputs.portablevps.url = "github:OWNER/portablevps?dir=portablevps";
+  inputs.portablevps.url = "github:sdegroot/portablevps";
   outputs = { self, portablevps }:
     portablevps.lib.mkFlake { inherit self; serverDir = ./servers; };
 }

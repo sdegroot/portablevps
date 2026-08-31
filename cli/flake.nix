@@ -35,8 +35,8 @@
               runHook postCheck
             '';
             ldflags = [
-              "-X github.com/epistola-app/portablevps/internal/core.NixpkgsFlake=${nixpkgs}"
-              "-X github.com/epistola-app/portablevps/internal/core.NixosAnywhereFlake=${nixos-anywhere}"
+              "-X github.com/sdegroot/portablevps/internal/core.NixpkgsFlake=${nixpkgs}"
+              "-X github.com/sdegroot/portablevps/internal/core.NixosAnywhereFlake=${nixos-anywhere}"
             ];
             meta = {
               description = "Operate and migrate portable single-instance VPS servers";

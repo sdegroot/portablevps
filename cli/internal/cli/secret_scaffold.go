@@ -6,8 +6,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/epistola-app/portablevps/internal/adapters"
-	"github.com/epistola-app/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/adapters"
+	"github.com/sdegroot/portablevps/internal/config"
 )
 
 // declaredSecrets returns the sops secret names the server's config declares

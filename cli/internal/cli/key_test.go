@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/epistola-app/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/config"
 )
 
 // TestAgeKeyFieldMatchesKeystoreContract locks the escrowed field's label to

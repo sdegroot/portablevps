@@ -3,8 +3,8 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/epistola-app/portablevps/internal/core"
-	"github.com/epistola-app/portablevps/internal/output"
+	"github.com/sdegroot/portablevps/internal/core"
+	"github.com/sdegroot/portablevps/internal/output"
 )
 
 // newBackupCmd is the on-host backup noun.

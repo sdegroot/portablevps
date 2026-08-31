@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/epistola-app/portablevps/internal/cli"
+	"github.com/sdegroot/portablevps/internal/cli"
 )
 
 func main() {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/epistola-app/portablevps/internal/core"
+	"github.com/sdegroot/portablevps/internal/core"
 )
 
 var statusLabel = map[core.Status]string{

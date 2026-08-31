@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/epistola-app/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/config"
 )
 
 // TestDefaultMeshHostUsesMeshDomain locks the admin-address default to the mesh

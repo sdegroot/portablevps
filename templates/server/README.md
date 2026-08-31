@@ -1,6 +1,6 @@
 # My portable servers
 
-A [portablevps](https://github.com/OWNER/portablevps) consumer repository.
+A [portablevps](https://github.com/sdegroot/portablevps) consumer repository.
 
 ## Layout
 
@@ -19,7 +19,7 @@ A [portablevps](https://github.com/OWNER/portablevps) consumer repository.
 4. Provision and install with the portablevps CLI:
 
    ```sh
-   nix run github:OWNER/portablevps?dir=portablevps# -- preflight
+   nix run github:sdegroot/portablevps# -- preflight
    ```
 
 See the portablevps README for the full provisioning, backup, restore, and

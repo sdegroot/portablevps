@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/epistola-app/portablevps/internal/config"
-	"github.com/epistola-app/portablevps/internal/keystore"
+	"github.com/sdegroot/portablevps/internal/config"
+	"github.com/sdegroot/portablevps/internal/keystore"
 )
 
 const (

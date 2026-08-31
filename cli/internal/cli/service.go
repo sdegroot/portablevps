@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/epistola-app/portablevps/internal/adapters"
-	"github.com/epistola-app/portablevps/internal/core"
-	"github.com/epistola-app/portablevps/internal/output"
+	"github.com/sdegroot/portablevps/internal/adapters"
+	"github.com/sdegroot/portablevps/internal/core"
+	"github.com/sdegroot/portablevps/internal/output"
 )
 
 // newServiceCmd is the service-identity noun: operations that move a service

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epistola-app/portablevps/internal/sopsconfig"
+	"github.com/sdegroot/portablevps/internal/sopsconfig"
 )
 
 // fakeEnvRunner simulates age-keygen (writing a key file, deriving a recipient)

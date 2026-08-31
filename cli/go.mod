@@ -1,4 +1,4 @@
-module github.com/epistola-app/portablevps
+module github.com/sdegroot/portablevps
 
 go 1.26
 
