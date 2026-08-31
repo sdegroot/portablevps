@@ -15,3 +15,10 @@ builds:
 
 archives:
   - id: portablevps
+
+# CHANGELOG.md is the maintained source of truth for what changed and why;
+# an auto-generated commit-log dump on the GitHub Release page duplicates it
+# poorly (and, for this repo's first tag, would dump its entire pre-extraction
+# history).
+changelog:
+  disable: true

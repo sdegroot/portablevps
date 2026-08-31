@@ -34,6 +34,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Attest build provenance
+        # Opportunistic: mise's github backend verifies this when present and
+        # simply skips the check when it's not, so it must never fail the
+        # release itself. GitHub also doesn't support attestations on
+        # user-owned private repos at all (only public, or org-owned) — this
+        # step is a real no-op until the repo goes public, by design.
+        continue-on-error: true
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
