@@ -1,0 +1,28 @@
+# Local secrets, generated keys, VM images, and test data (any subproject).
+.local/
+**/.local/
+
+# macOS filesystem metadata.
+.DS_Store
+
+# Editor and local environment files.
+.direnv/
+.env
+.env.*
+*.swp
+*.swo
+*~
+
+# Nix build outputs.
+result
+result-*
+
+# Task runner cache.
+.task/
+
+# Python test/runtime caches.
+__pycache__/
+*.py[cod]
+
+# GoReleaser local build/release output.
+cli/dist/

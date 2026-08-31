@@ -1,0 +1,17 @@
+version: 2
+
+project_name: portablevps
+
+builds:
+  - id: portablevps
+    main: ./cmd/portablevps
+    binary: portablevps
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/sdegroot/portablevps/internal/core.Version={{.Version}}
+
+archives:
+  - id: portablevps
