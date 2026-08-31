@@ -43,7 +43,7 @@ in
     system.activationScripts.applyRunningHostname =
       "${pkgs.coreutils}/bin/printf '%s' ${lib.escapeShellArg config.networking.hostName} > /proc/sys/kernel/hostname";
 
-    # NetBird serves peer-name DNS (<peer>.epistola.int) from its embedded
+    # NetBird serves peer-name DNS (<peer>.example.int) from its embedded
     # resolver, but on Linux it needs systemd-resolved to register that split-DNS
     # domain. Without it, servers can't resolve mesh names and fall through to
     # public DNS. Enabling resolved lets NetBird wire up peer resolution.

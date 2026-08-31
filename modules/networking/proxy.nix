@@ -555,7 +555,7 @@ in
           checks. Defaults to public resolvers so the challenge is resolved
           against public authoritative DNS, not the host's system resolver.
           Essential on hosts where NetBird split-DNS routes the managed zone
-          (e.g. int.epistola.io) to the mesh resolver: that resolver only knows
+          (e.g. int.example.com) to the mesh resolver: that resolver only knows
           peer names and returns REFUSED for `_acme-challenge` lookups, which
           otherwise fails issuance ("could not find zone"). Set to [] to use the
           system resolver.

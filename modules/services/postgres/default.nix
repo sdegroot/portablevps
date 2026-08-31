@@ -90,7 +90,7 @@ in
         Additional databases created in the same cluster on first boot, each
         owned by ${"\${user}"}. Use when a single box hosts several apps that
         each need their own database but can share one PostgreSQL instance
-        (e.g. the demo box running epistola-suite + valtimo). Rendered as an
+        (e.g. a box running two apps that share one cluster). Rendered as an
         idempotent init script in /docker-entrypoint-initdb.d, so — like
         POSTGRES_DB — it only takes effect on an empty data directory. The
         physical (pg_basebackup) backup already covers the whole cluster, so

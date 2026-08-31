@@ -125,13 +125,13 @@ in
 
     domain = lib.mkOption {
       type = lib.types.str;
-      example = "code.epistola.app";
+      example = "code.example.com";
       description = "Canonical Forgejo web domain.";
     };
 
     rootUrl = lib.mkOption {
       type = lib.types.str;
-      example = "https://code.epistola.app/";
+      example = "https://code.example.com/";
       description = "Canonical Forgejo ROOT_URL.";
     };
 

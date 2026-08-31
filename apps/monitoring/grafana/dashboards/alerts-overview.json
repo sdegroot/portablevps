@@ -1,7 +1,7 @@
 {
   "uid": "alerts-overview",
   "title": "Alerts — Overview",
-  "description": "Live + historical alert state. Backed by the ALERTS series vmalert writes into VictoriaMetrics (-remoteWrite). The Alertmanager UI (alerts.apps.epistola.int) is the place to silence/ack; this is the at-a-glance board. COPIED, not Jinja-rendered ({{ ... }} is Grafana templating).",
+  "description": "Live + historical alert state. Backed by the ALERTS series vmalert writes into VictoriaMetrics (-remoteWrite). The Alertmanager UI (alerts.apps.example.int) is the place to silence/ack; this is the at-a-glance board. COPIED, not Jinja-rendered ({{ ... }} is Grafana templating).",
   "tags": ["monitoring", "alerts"],
   "timezone": "browser",
   "schemaVersion": 39,

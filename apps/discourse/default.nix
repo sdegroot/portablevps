@@ -430,7 +430,7 @@ in
       clientId = lib.mkOption { type = lib.types.str; default = "discourse"; description = "OIDC client id."; };
       clientSecretSecret = lib.mkOption { type = lib.types.str; default = "discourse/oidc-client-secret"; description = "sops key for OIDC client secret."; };
       scopes = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "openid" "email" "profile" ]; description = "OIDC scopes requested by Discourse."; };
-      buttonLabel = lib.mkOption { type = lib.types.str; default = "Log in with Epistola"; description = "Discourse login button label."; };
+      buttonLabel = lib.mkOption { type = lib.types.str; default = "Log in with SSO"; example = "Log in with Acme"; description = "Discourse login button label."; };
       fullScreenLogin = lib.mkOption { type = lib.types.bool; default = true; description = "Send anonymous users directly through OIDC."; };
     };
 

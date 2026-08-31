@@ -40,7 +40,7 @@ in
 
     flake = lib.mkOption {
       type = lib.types.str;
-      example = "github:epistola-app/epistola-nix-infra?dir=epistola";
+      example = "github:you/your-servers";
       description = ''
         Flake reference the box rebuilds itself from. `nixos-rebuild` appends
         `#<hostname>` automatically, so point this at the flake root (no fragment).

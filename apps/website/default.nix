@@ -101,7 +101,7 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      example = "ghcr.io/epistola-app/website:1.4.0";
+      example = "ghcr.io/you/website:1.4.0";
       description = "Pinned container image (use an immutable release tag, not :latest).";
     };
 
@@ -120,7 +120,7 @@ in
     pullAuthUser = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      example = "epistola-bot";
+      example = "ci-bot";
       description = ''
         Registry username paired with `pullAuthSecret` (NOT a secret — it is an
         identifier, so it lives in config, not sops). For ghcr.io any non-empty

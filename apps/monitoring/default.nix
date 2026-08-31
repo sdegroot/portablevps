@@ -1,6 +1,6 @@
 # portablevps monitoring stack — a dedicated observability server.
 #
-# Ported from epistola-vps-infra/servers/monitoring (Ansible + podman) to
+# Ported from an Ansible + podman monitoring setup to
 # NixOS + podman Quadlet. Runs, as containers on a shared podman network:
 #   VictoriaMetrics (metrics TSDB) · VictoriaLogs (logs) · vmalert (rules) ·
 #   Alertmanager (routing → email via Brevo) · Grafana (dashboards) ·
