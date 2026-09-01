@@ -66,7 +66,84 @@ mise use -g github:sdegroot/portablevps
 
 See `cli/README.md` for building from source.
 
-## The tool's own test hosts
+## Developing and testing this tool locally
+
+This section is for people working *on* portablevps itself, not consumers of
+the CLI — a regular deploy doesn't need any of this, since `nixos-anywhere`
+builds on the remote target by default.
+
+Prerequisites:
+
+- **Nix** with flakes and the new CLI enabled — add to `~/.config/nix/nix.conf`
+  (or `/etc/nix/nix.conf` for all users) so you don't have to pass
+  `--extra-experimental-features` on every command:
+  ```
+  experimental-features = nix-command flakes
+  ```
+- **[mise](https://mise.jdx.dev)** — manages `task`, `age`, `sops` for this repo (see `mise.toml`).
+- **QEMU** for the local VM test harness — `brew install qemu` on macOS (uses
+  `hvf` acceleration, Apple Silicon only).
+- **On macOS: a Linux builder.** This repo's flake defines real NixOS system
+  closures (the `local-vm` test hosts, the restore-mode VM check, etc.).
+  macOS can't build Linux derivations natively — there's no practical way to
+  cross-compile a whole NixOS closure, and the disk-image/bootloader tooling
+  involved is Linux-only — so without a Linux builder, any `nix build`/`nix
+  flake check` that needs to actually *build* one of these (not just
+  evaluate it) fails with `error: ... platform mismatch: Required system:
+  'aarch64-linux', Current system: 'aarch64-darwin'`.
+
+  Set one up once, standalone (no nix-darwin or Determinate Nix required):
+  ```sh
+  # 1. Trust yourself as a Nix user (required to register a remote builder).
+  echo "extra-trusted-users = $(whoami)" | sudo tee -a /etc/nix/nix.conf
+
+  # 2. Launch the builder VM (a lightweight NixOS VM via Apple's
+  #    Virtualization framework, run as a persistent background service).
+  #    Prompts for your sudo password; prints the exact config to use next.
+  nix run nixpkgs#darwin.linux-builder
+
+  # 3. Add the builder to /etc/nix/nix.conf using the *exact* line the
+  #    previous command printed — don't hand-copy from docs, the SSH host
+  #    key/port can change between nixpkgs versions:
+  #      builders = ssh-ng://builder@linux-builder <arch>-linux /etc/nix/builder_ed25519 <max-jobs> - - - <ssh-host-key>
+  #      builders-use-substitutes = true
+
+  # 4. Add the matching SSH client config:
+  cat <<'SSHEOF' | sudo tee /etc/ssh/ssh_config.d/100-linux-builder.conf
+  Host linux-builder
+    Hostname localhost
+    HostKeyAlias linux-builder
+    Port 31022
+    User builder
+    IdentityFile /etc/nix/builder_ed25519
+  SSHEOF
+
+  # 5. Restart the daemon so it picks up the new builder.
+  sudo launchctl kickstart -k system/org.nixos.nix-daemon
+  ```
+  Verify it worked — this should actually build, not error with a platform
+  mismatch:
+  ```sh
+  nix build .#nixosConfigurations.local-vm.config.system.build.toplevel
+  ```
+  Security note: the builder VM only listens on `localhost` — don't expose
+  its port externally. Its default SSH host key is publicly known (baked
+  into nixpkgs, the same for every install), by design.
+
+  **Known issue, unresolved:** on at least one Apple Silicon Mac (macOS 26),
+  step 2's VM boot has failed with `qemu-system-aarch64: HVF does not
+  support GICv2 emulation`. Neither `nixos/modules/profiles/nix-builder-vm.nix`
+  nor the generic `nixos/modules/virtualisation/qemu-vm.nix` it builds on set
+  a `gic-version`, so QEMU falls back to a default that this HVF version
+  apparently no longer accepts (GICv3-only). There's no documented supported
+  override for this specific flag — the built-in customization path
+  (`virtualisation.darwin-builder.*`) only covers disk/memory/port sizing,
+  not raw QEMU machine-type flags. Untried candidate fixes: setting
+  `QEMU_OPTS='-machine virt,gic-version=3'` when running the installer (the
+  generated run-script may honor it, but could also conflict with its own
+  `-machine virt` flag), or writing a custom flake that imports
+  `${nixpkgs}/nixos/modules/profiles/nix-builder-vm.nix` directly with an
+  explicit `virtualisation.qemu.options` override. Left as a follow-up.
 
 portablevps ships its own disaster-recovery proof: the `.#local-vm` and
 `.#local-vm-restore` NixOS configurations plus a two-VM QEMU test that inserts
