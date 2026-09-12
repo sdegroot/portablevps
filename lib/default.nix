@@ -83,9 +83,34 @@ let
   # already-loosely-typed override surface (single-instance-app.nix), so it
   # stays an untyped passthrough rather than being exhaustively re-typed here.
   placementType = lib.types.submodule {
-    options.provider = lib.mkOption {
-      type = lib.types.str;
-      description = "Provider adapter name (providers/<name>/provider.json).";
+    options = {
+      provider = lib.mkOption {
+        type = lib.types.str;
+        description = "Provider adapter name (providers/<name>/provider.json).";
+      };
+      serverType = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "cpx22";
+        description = ''
+          The provider's actual instance/server type this machine runs as —
+          purely informational. `server install` operates against an
+          already-existing target and never reads this; a provider's
+          `defaultServerType` (provider.json) is only what a *new*
+          `lifecycle-create` would provision, which can differ from what a
+          specific already-existing box actually is (e.g. adopting a
+          foreign host). Recorded explicitly so it isn't only a comment.
+        '';
+      };
+      location = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "nbg1";
+        description = ''
+          The provider's actual datacenter/region this machine runs in —
+          informational, same rationale as `serverType`.
+        '';
+      };
     };
   };
 
