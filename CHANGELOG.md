@@ -28,3 +28,13 @@
   directory). The seed/verify existence checks now run as root (`sudo test
   -d`/`-f`) instead of as the unprivileged admin user, which previously
   couldn't even traverse into the directory to see the file.
+- **Fixed `test dr` against a secrets-bearing server**: the restore host,
+  never provisioned under the source's identity, could never decrypt the
+  source's sops secrets once switched into it (`0 successful groups
+  required, got 0`), stranding the restore host mid-switch on failure. `test
+  dr` now re-encrypts the source's tracked secrets file to the restore
+  host's own already-registered recipient before switching (no private key
+  ever leaves the operator's machine) and guarantees a revert on every exit
+  path, success or failure. Secrets-bearing drills now require
+  `--restore-server` (not `--restore-host`). See `docs/adr/0004-cross-host-
+  secrets-for-restore-drills.md`.

@@ -397,6 +397,122 @@ func TestRestoreDrillRejectsChangedRegisteredFile(t *testing.T) {
 	}
 }
 
+// fakeCrossHostSecrets records how Swap was called and lets tests control
+// whether it succeeds, no-ops (identity has no secrets file), or fails, and
+// whether the returned revert func fails.
+type fakeCrossHostSecrets struct {
+	gotIdentity, gotHostServer string
+	gotAgeEnv                  map[string]string
+	swapErr                    error
+	noopSwap                   bool
+	revertErr                  error
+	reverted                   bool
+}
+
+func (f *fakeCrossHostSecrets) Swap(identity, hostServer string, ageEnv map[string]string) (func() error, error) {
+	f.gotIdentity, f.gotHostServer, f.gotAgeEnv = identity, hostServer, ageEnv
+	if f.swapErr != nil {
+		return nil, f.swapErr
+	}
+	if f.noopSwap {
+		return nil, nil
+	}
+	return func() error {
+		f.reverted = true
+		return f.revertErr
+	}, nil
+}
+
+func TestRestoreDrillSwapsSecretsBeforeRestoringAndRevertsOnSuccess(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d":   "yes\n",
+		"paths.d/postgres; then echo yes":         "yes\n",
+		"portablevps-backup-restore-drill-report": "reported\n",
+	}}
+	secrets := &fakeCrossHostSecrets{}
+	ageEnv := map[string]string{"SOPS_AGE_KEY": "source-key-material"}
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Secrets: secrets, AgeEnv: ageEnv},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", RestoreHostServer: "restore-server", Marker: "dr-test"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets.gotIdentity != "svc" || secrets.gotHostServer != "restore-server" {
+		t.Fatalf("Swap called with (%q, %q), want (svc, restore-server)", secrets.gotIdentity, secrets.gotHostServer)
+	}
+	if secrets.gotAgeEnv["SOPS_AGE_KEY"] != "source-key-material" {
+		t.Fatalf("Swap did not receive the source's ageEnv: %v", secrets.gotAgeEnv)
+	}
+	if !secrets.reverted {
+		t.Fatal("expected the restore host's secrets swap to be reverted after a successful drill")
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if strings.Index(sequence, "restore.sh") < 0 {
+		t.Fatalf("restore.sh did not run: %s", sequence)
+	}
+}
+
+// This is the exact failure mode hit against real infra: a drill that fails
+// during verification must still leave the restore host able to decrypt only
+// its own secrets again — not stuck holding another identity's re-encrypted
+// file. Before the guaranteed revert, this required manual recovery with the
+// source identity's own admin key.
+func TestRestoreDrillRevertsSecretsSwapEvenWhenVerificationFails(t *testing.T) {
+	host := &changedFileEvidenceHost{fakeHost: fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d": "yes\n",
+		"paths.d/postgres; then echo yes":       "no\n",
+	}}}
+	secrets := &fakeCrossHostSecrets{}
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Secrets: secrets, AgeEnv: nil},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", RestoreHostServer: "restore-server", Marker: "dr-test"},
+	)
+	if e, ok := err.(*ProvisionError); !ok || e.ExitCode() != 71 {
+		t.Fatalf("expected verification exit 71, got %v", err)
+	}
+	if !secrets.reverted {
+		t.Fatal("a failed drill must still revert the restore host's secrets swap")
+	}
+}
+
+func TestRestoreDrillCompoundsARevertFailureIntoTheReturnedError(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d":   "yes\n",
+		"paths.d/postgres; then echo yes":         "yes\n",
+		"portablevps-backup-restore-drill-report": "reported\n",
+	}}
+	secrets := &fakeCrossHostSecrets{revertErr: fmt.Errorf("ssh dropped")}
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Secrets: secrets},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", RestoreHostServer: "restore-server", Marker: "dr-test"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "ssh dropped") {
+		t.Fatalf("expected the revert failure to surface in the returned error, got %v", err)
+	}
+}
+
+func TestRestoreDrillSkipsSecretsSwapWithoutRestoreHostServer(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d":   "yes\n",
+		"paths.d/postgres; then echo yes":         "yes\n",
+		"portablevps-backup-restore-drill-report": "reported\n",
+	}}
+	secrets := &fakeCrossHostSecrets{}
+	// No RestoreHostServer: matches today's --restore-host (no server name)
+	// usage, or a secrets-less server — the swap must not be attempted.
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Secrets: secrets},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets.gotIdentity != "" {
+		t.Fatalf("Swap should not have been called without a RestoreHostServer, got identity %q", secrets.gotIdentity)
+	}
+}
+
 // Registered backup paths can live inside root-only-accessible directories
 // (e.g. /var/lib/traefik/acme.json under a 700 traefik:traefik directory).
 // The seed/verify existence checks must run as root, or they silently

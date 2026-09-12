@@ -27,6 +27,16 @@ type ServiceEnv struct {
 	// Sleep is called between certificate-validity poll attempts. Nil uses
 	// time.Sleep; tests inject a no-op to avoid real delay.
 	Sleep func(time.Duration)
+	// Secrets re-encrypts a source identity's tracked secrets file so a
+	// restore host's own recipient can decrypt it, used by RestoreDrill when
+	// the restore host was never provisioned under the source's identity.
+	// Nil skips this: a drill against a secrets-bearing source then fails at
+	// sops decrypt on the restore host, same as without this wiring.
+	Secrets CrossHostSecrets
+	// AgeEnv is the SOPS_AGE_KEY env needed to decrypt the source identity's
+	// own secrets file for Secrets.Swap (e.g. {"SOPS_AGE_KEY": material}).
+	// Unused when Secrets is nil.
+	AgeEnv map[string]string
 }
 
 func (env ServiceEnv) sleep() func(time.Duration) {
@@ -334,6 +344,12 @@ type DrillOpts struct {
 	SourceHost  string // live host to seed a marker on and back up (left otherwise untouched)
 	RestoreHost string // host to restore onto and verify (destructive to its data)
 	Marker      string // optional deterministic marker (tests); generated when empty
+	// RestoreHostServer is the restore host's OWN server identity (its own
+	// already-registered .sops.yaml recipient) — needed only when Server has
+	// a secrets file, so ServiceEnv.Secrets can re-encrypt it for the
+	// restore host without moving Server's private key there. Empty skips
+	// the swap (a drill against a secrets-less source needs it).
+	RestoreHostServer string
 }
 
 func newDrillMarker() (string, error) {
@@ -453,13 +469,26 @@ done`
 	return err
 }
 
+// combineCleanupError folds a cleanup failure into cause, preserving cause's
+// exit code when it carries one (mirrors Migrate's rollback message-combining).
+func combineCleanupError(cause, cleanupErr error) error {
+	if cause == nil {
+		return provisionErr(70, "%v", cleanupErr)
+	}
+	code := 70
+	if pe, ok := cause.(*ProvisionError); ok {
+		code = pe.ExitCode()
+	}
+	return provisionErr(code, "%v; %v", cause, cleanupErr)
+}
+
 // RestoreDrill proves backups actually restore, end to end, against real hosts:
 // it seeds a unique marker into PostgreSQL (when registered), every declared
 // file backup path, and app-owned seed hooks; runs the production backup
 // service; then restores onto RestoreHost and verifies every marker and
 // app-owned hook. The source is only seeded (non-destructive); the restore host
 // is rebuilt from the backup. It returns the marker it used.
-func RestoreDrill(env ServiceEnv, o DrillOpts) (string, error) {
+func RestoreDrill(env ServiceEnv, o DrillOpts) (marker string, err error) {
 	report := env.report()
 	if o.SourceHost == "" || o.RestoreHost == "" {
 		return "", provisionErr(64, "source and restore hosts are required")
@@ -486,7 +515,7 @@ func RestoreDrill(env ServiceEnv, o DrillOpts) (string, error) {
 		return "", provisionErr(70, "checking PostgreSQL backup registration on %s: %v", o.SourceHost, err)
 	}
 
-	marker := o.Marker
+	marker = o.Marker
 	if marker == "" {
 		marker, err = newDrillMarker()
 		if err != nil {
@@ -511,6 +540,28 @@ func RestoreDrill(env ServiceEnv, o DrillOpts) (string, error) {
 	report("backup", "run", "starting production backup service on "+o.SourceHost)
 	if _, err := env.Host.Run(o.SourceHost, "sudo systemctl start portablevps-backup.service"); err != nil {
 		return marker, provisionErr(70, "backup on %s: %v", o.SourceHost, err)
+	}
+
+	if env.Secrets != nil && o.RestoreHostServer != "" {
+		report("secrets-swap", "run", "re-encrypting "+o.Server+"'s secrets for "+o.RestoreHost)
+		restoreSecrets, serr := env.Secrets.Swap(o.Server, o.RestoreHostServer, env.AgeEnv)
+		if serr != nil {
+			return marker, provisionErr(70, "re-encrypting secrets for %s: %v", o.RestoreHost, serr)
+		}
+		if restoreSecrets != nil {
+			report("secrets-swap", "ok", o.RestoreHost+" can now decrypt "+o.Server+"'s secrets")
+			// Guaranteed on every exit path from here on, success or failure —
+			// a partially-switched restore host must never keep another
+			// identity's re-encrypted secrets lying around.
+			defer func() {
+				report("secrets-swap", "run", "restoring "+o.Server+"'s tracked secrets file")
+				if rerr := restoreSecrets(); rerr != nil {
+					err = combineCleanupError(err, fmt.Errorf("restoring tracked secrets file for %s: %w", o.Server, rerr))
+					return
+				}
+				report("secrets-swap", "ok", "tracked secrets file restored")
+			}()
+		}
 	}
 
 	// Restore onto the (separate) restore host and verify the marker survived.

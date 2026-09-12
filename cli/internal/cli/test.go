@@ -104,6 +104,10 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 	if err := confirmDestroyTarget(g, cmd, restoreHost); err != nil {
 		return err
 	}
+	secrets, ageEnv, restoreHostServer, err := drSecretsSupport(ctx, server, flags)
+	if err != nil {
+		return err
+	}
 	hostRunner, cleanup, err := drHostRunner(g, ctx, server, flags, sourceHost, restoreHost)
 	if err != nil {
 		return err
@@ -114,10 +118,14 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 	env := core.ServiceEnv{
 		RepoRoot: ctx.RepoRoot,
 		Host:     hostRunner,
+		Secrets:  secrets,
+		AgeEnv:   ageEnv,
 		Stream:   adapters.ExecRunner{},
 		Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
 	}
-	marker, err := core.RestoreDrill(env, core.DrillOpts{Server: server, SourceHost: sourceHost, RestoreHost: restoreHost})
+	marker, err := core.RestoreDrill(env, core.DrillOpts{
+		Server: server, SourceHost: sourceHost, RestoreHost: restoreHost, RestoreHostServer: restoreHostServer,
+	})
 	if err != nil {
 		prog.Result("fail", err.Error(), exitCodeOf(err))
 		return silentExit(err)
@@ -126,6 +134,30 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 		fmt.Sprintf("restored %s onto %s and verified marker %s", sourceHost, restoreHost, marker),
 		0, "marker", marker)
 	return nil
+}
+
+// drSecretsSupport resolves the cross-host secrets wiring for a remote DR
+// drill (core.ServiceEnv's Secrets/AgeEnv, and the restore host's own server
+// identity for DrillOpts.RestoreHostServer). If server has no tracked
+// secrets file, this is a clean no-op — RestoreDrill's own nil/empty checks
+// then skip the swap, matching today's behavior for secrets-less servers. If
+// server DOES have a secrets file, --restore-server (not --restore-host) is
+// required, since re-encrypting for the restore host needs its own
+// registered .sops.yaml recipient, which only a resolvable server name has.
+func drSecretsSupport(ctx *config.Context, server string, flags drFlags) (core.CrossHostSecrets, map[string]string, string, error) {
+	if !fileExistsCli(filepath.Join(ctx.RepoRoot, "secrets", server+".yaml")) {
+		return nil, nil, "", nil
+	}
+	if flags.restoreServer == "" {
+		return nil, nil, "", ExitError{Code: 64, Message: fmt.Sprintf(
+			"%s has a secrets file; pass --restore-server (not --restore-host) so its secrets can be re-encrypted for the restore host", server)}
+	}
+	material, err := ageKeyMaterial(ctx, server)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	secrets := core.RepoSecrets{RepoRoot: ctx.RepoRoot, Runner: adapters.ExecRunner{}}
+	return secrets, map[string]string{"SOPS_AGE_KEY": material}, flags.restoreServer, nil
 }
 
 func resolveDRMode(flags drFlags) (string, error) {
