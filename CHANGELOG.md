@@ -22,3 +22,9 @@
   self-hostable one) moved to a consumer-side overlay on the generic
   `portablevps.apps.custom` schema; remaining example values and comments
   referencing `epistola.*` domains were genericized.
+- **Fixed a false "registered backup path does not exist" failure during
+  `test dr`/`service migrate`** for backup paths that live inside a
+  root-only-accessible directory (e.g. Traefik's `acme.json`, under a `700`
+  directory). The seed/verify existence checks now run as root (`sudo test
+  -d`/`-f`) instead of as the unprivileged admin user, which previously
+  couldn't even traverse into the directory to see the file.

@@ -392,9 +392,9 @@ for manifest in /etc/portablevps/backups/paths.d/*; do
   [ "$(basename "$manifest")" != postgres ] || continue
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    if [ -d "$path" ]; then
+    if sudo test -d "$path"; then
       printf '%s\n' "$marker" | sudo tee "$path/dr-marker.txt" >/dev/null
-    elif [ -f "$path" ]; then
+    elif sudo test -f "$path"; then
       sudo sha256sum "$path"
     else
       echo "registered backup path does not exist: $path" >&2
@@ -415,13 +415,13 @@ for manifest in /etc/portablevps/backups/paths.d/*; do
   [ "$(basename "$manifest")" != postgres ] || continue
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    if [ -d "$path" ]; then
+    if sudo test -d "$path"; then
       got="$(sudo cat "$path/dr-marker.txt" 2>/dev/null || true)"
       if [ "$got" != "$marker" ]; then
         echo "DR marker missing from $path" >&2
         rc=1
       fi
-    elif [ -f "$path" ]; then
+    elif sudo test -f "$path"; then
       sudo sha256sum "$path"
     else
       echo "registered backup path was not restored: $path" >&2

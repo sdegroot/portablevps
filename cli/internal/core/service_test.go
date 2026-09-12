@@ -396,3 +396,31 @@ func TestRestoreDrillRejectsChangedRegisteredFile(t *testing.T) {
 		t.Fatalf("failed verification must not publish success metric: %s", sequence)
 	}
 }
+
+// Registered backup paths can live inside root-only-accessible directories
+// (e.g. /var/lib/traefik/acme.json under a 700 traefik:traefik directory).
+// The seed/verify existence checks must run as root, or they silently
+// misreport a real path as "does not exist" for the unprivileged admin user.
+func TestSeedAndVerifyBackupPathChecksRunAsRoot(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d": "yes\n",
+		"paths.d/postgres; then echo yes":       "no\n",
+	}}
+	if _, err := seedBackupPathMarkers(ServiceEnv{RepoRoot: "/repo", Host: host}, "source", "dr-test"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := verifyBackupPathMarkers(ServiceEnv{RepoRoot: "/repo", Host: host}, "restore", "dr-test", ""); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if len(host.runs) != 2 {
+		t.Fatalf("expected exactly one seed run and one verify run, got %d: %v", len(host.runs), host.runs)
+	}
+	for _, run := range host.runs {
+		if strings.Contains(run, `if [ -d "$path" ]`) || strings.Contains(run, `elif [ -f "$path" ]`) {
+			t.Fatalf("existence check must run as root (sudo test), found unprivileged test: %s", run)
+		}
+		if !strings.Contains(run, `if sudo test -d "$path"`) || !strings.Contains(run, `elif sudo test -f "$path"`) {
+			t.Fatalf("expected both sudo test -d and sudo test -f in command: %s", run)
+		}
+	}
+}
