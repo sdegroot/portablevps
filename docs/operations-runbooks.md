@@ -736,7 +736,7 @@ Prerequisites:
 Run:
 
 ```sh
-portablevps#portablevps -- service migrate new-service-host \
+portablevps#pvps -- service migrate new-service-host \
   --source-server old-service-host \
   --source-host old-service-host.example.int \
   --target-host new-service-host.example.int
@@ -756,7 +756,7 @@ The command performs the cutover in this order:
 6. Update the stable NetBird service DNS from the target plan:
 
    ```sh
-   portablevps#portablevps -- network dns-sync new-service-host \
+   portablevps#pvps -- network dns-sync new-service-host \
      --host new-service-host.example.int
    ```
 

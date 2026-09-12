@@ -1,4 +1,4 @@
-// Command portablevps is the operator and CI entrypoint for portablevps.
+// Command pvps is the operator and CI entrypoint for portablevps.
 package main
 
 import (

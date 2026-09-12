@@ -14,13 +14,13 @@ for the current split.
 # via Nix (no toolchain needed) — the CI-friendly path.
 nix run github:sdegroot/portablevps -- doctor --server test-vps
 # or from this directory (the CLI is its own flake):
-nix run .#portablevps -- doctor --json          # machine-readable
+nix run .#pvps -- doctor --json          # machine-readable
 
-# mise (see the repo root README's "Installing the CLI")
+# mise (see the repo root README's "Installing the CLI") — installs as `pvps`
 mise use -g github:sdegroot/portablevps
 
 # from a checkout during development
-go run ./cmd/portablevps doctor
+go run ./cmd/pvps doctor
 ```
 
 The CLI operates on the consumer repo given by `--project` (default:

@@ -27,12 +27,12 @@
       packages = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         rec {
-          portablevps = pkgs.buildGoModule {
-            pname = "portablevps";
+          pvps = pkgs.buildGoModule {
+            pname = "pvps";
             version = devVersion;
             src = ./.;
             vendorHash = null; # dependencies are vendored in ./vendor
-            subPackages = [ "cmd/portablevps" ];
+            subPackages = [ "cmd/pvps" ];
             doCheck = true;
             checkPhase = ''
               runHook preCheck
@@ -46,22 +46,22 @@
             ];
             meta = {
               description = "Operate and migrate portable single-instance VPS servers";
-              mainProgram = "portablevps";
+              mainProgram = "pvps";
             };
           };
-          default = portablevps;
+          default = pvps;
         });
 
       apps = forAllSystems (system: rec {
-        portablevps = {
+        pvps = {
           type = "app";
-          program = "${self.packages.${system}.portablevps}/bin/portablevps";
+          program = "${self.packages.${system}.pvps}/bin/pvps";
         };
-        default = portablevps;
+        default = pvps;
       });
 
       checks = forAllSystems (system: {
-        cli = self.packages.${system}.portablevps;
+        cli = self.packages.${system}.pvps;
       });
 
       devShells = forAllSystems (system:

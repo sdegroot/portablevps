@@ -57,7 +57,7 @@ tagged release:
 # Already have Nix: run it directly, no separate install step
 nix run github:sdegroot/portablevps -- doctor
 
-# mise (https://mise.jdx.dev)
+# mise (https://mise.jdx.dev) — installs the binary as `pvps`
 mise use -g github:sdegroot/portablevps
 
 # raw binary: download the tar.gz for your OS/arch from the latest release

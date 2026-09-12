@@ -4,8 +4,8 @@ project_name: portablevps
 
 builds:
   - id: portablevps
-    main: ./cmd/portablevps
-    binary: portablevps
+    main: ./cmd/pvps
+    binary: pvps
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     env:

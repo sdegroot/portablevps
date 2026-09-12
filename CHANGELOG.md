@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The installed CLI binary is now `pvps`, not `portablevps`.** `mise use -g
+  github:sdegroot/portablevps` and `nix run github:sdegroot/portablevps`
+  both now give you a `pvps` command; `nix build .#pvps`/`nix run .#pvps`
+  from a checkout too (`.#portablevps` no longer exists). The project,
+  repository, Go module path, and NixOS option namespace (`portablevps.*`)
+  are unchanged — only the CLI command got shorter.
 - **portablevps is now a standalone repository**, extracted from the
   `epistola-nix-infra` monorepo with its own release cycle. The Nix flake
   library and Go CLI live at the repo root (no more `?dir=portablevps`);

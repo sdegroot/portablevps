@@ -30,9 +30,9 @@ type globalOptions struct {
 func newRootCmd() *cobra.Command {
 	opts := &globalOptions{}
 	root := &cobra.Command{
-		Use:   "portablevps",
+		Use:   "pvps",
 		Short: "Create, operate, and move portable single-instance VPS servers",
-		Long: "portablevps provisions, operates, and migrates single-instance " +
+		Long: "pvps (portablevps) provisions, operates, and migrates single-instance " +
 			"application servers defined in a consumer repository. It is designed " +
 			"to be driven both interactively and from CI.",
 		Version:       core.Version,
