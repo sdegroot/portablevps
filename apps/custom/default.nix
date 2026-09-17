@@ -15,6 +15,7 @@
 
 let
   apps = config.portablevps.apps.custom;
+  quadlet = import ../../lib/quadlet.nix { inherit lib; };
   prototype = config.portablevps.secrets.allowPrototypeDefaults;
   restoreGate = "ConditionPathExists=!/run/portablevps/restore-mode";
 
@@ -215,7 +216,7 @@ let
       Image=${app.image}
       ContainerName=${app.containerName}
       Network=${app.network}
-      ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") app.env)}
+      ${quadlet.environmentLines app.env}
       ${lib.optionalString hasSecretEnv "EnvironmentFile=${envFile}"}
       ${lib.concatMapStringsSep "\n" (v: "Volume=${v.hostPath}:${v.containerPath}") app.volumes}
       ${lib.optionalString (app.healthCmd != null) "HealthCmd=${app.healthCmd}"}
@@ -252,7 +253,7 @@ let
       Image=${app.image}
       ContainerName=${containerName}
       Network=${app.network}
-      ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") app.env)}
+      ${quadlet.environmentLines app.env}
       Environment=PORT=${toString port}
       ${lib.optionalString hasSecretEnv "EnvironmentFile=${envFile}"}
       ${lib.concatMapStringsSep "\n" (v: "Volume=${v.hostPath}:${v.containerPath}") app.volumes}
