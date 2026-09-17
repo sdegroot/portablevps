@@ -20,6 +20,7 @@
 
 let
   cfg = config.portablevps.apps.website;
+  quadlet = import ../../lib/quadlet.nix { inherit lib; };
   prototype = config.portablevps.secrets.allowPrototypeDefaults;
 
   registry = builtins.head (lib.splitString "/" cfg.image); # e.g. ghcr.io
@@ -70,7 +71,7 @@ let
     Environment=HOST=127.0.0.1
     Environment=PORT=${toString port}
     Environment=NODE_ENV=production
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
+    ${quadlet.environmentLines cfg.extraEnv}
     ${lib.optionalString hasSecretEnv "EnvironmentFile=${secretEnvFile}"}
     ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
     # Disable the image's built-in HEALTHCHECK: it commonly hardcodes the app's
@@ -189,7 +190,7 @@ in
         Environment=HOST=127.0.0.1
         Environment=PORT=${toString cfg.port}
         Environment=NODE_ENV=production
-        ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "Environment=${k}=${v}") cfg.extraEnv)}
+        ${quadlet.environmentLines cfg.extraEnv}
         ${lib.optionalString hasSecretEnv "EnvironmentFile=${secretEnvFile}"}
         ${lib.optionalString useAuth "PodmanArgs=--authfile=${authFile}"}
         # No HealthCmd here: when the image ships its own HEALTHCHECK, podman uses

@@ -94,6 +94,30 @@
             }
             touch "$out"
           '';
+
+          # Quadlet Environment= lines must survive systemd's space-separated parsing: an
+          # unquoted value with spaces used to reach the container cut at the first space.
+          # Asserted at evaluation time, so `nix flake check --no-build` catches a regression.
+          quadlet-environment =
+            let
+              quadlet = import ./lib/quadlet.nix { lib = nixpkgs.lib; };
+              expect = actual: expected:
+                if actual == expected then true
+                else throw "quadlet-environment: expected ${expected}, got ${actual}";
+              rejects = name: value: !(builtins.tryEval (quadlet.environmentLine name value)).success;
+            in
+            assert expect (quadlet.environmentLine "OIDC_SCOPES" "openid profile email offline_access")
+              ''Environment="OIDC_SCOPES=openid profile email offline_access"'';
+            assert expect (quadlet.environmentLine "QUOTE" ''say "hi"'') ''Environment="QUOTE=say \"hi\""'';
+            assert expect (quadlet.environmentLine "PCT" "100%") ''Environment="PCT=100%%"'';
+            assert expect (quadlet.environmentLine "BACKSLASH" ''a\b'') ''Environment="BACKSLASH=a\\b"'';
+            assert expect (quadlet.environmentLine "PORT" 4321) ''Environment="PORT=4321"'';
+            assert expect (quadlet.environmentLines { B = "2"; A = "1 1"; })
+              "Environment=\"A=1 1\"\nEnvironment=\"B=2\"";
+            assert rejects "1BAD" "x";
+            assert rejects "BAD-NAME" "x";
+            assert rejects "MULTILINE" "a\nb";
+            pkgs.runCommand "portablevps-quadlet-environment-check" { } "touch $out";
         });
 
       # The tool's own disaster-recovery test hosts (local QEMU, aarch64).
