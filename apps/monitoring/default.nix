@@ -321,9 +321,10 @@ in
       # THIS box's vmalert + Alertmanager alive to fire, so nothing here can report
       # the monitoring box's own death. This is the external watcher: a health-gated
       # heartbeat to a push-based external monitor (e.g. an updown.io pulse). The box
-      # pings only when the alerting pipeline is proven healthy — so a dead box AND a
-      # silently-dead Alertmanager (box still up) both stop the pulse and trip the
-      # external alert.
+      # pings only when the alerting pipeline is proven healthy AND delivering — so a
+      # dead box, a silently-dead Alertmanager (box still up), and an Alertmanager
+      # whose receiver rejects every send all stop the pulse and trip the external
+      # alert.
       enable = lib.mkEnableOption "an external dead-man's-switch heartbeat to a push-based monitor (e.g. updown.io pulse)";
       pulseUrl = lib.mkOption {
         type = lib.types.str;
@@ -348,6 +349,21 @@ in
           the window and the check flaps UP/DOWN every cycle. A short interval also
           means a single withheld ping (an Alertmanager restart mid-deploy, say)
           is absorbed by the next one instead of tripping a false alarm.
+        '';
+      };
+      notificationFailureWindow = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "[0-9]+[smhd]");
+        default = "30m";
+        description = ''
+          Also withhold the pulse while Alertmanager fails to DELIVER: any
+          notification that failed (after Alertmanager's own retries) within this
+          window, from its self-scraped `alertmanager_notifications_failed_total`.
+          An Alertmanager whose receiver refuses it — an SMTP relay rejecting the
+          box's IP, a revoked credential — still answers /-/healthy while every
+          alert it sends is lost, and no internal alert can report that through
+          the same broken receiver; the external monitor is the only channel
+          left. The pulse resumes one window after the last failure. `null`
+          disables the check.
         '';
       };
     };
@@ -691,10 +707,12 @@ in
     # External dead-man's-switch (normal mode only — a local VM has no sops secret
     # and must not ping the internet). A timer pings the external pulse URL, but
     # ONLY after confirming the alerting-critical components answer healthy on
-    # loopback. Withholding the pulse is the signal: if this box (or its alerting
-    # pipeline) is dead, the external monitor sees no pulse and alerts independently.
+    # loopback and Alertmanager's notifications are getting through. Withholding
+    # the pulse is the signal: if this box (or its alerting pipeline) is dead or
+    # can't deliver, the external monitor sees no pulse and alerts independently.
     (lib.mkIf (cfg.deadMansSwitch.enable && !prototype) (
       let
+        failureWindow = cfg.deadMansSwitch.notificationFailureWindow;
         pulseScript = pkgs.writeShellScript "portablevps-monitoring-pulse" ''
           set -u
           # Probe each alerting-critical component. VictoriaLogs + Grafana are
@@ -710,6 +728,21 @@ in
           check victoriametrics "http://127.0.0.1:8428/health"    || ok=0
           check vmalert         "http://127.0.0.1:8880/-/healthy" || ok=0
           check alertmanager    "http://127.0.0.1:9093/-/healthy" || ok=0
+          ${lib.optionalString (failureWindow != null) ''
+          # Healthy is not delivering (see notificationFailureWindow). The query
+          # is empty when nothing failed. Fail closed: a check that can't be
+          # answered withholds the pulse too.
+          failed="$(${pkgs.curl}/bin/curl -fsS --max-time 5 --get "http://127.0.0.1:8428/api/v1/query" \
+              --data-urlencode ${lib.escapeShellArg "query=sum(increase(alertmanager_notifications_failed_total[${failureWindow}])) > 0"} \
+            | ${pkgs.jq}/bin/jq -er '.data.result | if length == 0 then "none" else .[0].value[1] end')" || failed=""
+          if [ -z "$failed" ]; then
+            echo "portablevps-monitoring-pulse: could not query Alertmanager notification failures" >&2
+            ok=0
+          elif [ "$failed" != none ]; then
+            echo "portablevps-monitoring-pulse: Alertmanager failed to deliver $failed notification(s) in the last ${failureWindow}" >&2
+            ok=0
+          fi
+          ''}
           if [ "$ok" -ne 1 ]; then
             echo "portablevps-monitoring-pulse: alerting pipeline unhealthy — withholding pulse so the external monitor fires" >&2
             exit 0

@@ -2,14 +2,19 @@
 
 ## Unreleased
 
-- **Container environment values with spaces now reach the app intact.** The `website` and
-  `custom` apps wrote `Environment=KEY=value` unquoted into their Quadlet units, and Quadlet
-  (like systemd) splits that line on spaces: `OIDC_SCOPES=openid profile email offline_access`
-  arrived as `OIDC_SCOPES=openid`, plus stray `profile`, `email` and `offline_access` variables.
-  Every `Environment=` line is now quoted, with `\`, `"` and `%` escaped (`lib/quadlet.nix`), and
-  invalid names or values with newlines fail at evaluation. A `quadlet-environment` flake check
-  guards the rendering. **Check deployed apps after upgrading:** a value that used to be cut off
-  now arrives in full.
+- **The dead-man's switch now also goes quiet when alerts can't be
+  delivered, not only when the pipeline is down.** An Alertmanager whose
+  receiver rejects every send still answers `/-/healthy`. So when an SMTP relay
+  started refusing the monitoring box (`525 5.7.1 Unauthorized IP address`),
+  every alert email was lost for six days while the pulse kept reporting all
+  well. The pulse is now also withheld while Alertmanager's self-scraped
+  `alertmanager_notifications_failed_total` rose within
+  `deadMansSwitch.notificationFailureWindow` (default `30m`; `null` disables).
+  The external monitor is then the one channel left that can say so. The
+  check fails closed: an unanswerable query withholds too. Replayed against
+  the real outage, the query is empty before and after it and non-empty
+  throughout, so the external alarm would have fired within minutes of the
+  first failed notification.
 - **The installed CLI binary is now `pvps`, not `portablevps`.** `mise use -g
   github:sdegroot/portablevps` and `nix run github:sdegroot/portablevps`
   both now give you a `pvps` command; `nix build .#pvps`/`nix run .#pvps`
