@@ -15,6 +15,21 @@
   the real outage, the query is empty before and after it and non-empty
   throughout, so the external alarm would have fired within minutes of the
   first failed notification.
+- **New log alert `AuthentikEmailSendFailing`** (`rules-vlogs/authentik.yml`):
+  any authentik `send_mail` attempt that ended with an exception in the last
+  15 minutes. A failed signup confirmation leaves the enrollee with an
+  inactive account and no email, and nothing else surfaces it. Validated with
+  `vmalert -dryRun` and replayed against real logs: it fires on both failure
+  windows of that outage and stays silent on successful sends.
+
+- **Container environment values with spaces now reach the app intact.** The `website` and
+  `custom` apps wrote `Environment=KEY=value` unquoted into their Quadlet units, and Quadlet
+  (like systemd) splits that line on spaces: `OIDC_SCOPES=openid profile email offline_access`
+  arrived as `OIDC_SCOPES=openid`, plus stray `profile`, `email` and `offline_access` variables.
+  Every `Environment=` line is now quoted, with `\`, `"` and `%` escaped (`lib/quadlet.nix`), and
+  invalid names or values with newlines fail at evaluation. A `quadlet-environment` flake check
+  guards the rendering. **Check deployed apps after upgrading:** a value that used to be cut off
+  now arrives in full.
 - **The installed CLI binary is now `pvps`, not `portablevps`.** `mise use -g
   github:sdegroot/portablevps` and `nix run github:sdegroot/portablevps`
   both now give you a `pvps` command; `nix build .#pvps`/`nix run .#pvps`
