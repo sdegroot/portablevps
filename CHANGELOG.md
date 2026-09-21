@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **The dead-man's switch now also goes quiet when alerts can't be
+  delivered, not only when the pipeline is down.** An Alertmanager whose
+  receiver rejects every send still answers `/-/healthy`. So when an SMTP relay
+  started refusing the monitoring box (`525 5.7.1 Unauthorized IP address`),
+  every alert email was lost for six days while the pulse kept reporting all
+  well. The pulse is now also withheld while Alertmanager's self-scraped
+  `alertmanager_notifications_failed_total` rose within
+  `deadMansSwitch.notificationFailureWindow` (default `30m`; `null` disables).
+  The external monitor is then the one channel left that can say so. The
+  check fails closed: an unanswerable query withholds too. Replayed against
+  the real outage, the query is empty before and after it and non-empty
+  throughout, so the external alarm would have fired within minutes of the
+  first failed notification.
+- **New log alert `AuthentikEmailSendFailing`** (`rules-vlogs/authentik.yml`):
+  any authentik `send_mail` attempt that ended with an exception in the last
+  15 minutes. A failed signup confirmation leaves the enrollee with an
+  inactive account and no email, and nothing else surfaces it. Validated with
+  `vmalert -dryRun` and replayed against real logs: it fires on both failure
+  windows of that outage and stays silent on successful sends.
+
 - **Container environment values with spaces now reach the app intact.** The `website` and
   `custom` apps wrote `Environment=KEY=value` unquoted into their Quadlet units, and Quadlet
   (like systemd) splits that line on spaces: `OIDC_SCOPES=openid profile email offline_access`

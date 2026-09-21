@@ -1,0 +1,33 @@
+# authentik transactional mail — enrollment confirmation, password reset — that
+# failed to send. Evaluated by vmalert-logs against VictoriaLogs.
+#
+# Every send_mail attempt, retries included, ends in one short worker line:
+#   {"event": "Task finished", "exc": null, ...send_mail...}      delivered
+#   {"event": "Task finished", "exc": "SMTP...Error(...)", ...}   failed
+# A failed confirmation leaves the enrollee with an inactive account and no mail,
+# and nothing else says so — the user just never hears back. The long exception
+# line that follows is useless here: journald splits it, and the head carrying
+# the recipient arrives without a _msg.
+#
+# Delivery of THIS alert can share the fault (the same SMTP relay rejecting the
+# whole account); the dead-man's switch withholds its pulse on Alertmanager
+# notification failures to cover that case.
+groups:
+  - name: authentik
+    type: vlogs
+    interval: 1m
+    rules:
+      - alert: AuthentikEmailSendFailing
+        expr: |
+          _time:15m CONTAINER_NAME:authentik-worker "authentik.stages.email.tasks.send_mail" "Task finished" -"\"exc\": null"
+          | stats by (host.name) count() as failures
+          | rename host.name as host_name
+          | filter failures:>0
+        labels:
+          severity: critical
+        annotations:
+          summary: "authentik cannot send email on {{ $labels.host_name }}"
+          description: >-
+            {{ $value }} authentik send_mail attempts failed in the last 15m on
+            {{ $labels.host_name }}. Signup confirmations and password resets are
+            not arriving. The worker log's "exc" field holds the SMTP error.
