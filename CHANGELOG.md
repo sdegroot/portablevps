@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Applications no longer have to connect to PostgreSQL as the cluster
+  superuser.** `portablevps.postgres.user` names the role the container image
+  creates on first boot, and that role is the superuser: it can read every
+  database on the box, create roles, bypass row-level security and open a
+  replication stream. Backups genuinely need it, since `pg_basebackup` requires
+  `REPLICATION` — applications never did, yet pointing them at it was the only
+  thing the module offered. New `portablevps.postgres.appRoles.<name>` declares
+  an unprivileged login role instead: created and then explicitly held to
+  `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, granted
+  `CONNECT`/`TEMPORARY` on its one database with `PUBLIC` revoked, and made owner
+  of its schema (`public` by default, or a namespace of its own via `schema`) so a
+  migration tool can still create and alter its own tables. The superuser stays
+  for administration and for the backup chain.
+
+  Roles are reconciled on every activation rather than seeded into
+  `/docker-entrypoint-initdb.d`, because an init script only ever runs on an empty
+  cluster: a rotated password, or a host rebuilt by `restore.sh` from a physical
+  backup, would otherwise never converge. The password is read from its secret
+  file at activation and reaches `psql` through the environment (`\getenv`), so it
+  appears in neither the process list nor the world-readable store — the new
+  `postgres-app-roles` check asserts that, alongside every privilege clause.
+  Prototype/local-VM hosts fall back to a fixed password file, so
+  disaster-recovery runs still need no sops.
+
+  Assertions catch the two ways this goes wrong quietly: naming an app role after
+  the superuser, and pointing one at a database the cluster never creates.
+
 - **The dead-man's switch now also goes quiet when alerts can't be
   delivered, not only when the pipeline is down.** An Alertmanager whose
   receiver rejects every send still answers `/-/healthy`. So when an SMTP relay

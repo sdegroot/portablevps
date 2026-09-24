@@ -54,6 +54,40 @@ portablevps declares the secret and renders a `0400` env file the container
 reads. Under prototype/local-VM secrets (for disaster-recovery testing) the
 values are placeholders so the container still boots.
 
+## Give the app its own database role
+
+`portablevps.postgres.user` names the role the container image creates on first
+boot, and that role is the cluster **superuser** — it can read every database,
+create roles, bypass row-level security and open a replication stream. Backups
+need it (`pg_basebackup` requires `REPLICATION`); applications do not. Declare an
+app role and point the application at that instead:
+
+```nix
+portablevps.postgres = {
+  database = "website";
+  user = "website_admin";                          # superuser: admin + backups
+  appRoles.website.passwordSecret = "website/db-password";
+};
+
+portablevps.apps.custom.website.secretEnv.PGPASSWORD = "website/db-password";
+```
+
+The role is held to `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+NOBYPASSRLS`, gets `CONNECT`/`TEMPORARY` on its one database with `PUBLIC`
+revoked, and owns its schema (`public` by default, or set `schema` to keep it in
+its own namespace). Owning the schema is what lets a migration tool create and
+alter its own tables with no cluster-wide privilege.
+
+Roles are reconciled on every activation rather than seeded once through
+`/docker-entrypoint-initdb.d`: an init script only runs on an empty cluster, so a
+rotated password — or a host rebuilt with `restore.sh` — would never converge.
+The password is read from its secret file at activation and handed to `psql`
+through the environment, so it stays out of both the process list and the
+world-readable store.
+
+One consequence: a non-superuser cannot `CREATE EXTENSION`. Declare what the app
+needs in `portablevps.postgres.extensions` instead of in a migration.
+
 ## Private registry
 
 ```nix

@@ -24,6 +24,60 @@ let
     + lib.concatMapStringsSep "\n" (ext: ''CREATE EXTENSION IF NOT EXISTS "${ext}";'') cfg.extensions
   );
   hasExtensions = cfg.extensions != [ ];
+
+  # ---- unprivileged application roles ---------------------------------------
+  # Reconciled on every activation rather than seeded once through
+  # /docker-entrypoint-initdb.d: an init script only ever runs on an EMPTY
+  # cluster, which would leave a restored host (restore.sh replays a physical
+  # backup) and a rotated password with no way to converge.
+  prototype = config.portablevps.secrets.allowPrototypeDefaults;
+
+  appRoleList = lib.mapAttrsToList (name: role: role // { inherit name; }) cfg.appRoles;
+  hasAppRoles = appRoleList != [ ];
+
+  appRoleDatabase = role: if role.database == null then cfg.database else role.database;
+
+  # The password lives in sops normally; a local VM has no sops, so prototype
+  # mode falls back to a fixed value written to /etc (same pattern as the apps).
+  appRolePasswordFile = role:
+    if prototype
+    then "/etc/portablevps/postgres-app-role-${role.name}.pw"
+    else config.sops.secrets.${role.passwordSecret}.path;
+
+  # One SQL file per role. These land in the world-readable store, so the
+  # password is NOT in them: \getenv reads it from the unit's environment and
+  # :'pw' quotes it safely. CREATE ROLE/SCHEMA have no IF NOT EXISTS, hence the
+  # SELECT ... \gexec idiom already used for extraDatabases above.
+  appRoleSql = role:
+    let
+      db = appRoleDatabase role;
+    in
+    pkgs.writeText "portablevps-postgres-app-role-${role.name}.sql" (''
+      \set ON_ERROR_STOP on
+      \getenv pw PORTABLEVPS_APP_ROLE_PASSWORD
+      SELECT format('CREATE ROLE %I LOGIN', '${role.name}')
+      WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role.name}')\gexec
+      -- Stated every time, not just at creation: this is the whole point of the
+      -- option, so it must not drift if someone grants the role more by hand.
+      ALTER ROLE "${role.name}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+      ALTER ROLE "${role.name}" PASSWORD :'pw';
+      REVOKE ALL ON DATABASE "${db}" FROM PUBLIC;
+      GRANT CONNECT, TEMPORARY ON DATABASE "${db}" TO "${role.name}";
+    ''
+    + (
+      if role.schema == "public" then ''
+        -- PostgreSQL 15+ ships public owned by pg_database_owner and no longer
+        -- lets non-owners create in it, so hand it over wholesale.
+        ALTER SCHEMA public OWNER TO "${role.name}";
+      '' else ''
+        SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', '${role.schema}', '${role.name}')
+        WHERE NOT EXISTS (SELECT FROM pg_namespace WHERE nspname = '${role.schema}')\gexec
+        ALTER SCHEMA "${role.schema}" OWNER TO "${role.name}";
+        -- An app connecting with the default search_path would not find its own
+        -- schema otherwise.
+        ALTER ROLE "${role.name}" SET search_path = "${role.schema}";
+      ''
+    ));
 in
 {
   options.portablevps.postgres = {
@@ -129,6 +183,68 @@ in
       '';
     };
 
+    appRoles = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          passwordSecret = lib.mkOption {
+            type = lib.types.str;
+            example = "website/db-password";
+            description = ''
+              sops key holding ONLY this role's password. Read at activation from
+              its secret file and handed to psql through the environment (never
+              argv), so it stays out of the process list and out of the store.
+            '';
+          };
+
+          database = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = ''
+              Database the role may connect to. Defaults to the cluster's primary
+              database; set it to one of the extra databases on a box that hosts
+              several apps on one cluster.
+            '';
+          };
+
+          schema = lib.mkOption {
+            type = lib.types.str;
+            default = "public";
+            description = ''
+              Schema the role OWNS in that database — this is what lets a
+              migration tool create and alter its own tables with no cluster-wide
+              privilege. Created if missing; "public" is taken over from its
+              default owner instead.
+            '';
+          };
+        };
+      });
+      default = { };
+      example = {
+        website.passwordSecret = "website/db-password";
+      };
+      description = ''
+        Unprivileged login roles for the applications on this box, reconciled on
+        every activation — so a rotated password or a freshly restored cluster
+        converges on the next switch, not only on an empty data directory.
+
+        Each role is created and then explicitly held to
+        `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, granted
+        `CONNECT`/`TEMPORARY` on its one database with `PUBLIC` revoked, and made
+        owner of its schema. That is DDL and DML on its own data and nothing
+        else: it cannot reach another database, add extensions, create roles,
+        bypass row-level security, or open a replication stream.
+
+        Point applications at one of these instead of at the `user` option: that
+        one names the cluster SUPERUSER the container image creates on first
+        boot, and it stays reserved for administration and for the
+        `pg_basebackup` chain, which genuinely needs `REPLICATION`.
+
+        NOTE: a non-superuser role cannot `CREATE EXTENSION`, so declare
+        extensions in `portablevps.postgres.extensions` rather than in an
+        application migration.
+      '';
+    };
+
     serviceName = lib.mkOption {
       type = lib.types.str;
       default = "postgres.service";
@@ -136,7 +252,8 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
     # Quadlet unit for the PostgreSQL 18 container, rendered from the options
     # above so a consumer app can claim a dedicated database/user and tune
     # max_connections.
@@ -173,6 +290,81 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.dataRoot} 0755 root root -"
     ];
+
+    assertions =
+      map
+        (role: {
+          assertion = role.name != cfg.user;
+          message = ''
+            portablevps.postgres.appRoles.${role.name} has the same name as
+            portablevps.postgres.user, which is the cluster SUPERUSER the
+            container image creates. Give the application its own role name (the
+            point of an app role is that it is not that one).
+          '';
+        })
+        appRoleList
+      ++ map
+        (role: {
+          assertion =
+            (appRoleDatabase role) == cfg.database
+            || lib.elem (appRoleDatabase role) cfg.extraDatabases;
+          message = ''
+            portablevps.postgres.appRoles.${role.name}.database is
+            "${appRoleDatabase role}", which this cluster does not create. Use
+            portablevps.postgres.database ("${cfg.database}") or one of
+            extraDatabases (${lib.concatStringsSep ", " cfg.extraDatabases}).
+          '';
+        })
+        appRoleList;
+
+    # The role's password is a secret this module consumes but never renders into
+    # a template: the unit reads the file at activation.
+    sops.secrets = lib.mkIf (hasAppRoles && !prototype)
+      (lib.genAttrs (lib.unique (map (role: role.passwordSecret) appRoleList)) (_: { }));
+
+    systemd.services.portablevps-postgres-app-roles = lib.mkIf hasAppRoles {
+      description = "Reconcile unprivileged PostgreSQL application roles";
+      after = [ cfg.serviceName ];
+      wants = [ cfg.serviceName ];
+      # Ordered before apps.target so a first boot normally has the role in place
+      # by the time an app container starts. Containers are WantedBy the target
+      # rather than After this unit, so a slow reconcile can still lose the race —
+      # app containers are Restart=always, which covers that.
+      wantedBy = lib.optional (!config.portablevps.restoreMode) "apps.target";
+      before = lib.optional (!config.portablevps.restoreMode) "apps.target";
+      unitConfig.ConditionPathExists = "!/run/portablevps/restore-mode";
+      path = [ postgresPkgs.postgresql_18 pkgs.coreutils ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        # Connects as the cluster superuser: PGUSER/PGPASSWORD come from here.
+        EnvironmentFile = [ "/etc/portablevps/postgres.env" ];
+      };
+      script = ''
+        set -euo pipefail
+        export PGHOST=127.0.0.1
+        export PGPORT=5432
+
+        for _ in $(seq 1 60); do
+          if pg_isready -q; then
+            break
+          fi
+          sleep 1
+        done
+
+        if ! pg_isready -q; then
+          echo "error: PostgreSQL is not ready" >&2
+          exit 70
+        fi
+
+        ${lib.concatMapStringsSep "\n" (role: ''
+          PORTABLEVPS_APP_ROLE_PASSWORD="$(cat ${appRolePasswordFile role})" \
+            PGDATABASE=${lib.escapeShellArg (appRoleDatabase role)} \
+            psql --no-psqlrc --quiet --file=${appRoleSql role}
+          echo "app role ${role.name}: reconciled on ${appRoleDatabase role} (schema ${role.schema})"
+        '') appRoleList}
+      '';
+    };
 
     portablevps.serviceExposure.services.postgres.netbird.tcp = [
       {
@@ -331,5 +523,18 @@ in
         tar -C "$combined_dir" -cf - . | tar -C "$POSTGRES_DATA_DIR" -xf -
       '';
     };
-  };
+    }
+
+    # Prototype/local-VM mode has no sops, so the app role's password comes from
+    # a fixed file instead. Separate mkMerge branch because the block above
+    # already defines environment.etc for the Quadlet unit.
+    (lib.mkIf (hasAppRoles && prototype) {
+      environment.etc = lib.listToAttrs (map
+        (role: {
+          name = "portablevps/postgres-app-role-${role.name}.pw";
+          value = { mode = "0400"; text = "demo-password\n"; };
+        })
+        appRoleList);
+    })
+  ]);
 }

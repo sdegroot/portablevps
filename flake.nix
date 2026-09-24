@@ -82,11 +82,67 @@
               }
             ];
           };
+          # An app role on a prototype host (no sops), so the check needs no
+          # secrets: it proves the reconcile script is valid shell, that the
+          # generated SQL carries the privilege stripping, and that the password
+          # never lands in the world-readable store.
+          appRolesConfig = nixpkgs.lib.nixosSystem {
+            inherit system;
+            specialArgs = {
+              postgresPkgs = pkgs;
+              netbirdPkgs = pkgs;
+            };
+            modules = [
+              sops-nix.nixosModules.sops
+              ./modules/system/restore-mode.nix
+              ./modules/system/secrets.nix
+              ./modules/system/backups.nix
+              ./modules/networking/service-exposure.nix
+              ./modules/services/postgres
+              {
+                system.stateVersion = "25.05";
+                portablevps.secrets.allowPrototypeDefaults = true;
+                portablevps.postgres = {
+                  database = "website";
+                  user = "website_admin";
+                  appRoles.website.passwordSecret = "website/db-password";
+                };
+              }
+            ];
+          };
         in
         {
           restore-mode = import ./tests/vm/restore-mode.nix {
             inherit pkgs;
           };
+
+          postgres-app-roles = pkgs.runCommand "portablevps-postgres-app-roles-check"
+            {
+              script = appRolesConfig.config.systemd.services.portablevps-postgres-app-roles.script;
+            } ''
+            ${pkgs.bash}/bin/bash -n -c "$script"
+
+            sql="$(printf '%s' "$script" \
+              | ${pkgs.gnugrep}/bin/grep -o '/nix/store/[^ ]*-portablevps-postgres-app-role-website\.sql')"
+            test -r "$sql"
+
+            # The privilege stripping IS the contract, so assert it.
+            for clause in NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; do
+              ${pkgs.gnugrep}/bin/grep -q "$clause" "$sql" \
+                || { echo "app role SQL is missing $clause" >&2; exit 1; }
+            done
+            ${pkgs.gnugrep}/bin/grep -q 'REVOKE ALL ON DATABASE "website" FROM PUBLIC' "$sql"
+            ${pkgs.gnugrep}/bin/grep -q 'ALTER SCHEMA public OWNER TO "website"' "$sql"
+
+            # The password must reach psql through the environment, not the store.
+            ${pkgs.gnugrep}/bin/grep -q 'getenv pw PORTABLEVPS_APP_ROLE_PASSWORD' "$sql"
+            if ${pkgs.gnugrep}/bin/grep -q 'demo-password' "$sql"; then
+              echo "app role SQL embeds a password literal" >&2
+              exit 1
+            fi
+            touch "$out"
+          '';
+
           immutability-probe = pkgs.runCommand "portablevps-immutability-probe-check" { } ''
             ${pkgs.bash}/bin/bash -n -c ${
               nixpkgs.lib.escapeShellArg
