@@ -297,6 +297,49 @@ func TestRestoreDrillUsesProductionServiceAndVerifiesAllDeclaredState(t *testing
 	}
 }
 
+func TestRestoreDrillGuardsRestoreHostBackupsBeforeFinalize(t *testing.T) {
+	host := &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d": "yes\n",
+		"paths.d/postgres; then echo yes":       "yes\n",
+	}}
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	guard := strings.Index(sequence, "'svc' | sudo tee "+restoreDrillGuardFile)
+	if guard < 0 {
+		t.Fatalf("drill did not mark the restore host with the drilled server: %s", sequence)
+	}
+	// Must land before the restore host starts Server's apps (and, by
+	// construction, before the finalize switch arms its backup timers).
+	if start := strings.Index(sequence, "systemctl start apps.target"); start < 0 || guard > start {
+		t.Fatalf("guard must be written before finalize: %s", sequence)
+	}
+	if strings.Contains(sequence, "rm -f "+restoreDrillGuardFile) {
+		t.Fatalf("drill must not clear its own guard: %s", sequence)
+	}
+}
+
+func TestRestoreClearsStaleDrillGuard(t *testing.T) {
+	host := &fakeHost{}
+	err := Restore(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}},
+		RestoreOpts{Server: "svc", Host: "restore-host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence := strings.Join(host.runs, " | ")
+	if !strings.Contains(sequence, "sudo rm -f "+restoreDrillGuardFile) {
+		t.Fatalf("a real restore must clear a stale drill guard: %s", sequence)
+	}
+	if strings.Contains(sequence, "sudo tee "+restoreDrillGuardFile) {
+		t.Fatalf("a real restore must not mark the host as a drill copy: %s", sequence)
+	}
+}
+
 func TestRestoreDrillSupportsNonPostgresComponents(t *testing.T) {
 	host := &fakeHost{outputs: map[string]string{
 		"find /etc/portablevps/backups/paths.d": "yes\n",

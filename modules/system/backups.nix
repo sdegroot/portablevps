@@ -78,6 +78,23 @@ let
   # restic settings on every host.
   hasComponents = componentList != [ ];
 
+  # A restore drill leaves the restore host running THIS server's configuration
+  # (the CLI's `pvps dr --mode remote`). Its backup timers are Persistent, so
+  # they fire within seconds of the drill's finalize switch and would write the
+  # restored copy into this server's repository. The CLI writes the drilled
+  # server's name to the guard file (RestoreOpts.Drill); these units skip while
+  # it names this server. A switch back to the host's own config changes the
+  # name, which disarms the guard, and a real restore removes the file.
+  serverName = lib.attrByPath [ "portablevps" "server" "name" ] config.networking.hostName config;
+  restoreDrillGuard = pkgs.writeShellScript "portablevps-restore-drill-guard" ''
+    guard="''${PORTABLEVPS_RESTORE_DRILL_GUARD:-/var/lib/portablevps/restore-drill-host}"
+    if [ -r "$guard" ] && [ "$(${pkgs.coreutils}/bin/head -n1 "$guard")" = ${lib.escapeShellArg serverName} ]; then
+      echo "skipping: this host is a restore-drill copy of ${serverName} ($guard); a backup would write into ${serverName}'s repository" >&2
+      exit 1
+    fi
+    exit 0
+  '';
+
   hookFile = hookDirName: hookOptionName: component:
     let
       # Zero-pad the order so the lexicographic `sort` in backup.sh/restore.sh
@@ -329,6 +346,7 @@ in
         # Self-initialise the restic repository on first run (idempotent), so
         # backups just work on a freshly installed host without a manual
         # `restic init` step — the same on cloud and local.
+        ExecCondition = "${restoreDrillGuard}";
         ExecStartPre = "/run/current-system/sw/bin/init-backup-repo.sh";
         ExecStart = "${pkgs.util-linux}/bin/flock -w 900 /run/lock/portablevps-backups.lock /run/current-system/sw/bin/backup.sh";
       };
@@ -346,6 +364,7 @@ in
       description = "Apply restic retention policy and verify repository integrity";
       serviceConfig = {
         Type = "oneshot";
+        ExecCondition = "${restoreDrillGuard}";
         EnvironmentFile = [
           "/etc/portablevps/restic.env"
         ];
@@ -387,6 +406,7 @@ in
         path = [ pkgs.awscli2 pkgs.coreutils pkgs.gnugrep ];
         serviceConfig = {
           Type = "oneshot";
+          ExecCondition = "${restoreDrillGuard}";
           EnvironmentFile = [ "/etc/portablevps/restic.env" ];
         };
         script = ''

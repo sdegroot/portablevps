@@ -301,7 +301,19 @@ type RestoreOpts struct {
 	Server string
 	Host   string
 	Marker string
+	// Drill marks the host as a restore-drill copy of Server before it is
+	// switched to Server's normal configuration. That configuration arms
+	// Server's backup timers; they are Persistent, so the first run fires within
+	// seconds of the finalize switch and would write the restored copy into the
+	// SOURCE's backup repository. The guard file makes the backup units skip
+	// themselves for as long as the host runs Server's configuration.
+	Drill bool
 }
+
+// restoreDrillGuardFile is read by the backup units' ExecCondition
+// (modules/system/backups.nix): when it names the host's own server, backups,
+// maintenance and the immutability probe skip themselves.
+const restoreDrillGuardFile = "/var/lib/portablevps/restore-drill-host"
 
 // Restore brings a service up on an already-installed host from its backup
 // repository: put the host in restore mode, run restore.sh, switch to normal,
@@ -315,6 +327,20 @@ func Restore(env ServiceEnv, o RestoreOpts) error {
 	}
 	if _, err := env.Host.Run(o.Host, `test "$(cat /etc/portablevps/restore-mode)" = true`); err != nil {
 		return provisionErr(71, "%s is not in restore mode: %v", o.Host, err)
+	}
+	// Set (drill) or clear (real restore) the guard while the host is still in
+	// restore mode, i.e. before any backup timer of Server's config is armed.
+	// Clearing on a real restore means a guard left by an earlier drill on the
+	// same box can never silence a genuinely recovered server's backups.
+	if o.Drill {
+		if _, err := env.Host.Run(o.Host, "sudo mkdir -p /var/lib/portablevps && printf '%s\\n' "+shellQuote(o.Server)+" | sudo tee "+restoreDrillGuardFile+" >/dev/null"); err != nil {
+			return provisionErr(70, "marking %s as a restore-drill host: %v", o.Host, err)
+		}
+		report("prepare", "info", "backups disabled on "+o.Host+" while it runs "+o.Server+"'s configuration (drill)")
+	} else {
+		if _, err := env.Host.Run(o.Host, "sudo rm -f "+restoreDrillGuardFile); err != nil {
+			return provisionErr(70, "clearing restore-drill guard on %s: %v", o.Host, err)
+		}
 	}
 
 	report("restore", "run", "restoring the backup onto "+o.Host)
@@ -569,7 +595,7 @@ func RestoreDrill(env ServiceEnv, o DrillOpts) (marker string, err error) {
 	if hasPostgres {
 		restoreMarker = marker
 	}
-	if err := Restore(env, RestoreOpts{Server: o.Server, Host: o.RestoreHost, Marker: restoreMarker}); err != nil {
+	if err := Restore(env, RestoreOpts{Server: o.Server, Host: o.RestoreHost, Marker: restoreMarker, Drill: true}); err != nil {
 		return marker, err
 	}
 	report("verify", "run", "verifying all declared state on "+o.RestoreHost)
