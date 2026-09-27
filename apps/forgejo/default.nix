@@ -87,6 +87,39 @@ let
     ) + "\n";
 
   oauthEnabled = cfg.oidc.enable && cfg.oidc.issuerBaseUrl != "";
+  # Always passed (empty values included) so that UNSETTING an option also
+  # clears it on update-oauth, instead of leaving the old value in the source.
+  oidcGroupFlags = lib.concatStringsSep " " [
+    "--group-claim-name ${lib.escapeShellArg cfg.oidc.groupClaimName}"
+    "--admin-group ${lib.escapeShellArg cfg.oidc.adminGroup}"
+    "--restricted-group ${lib.escapeShellArg cfg.oidc.restrictedGroup}"
+    "--group-team-map ${lib.escapeShellArg (if cfg.oidc.groupTeamMap == { } then "" else builtins.toJSON cfg.oidc.groupTeamMap)}"
+    "--group-team-map-removal=${lib.boolToString cfg.oidc.groupTeamMapRemoval}"
+  ];
+  adminPasswordFile =
+    if prototype
+    then pkgs.writeText "forgejo-demo-admin-password" (demoSecret cfg.admin.passwordSecret)
+    else config.sops.secrets.${cfg.admin.passwordSecret}.path;
+  provisionOrgs = pkgs.writeShellApplication {
+    name = "forgejo-provision-orgs";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.gnused pkgs.jq ];
+    text = builtins.readFile ./provision-orgs.sh;
+  };
+  organizationsJson = pkgs.writeText "forgejo-organizations.json" (builtins.toJSON (lib.mapAttrs
+    (_: org: {
+      full_name = org.fullName;
+      inherit (org) description visibility;
+      teams = lib.mapAttrs
+        (_: team: {
+          inherit (team) description;
+          units_map = team.units;
+          units = lib.attrNames team.units;
+          includes_all_repositories = team.includesAllRepositories;
+          can_create_org_repo = team.canCreateOrgRepo;
+        })
+        org.teams;
+    })
+    cfg.organizations));
   oidcAutoRegister = cfg.oidc.enable && cfg.oidc.autoRegister;
   forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
   disabledOpenSshServicePath = "/run/portablevps/forgejo-disabled-openssh-s6";
@@ -290,6 +323,111 @@ in
         default = [ "openid" "email" "profile" "groups" ];
         description = "OIDC scopes requested by Forgejo.";
       };
+      groupClaimName = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "groups";
+        description = ''
+          Claim carrying the user's group names. Required by adminGroup,
+          restrictedGroup and groupTeamMap; empty disables group handling.
+        '';
+      };
+      adminGroup = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = ''
+          Group whose members become Forgejo site admins at login. When set,
+          Forgejo also REVOKES site admin from SSO users outside the group on
+          their next login, so the IdP becomes the only source of admin rights.
+        '';
+      };
+      restrictedGroup = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = ''
+          Group whose members are marked restricted at login (and non-members
+          unrestricted). Leave empty to keep service.DEFAULT_USER_IS_RESTRICTED
+          as the only source of the restricted flag.
+        '';
+      };
+      groupTeamMap = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf (lib.types.listOf lib.types.str));
+        default = { };
+        example = { forgejo_acme_developers = { acme = [ "developers" ]; }; };
+        description = ''
+          IdP group -> { org -> [ team ] }. Members are added to those teams at
+          every login. The teams must exist (see organizations).
+        '';
+      };
+      groupTeamMapRemoval = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Remove team memberships covered by groupTeamMap when the user no longer
+          has the group, so revoking in the IdP revokes in Forgejo at next login.
+        '';
+      };
+    };
+
+    organizations = lib.mkOption {
+      default = { };
+      description = ''
+        Organizations and teams created (or updated) by forgejo-provision
+        through the API as the break-glass admin. Declarative in the additive
+        sense: declared orgs/teams are upserted, anything else is left alone.
+        Repository<->team assignment is not managed here.
+      '';
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          fullName = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Display name.";
+          };
+          description = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Organization description.";
+          };
+          visibility = lib.mkOption {
+            type = lib.types.enum [ "public" "limited" "private" ];
+            default = "private";
+            description = "Organization visibility.";
+          };
+          teams = lib.mkOption {
+            default = { };
+            description = "Teams in this organization (the built-in Owners team is left alone).";
+            type = lib.types.attrsOf (lib.types.submodule {
+              options = {
+                description = lib.mkOption {
+                  type = lib.types.str;
+                  default = "";
+                  description = "Team description.";
+                };
+                units = lib.mkOption {
+                  type = lib.types.attrsOf (lib.types.enum [ "none" "read" "write" "admin" ]);
+                  example = { "repo.code" = "write"; "repo.pulls" = "write"; };
+                  description = ''
+                    Per-unit access (Forgejo units_map): repo.code, repo.issues,
+                    repo.pulls, repo.releases, repo.wiki, repo.ext_wiki,
+                    repo.ext_issues, repo.projects, repo.packages, repo.actions.
+                  '';
+                };
+                includesAllRepositories = lib.mkOption {
+                  type = lib.types.bool;
+                  default = false;
+                  description = "Grant the team every repository in the org (otherwise repos are added explicitly).";
+                };
+                canCreateOrgRepo = lib.mkOption {
+                  type = lib.types.bool;
+                  default = false;
+                  description = "Whether members may create repositories in the org.";
+                };
+              };
+            });
+          };
+        };
+      });
     };
 
     actions.enable = lib.mkOption {
@@ -372,7 +510,7 @@ in
             sleep 1
           done
 
-          admin_password="$(${pkgs.coreutils}/bin/tr -d '\n' < ${if prototype then pkgs.writeText "forgejo-demo-admin-password" (demoSecret cfg.admin.passwordSecret) else config.sops.secrets.${cfg.admin.passwordSecret}.path})"
+          admin_password="$(${pkgs.coreutils}/bin/tr -d '\n' < ${adminPasswordFile})"
           # Exact match on the Username column ($2), not a substring search of the
           # whole table — a loose `grep admin` also matches "akadmin" (Authentik's
           # SSO superuser) or the email column, wrongly taking the change-password
@@ -404,7 +542,8 @@ in
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
               --secret "$oauth_secret" \
               --auto-discover-url "$auth_discover_url" \
-              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)}
+              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} \
+              ${oidcGroupFlags}
           else
             ${forgejoCli} admin auth add-oauth \
               --name ${lib.escapeShellArg cfg.oidc.name} \
@@ -412,8 +551,16 @@ in
               --key ${lib.escapeShellArg cfg.oidc.clientId} \
               --secret "$oauth_secret" \
               --auto-discover-url "$auth_discover_url" \
-              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)}
+              --scopes ${lib.escapeShellArg (lib.concatStringsSep "," cfg.oidc.scopes)} \
+              ${oidcGroupFlags}
           fi
+        '' + lib.optionalString (cfg.organizations != { }) ''
+
+          FORGEJO_API=${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1"} \
+          FORGEJO_ADMIN_USER=${lib.escapeShellArg cfg.admin.username} \
+          FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
+          FORGEJO_ORGS_JSON=${organizationsJson} \
+            ${provisionOrgs}/bin/forgejo-provision-orgs
         '';
       };
 
