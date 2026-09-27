@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Forgejo can take its roles from the identity provider.** New
+  `portablevps.apps.forgejo.oidc.{groupClaimName,adminGroup,restrictedGroup,groupTeamMap,groupTeamMapRemoval}`
+  are passed to the OAuth2 login source, so an IdP group can make someone a
+  site admin or put them in an org team at every login, and with removal on,
+  taking the group away in the IdP takes the team away at the next login. Setting
+  `adminGroup` also revokes site admin from SSO users outside the group. The
+  flags are always passed, empty values included, so that unsetting an option
+  also clears it on `update-oauth` instead of leaving the old value behind.
+
+  The teams a map points at have to exist, so the new
+  `portablevps.apps.forgejo.organizations.<org>.teams.<team>` declares them:
+  visibility, per-unit access (`units_map`: code, issues, pulls, releases,
+  packages, actions, …), "all repositories" and "may create repos".
+  `forgejo-provision` upserts them through the API as the break-glass admin
+  (`apps/forgejo/provision-orgs.sh`). The password goes to curl through a 0600
+  config file, not argv. It is additive: undeclared orgs and teams are never
+  deleted, and assigning repositories to teams is left to the operator. Tested
+  against Forgejo 15.0.4 with the password form hidden: a first run creates, a
+  second run is a no-op, and a changed unit or description is patched.
+
 - **Applications no longer have to connect to PostgreSQL as the cluster
   superuser.** `portablevps.postgres.user` names the role the container image
   creates on first boot, and that role is the superuser: it can read every
