@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Forgejo 16.0.5 and Forgejo Runner 13 are the new defaults** (were 15.0.4
+  and 12). The upgrade was rehearsed on PostgreSQL 18:
+  - 15.0.4 was provisioned like production (orgs and teams through
+    `provision-orgs.sh`, an OIDC source with group mapping, a private repo),
+    then swapped to 16.0.5 on the same data.
+  - The migrations ran cleanly and everything survived.
+  - Anonymous access is still refused.
+  - Re-provisioning is a no-op.
+  - All the CLI commands `forgejo-provision` uses still work:
+    `change-password --must-change-password=false`, `update-oauth` with the
+    group flags, `generate-runner-token`, `generate-access-token`.
+  - Runner v13.2.0 registers against 16.0.5.
+
+  Upgrade notes:
+  - **Forgejo 16:** the Docker image no longer defaults
+    `REVERSE_PROXY_TRUSTED_PROXIES` to `*`. That only matters for
+    reverse-proxy authentication; the proxy here reaches Forgejo from
+    loopback. 16 also adds a cancel-run API
+    (`POST /repos/{owner}/{repo}/actions/runs/{id}/cancel`) and job-log
+    download.
+  - **Runner 13:** requires Docker ≥ 25 (the DinD sidecar is 28), and drops
+    `container.network_mode` (the module uses `container.network`) and the
+    `GITEA_*` environment variables (unused).
+  - **Runner 13 is stricter about workflows.** Invalid expressions and invalid
+    matrices now fail the job, and `::set-output`, `::add-path` and
+    `::set-env` are gone; use `$FORGEJO_OUTPUT`, `$FORGEJO_PATH` and
+    `$FORGEJO_ENV`.
 - **Restore drills no longer let the restore host back up into the source's
   repository.** `pvps dr --mode remote` leaves the restore host running the
   source's configuration, including its backup timers. Those timers are
