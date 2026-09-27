@@ -523,9 +523,14 @@ in
               --email ${lib.escapeShellArg cfg.admin.email} \
               --must-change-password=false
           else
+            # change-password defaults to --must-change-password=true, which
+            # makes Forgejo answer every API call as this user with 403 ("You
+            # must change your password") and forces a change at the next
+            # break-glass login. The password is managed in sops, so never.
             ${forgejoCli} admin user change-password \
               --username ${lib.escapeShellArg cfg.admin.username} \
-              --password "$admin_password"
+              --password "$admin_password" \
+              --must-change-password=false
           fi
         '' + lib.optionalString oauthEnabled ''
 
