@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Fix: Forgejo's break-glass admin is no longer forced to change its
+  password on every deploy.** `forgejo-provision` re-applied the sops password
+  with `forgejo admin user change-password`, which defaults to
+  `--must-change-password=true`. Forgejo then answered every API call as that
+  user with 403 ("You must change your password"), which broke the new org and
+  team provisioning on its first real deploy. It also meant a break-glass login
+  demanded a new password first. It now passes `--must-change-password=false`,
+  reproduced and verified against Forgejo 15.0.4.
+
 - **Forgejo can take its roles from the identity provider.** New
   `portablevps.apps.forgejo.oidc.{groupClaimName,adminGroup,restrictedGroup,groupTeamMap,groupTeamMapRemoval}`
   are passed to the OAuth2 login source, so an IdP group can make someone a
