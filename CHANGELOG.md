@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Restore drills no longer let the restore host back up into the source's
+  repository.** `pvps dr --mode remote` leaves the restore host running the
+  source's configuration, including its backup timers. Those timers are
+  `Persistent`, so they fired within seconds of the drill's finalize switch,
+  before PASS. On the Epistola Forgejo drill (2026-09-27) the spare's backup
+  had computed a PostgreSQL incremental and was inside restic when it was
+  stopped by hand.
+
+  Now `RestoreOpts.Drill` makes the drill write the drilled server's name to
+  `/var/lib/portablevps/restore-drill-host` while the host is still in restore
+  mode, before any timer is armed. `portablevps-backup`, `-maintenance` and the
+  immutability probe gain an `ExecCondition` that skips the run while that file
+  names the host's own `portablevps.server.name`.
+
+  The guard disarms itself when the spare is switched back to its own
+  configuration, because the name no longer matches. A real restore
+  (`service restore`) deletes the file at the same step, so a guard left by an
+  earlier drill can never silence a genuinely recovered server.
+
+  Tested in two places:
+  - Go unit tests cover guard-before-finalize and clear-on-real-restore.
+  - The generated guard script, taken from an evaluated host, skips only for
+    its own name, and runs with no file, another server's name, or an empty
+    file.
+
 - **Fix: Forgejo's break-glass admin is no longer forced to change its
   password on every deploy.** `forgejo-provision` re-applied the sops password
   with `forgejo admin user change-password`, which defaults to
