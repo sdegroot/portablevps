@@ -38,7 +38,7 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "data.forgejo.org/forgejo/runner:12";
+      default = "data.forgejo.org/forgejo/runner:13";
       description = "Forgejo runner container image.";
     };
 
