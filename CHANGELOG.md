@@ -46,6 +46,12 @@
 
   The three scripts are shellcheck-clean.
 
+  Documented in `docs/forgejo-upstream-copies.md` (configuration, sync and hook
+  rules, the developer workflow, provisioning, removal and limitations). The
+  design is in ADR 0005. A runbook entry, "Forgejo Upstream Copy Sync Failing",
+  covers the rest; its recovery for a deliberate upstream rewrite was run
+  against the test instance.
+
 - **Fix: `server adopt --password` now reaches the password prompt.** The
   password bootstrap ran `sshpass ssh …` without restricting authentication.
   So ssh first offered every key the agent holds, including an `IdentityAgent`
