@@ -137,9 +137,26 @@ let
           includes_all_repositories = team.includesAllRepositories;
           can_create_org_repo = team.canCreateOrgRepo;
         })
-        org.teams;
+        org.teams
+      // lib.optionalAttrs org.packagePublisher.enable {
+        package-publishers = {
+          description = "Publishes this organization's packages (and nothing else). Members: the package-publishing bot.";
+          units_map = { "repo.packages" = "write"; };
+          units = [ "repo.packages" ];
+          includes_all_repositories = true;
+          can_create_org_repo = false;
+        };
+      };
     })
     cfg.organizations));
+  packagePublishers = lib.filterAttrs (_: org: org.packagePublisher.enable) cfg.organizations;
+  packagePublishersJson = pkgs.writeText "forgejo-package-publishers.json" (builtins.toJSON
+    (lib.mapAttrs (_: org: { inherit (org.packagePublisher) username secretName userVariable; }) packagePublishers));
+  provisionPackagePublishers = pkgs.writeShellApplication {
+    name = "forgejo-provision-package-publishers";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.jq ];
+    text = builtins.readFile ./provision-package-publishers.sh;
+  };
   oidcAutoRegister = cfg.oidc.enable && cfg.oidc.autoRegister;
   forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
   disabledOpenSshServicePath = "/run/portablevps/forgejo-disabled-openssh-s6";
@@ -397,8 +414,35 @@ in
         sense: declared orgs/teams are upserted, anything else is left alone.
         Repository<->team assignment is not managed here.
       '';
-      type = lib.types.attrsOf (lib.types.submodule {
+      type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
         options = {
+          packagePublisher = {
+            enable = lib.mkEnableOption ''
+              a package-publishing bot for this organization. forgejo-provision
+              creates a local account that may only publish packages here (team
+              "package-publishers", unit repo.packages = write), issues it a
+              write:package token, and stores that token as an organization
+              Actions secret and the account name as an organization Actions
+              variable, so every workflow in the org can publish with
+              ''${{ secrets.<secretName> }} and ''${{ vars.<userVariable> }}.
+              (Forgejo's automatic job token cannot publish packages.)
+            '';
+            username = lib.mkOption {
+              type = lib.types.str;
+              default = "${name}-packages";
+              description = "Local Forgejo account of the bot (no SSO, no known password).";
+            };
+            secretName = lib.mkOption {
+              type = lib.types.str;
+              default = "PACKAGES_TOKEN";
+              description = "Organization Actions secret holding the bot's token.";
+            };
+            userVariable = lib.mkOption {
+              type = lib.types.str;
+              default = "PACKAGES_USER";
+              description = "Organization Actions variable holding the bot's username (the registry login).";
+            };
+          };
           fullName = lib.mkOption {
             type = lib.types.str;
             default = "";
@@ -447,7 +491,7 @@ in
             });
           };
         };
-      });
+      }));
     };
 
     upstreamCopies = lib.mkOption {
@@ -639,6 +683,15 @@ in
           FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
           FORGEJO_ORGS_JSON=${organizationsJson} \
             ${provisionOrgs}/bin/forgejo-provision-orgs
+        '' + lib.optionalString (packagePublishers != { }) ''
+
+          FORGEJO_API=${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1"} \
+          FORGEJO_ADMIN_USER=${lib.escapeShellArg cfg.admin.username} \
+          FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
+          FORGEJO_CLI=${lib.escapeShellArg forgejoCli} \
+          PUBLISHERS_JSON=${packagePublishersJson} \
+          PUBLISHER_STATE_DIR=/var/lib/portablevps/forgejo-package-publishers \
+            ${provisionPackagePublishers}/bin/forgejo-provision-package-publishers
         '' + lib.optionalString (cfg.upstreamCopies != { }) ''
 
           FORGEJO_API=${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1"} \

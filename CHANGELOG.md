@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Forgejo package publishers: CI can publish packages.** Forgejo's
+  automatic Actions token can't publish packages, and Forgejo has no
+  `permissions: packages: write`. New
+  `portablevps.apps.forgejo.organizations.<org>.packagePublisher.enable`
+  gives the org a local bot (`<org>-packages`) in a `package-publishers` team
+  that only grants `repo.packages` = write.
+  - **Token:** the bot's `write:package` token lives in
+    `/var/lib/portablevps/forgejo-package-publishers` (not backed up). It is
+    re-issued only when missing or invalid.
+  - **Org Actions:** the token is written to the org's secrets as
+    `PACKAGES_TOKEN`, and the bot's name to its variables as
+    `PACKAGES_USER`, on every run, so both self-heal.
+  - **Tested against Forgejo 16.0.5:**
+    - provisioning, then publishing with the token (201);
+    - an idempotent re-run, with the token unchanged;
+    - a deleted secret restored;
+    - a corrupted token re-issued and working;
+    - the bot refused on another org (401) and unable to read the org's repos.
+  - **Docs:** `docs/forgejo-package-registry.md` (registry addresses, the bot,
+    workflow examples for Docker, npm and Maven, limitations).
+
 - **Forgejo upstream copies: a repository that follows an upstream and can
   still carry private branches.** New
   `portablevps.apps.forgejo.upstreamCopies."<owner>/<repo>" = { upstream; privatePrefix ? "internal/"; }`,
