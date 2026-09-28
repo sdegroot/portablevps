@@ -284,6 +284,35 @@ func runInstall(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serve
 	return nil
 }
 
+// passwordOnlySSHOptions make a password bootstrap actually reach the password
+// prompt. Without them ssh first offers every key the agent (or an
+// `IdentityAgent` in ~/.ssh/config, such as 1Password's) holds; with more than
+// the server's MaxAuthTries (6 by default) keys, sshd disconnects with "Too many
+// authentication failures" before the password is ever tried.
+var passwordOnlySSHOptions = []string{
+	"-o", "PubkeyAuthentication=no",
+	"-o", "IdentityAgent=none",
+	"-o", "IdentitiesOnly=yes",
+	"-o", "PreferredAuthentications=password,keyboard-interactive",
+}
+
+// bootstrapCommand builds the one-off SSH invocation for bootstrapAdminKey:
+// sshpass with password-only authentication, an explicit initial key, or the
+// agent/default identities.
+func bootstrapCommand(password bool, initialKey string, sshOpts []string, target, remote string) (string, []string) {
+	switch {
+	case password:
+		args := append([]string{"-e", "ssh"}, passwordOnlySSHOptions...)
+		args = append(args, sshOpts...)
+		return "sshpass", append(args, target, remote)
+	case initialKey != "":
+		args := append([]string{"-i", initialKey, "-o", "IdentitiesOnly=yes"}, sshOpts...)
+		return "ssh", append(args, target, remote)
+	default: // agent / default
+		return "ssh", append(append([]string{}, sshOpts...), target, remote)
+	}
+}
+
 // bootstrapAdminKey installs the admin public key onto login_user@host over a
 // one-off credential (initial key, agent, or password).
 func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, prog *output.Progress) error {
@@ -317,20 +346,15 @@ func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, p
 			"-o", "UserKnownHostsFile="+hostKeyFile)
 	}
 
-	var c *exec.Cmd
-	switch {
-	case pf.password != "":
-		pw := resolveSecretRef(ctx, pf.password)
-		args := append([]string{"-e", "ssh"}, sshOpts...)
-		c = exec.Command("sshpass", append(args, target, remote)...)
-		c.Env = append(os.Environ(), "SSHPASS="+pw)
-	case pf.initialKey != "":
-		args := append([]string{"-i", repoRelOrAbs(ctx.RepoRoot, pf.initialKey), "-o", "IdentitiesOnly=yes"}, sshOpts...)
-		c = exec.Command("ssh", append(args, target, remote)...)
-		c.Env = os.Environ()
-	default: // agent / default
-		c = exec.Command("ssh", append(sshOpts, target, remote)...)
-		c.Env = os.Environ()
+	initialKey := ""
+	if pf.initialKey != "" {
+		initialKey = repoRelOrAbs(ctx.RepoRoot, pf.initialKey)
+	}
+	name, args := bootstrapCommand(pf.password != "", initialKey, sshOpts, target, remote)
+	c := exec.Command(name, args...)
+	c.Env = os.Environ()
+	if pf.password != "" {
+		c.Env = append(c.Env, "SSHPASS="+resolveSecretRef(ctx, pf.password))
 	}
 	c.Stdin = strings.NewReader(strings.TrimSpace(string(pub)) + "\n")
 	c.Stderr = os.Stderr

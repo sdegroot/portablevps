@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Fix: `server adopt --password` now reaches the password prompt.** The
+  password bootstrap ran `sshpass ssh …` without restricting authentication.
+  So ssh first offered every key the agent holds, including an `IdentityAgent`
+  set in `~/.ssh/config` such as 1Password's. With more keys than the host's
+  `MaxAuthTries` (6), sshd disconnected with "Too many authentication failures"
+  before the password was tried, which made adopt unusable for anyone with a
+  well-stocked agent. Observed adopting a fresh Leaseweb VPS on 2026-09-28.
+
+  The password path now passes `PubkeyAuthentication=no`, `IdentityAgent=none`,
+  `IdentitiesOnly=yes` and
+  `PreferredAuthentications=password,keyboard-interactive` ahead of the other
+  options; ssh takes the first value it sees. The initial-key and agent paths
+  are unchanged. Unit tests cover both.
+
 - **Runner jobs find the Docker daemon without per-workflow configuration.**
   New `portablevps.apps.forgejoRunner.jobEnv` sets environment variables in
   every job (the runner's `runner.envs`).
