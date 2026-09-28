@@ -804,3 +804,67 @@ The deploy machine is part of the disaster recovery story. Everything under
 Treat the age key and admin SSH key as the control-plane equivalents of the
 backup repository: a laptop loss without off-machine copies of those two
 files turns a routine host move into a full secrets rotation.
+
+## Forgejo Upstream Copy Sync Failing
+
+Upstream copies (`portablevps.apps.forgejo.upstreamCopies`, see
+[the guide](forgejo-upstream-copies.md)) are kept current by
+`forgejo-upstream-sync`. When it fails, the copies stop following upstream.
+Private branches and everything else on Forgejo are unaffected.
+
+Look at the last runs on the Forgejo host:
+
+```sh
+systemctl status forgejo-upstream-sync.service forgejo-upstream-sync.timer
+sudo journalctl -u forgejo-upstream-sync -n 100 --no-pager
+```
+
+Each copy logs `<owner>/<repo>: pushing N ref update(s)` or
+`<owner>/<repo>: sync FAILED`. Find the cause in the lines above the failure.
+
+**Upstream rewrote its default branch, or moved a tag.** The log shows
+`! [rejected] refs/up/heads/main -> main (non-fast-forward)`, or for a tag
+`(already exists)`. The sync refuses on purpose: someone may have built on the
+old history. Every other ref of that copy is still being updated.
+
+- **If the rewrite upstream was deliberate,** make the copy follow it once, as
+  root on the Forgejo host. Adjust owner/repo, the branch or tag, and the
+  address if Forgejo does not listen on `127.0.0.1:3000`:
+
+  ```sh
+  cache=/var/lib/portablevps/forgejo-upstream-sync/cache/<owner>/<repo>.git
+  export GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="http.http://127.0.0.1:3000/.extraHeader" \
+    GIT_CONFIG_VALUE_0="Authorization: token $(cat /var/lib/portablevps/forgejo-upstream-sync/token)"
+  # the default branch:
+  git -C "$cache" push http://127.0.0.1:3000/<owner>/<repo>.git +refs/up/heads/main:refs/heads/main
+  # or a moved tag:
+  git -C "$cache" push http://127.0.0.1:3000/<owner>/<repo>.git +refs/up/tags/<tag>:refs/tags/<tag>
+  sudo systemctl start forgejo-upstream-sync
+  ```
+
+  The cache holds upstream's refs from the last fetch under `refs/up/`. The
+  push goes as the sync bot (its token), which is the only account the
+  `pre-receive` hook lets move these refs.
+- **If it was not deliberate** (an accident, or a compromised upstream), leave
+  the copy as it is. It is now the intact reference. Fix upstream first.
+
+**`HTTP 401` / authentication failed.** The bot's token is no longer valid, for
+example after a restore. Re-run provisioning, which issues a new token when the
+stored one fails:
+
+```sh
+sudo systemctl restart forgejo-provision.service
+```
+
+**The unit never runs.** It only starts once provisioning has written the
+token (`ConditionPathExists`), and never in restore mode. Check
+`journalctl -u forgejo-provision`; provisioning fails on purpose if an
+upstream copy is configured on top of an existing pull mirror.
+
+**Upstream unreachable.** Fetch errors (DNS, TLS, a timeout) are transient; the
+next run retries. If they persist, check the host's egress to the upstream.
+
+**"refused: … is synced from upstream".** That's not a sync failure: someone
+pushed a branch or tag outside the private prefix to the copy. That is refused
+by design. Point them at the guide.
