@@ -105,6 +105,26 @@ let
     runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.gnused pkgs.jq ];
     text = builtins.readFile ./provision-orgs.sh;
   };
+  upstreamStateDir = "/var/lib/portablevps/forgejo-upstream-sync";
+  upstreamTokenFile = "${upstreamStateDir}/token";
+  upstreamCopiesJson = pkgs.writeText "forgejo-upstream-copies.json" (builtins.toJSON (lib.mapAttrs
+    (name: copy: {
+      inherit (copy) upstream privatePrefix;
+      hook = pkgs.writeText "forgejo-upstream-copy-hook-${lib.replaceStrings [ "/" ] [ "-" ] name}"
+        (lib.replaceStrings [ "@BOT@" "@PREFIX@" ] [ cfg.upstreamSync.botUsername copy.privatePrefix ]
+          (builtins.readFile ./upstream-copy-hook.sh));
+    })
+    cfg.upstreamCopies));
+  provisionUpstreamCopies = pkgs.writeShellApplication {
+    name = "forgejo-provision-upstream-copies";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.git pkgs.gnused pkgs.jq ];
+    text = builtins.readFile ./provision-upstream-copies.sh;
+  };
+  upstreamSync = pkgs.writeShellApplication {
+    name = "forgejo-upstream-sync";
+    runtimeInputs = [ pkgs.coreutils pkgs.gawk pkgs.git pkgs.gnugrep pkgs.gnused pkgs.jq ];
+    text = builtins.readFile ./upstream-sync.sh;
+  };
   organizationsJson = pkgs.writeText "forgejo-organizations.json" (builtins.toJSON (lib.mapAttrs
     (_: org: {
       full_name = org.fullName;
@@ -430,6 +450,59 @@ in
       });
     };
 
+    upstreamCopies = lib.mkOption {
+      default = { };
+      example = lib.literalExpression ''
+        { "acme/widget".upstream = "https://github.com/acme/widget.git"; }
+      '';
+      description = ''
+        Forgejo repositories kept as copies of an upstream repository (any git
+        URL), keyed by "owner/repo". Upstream owns every branch and tag except
+        branches under `privatePrefix`, which are local work:
+
+        - a timer (forgejo-upstream-sync) copies upstream's branches and tags
+          into Forgejo: the default branch and tags fast-forward only (a
+          rewrite upstream fails the run instead of rewriting history here),
+          other branches follow upstream exactly, deletions are copied, and
+          the private prefix is never read, pushed or deleted;
+        - a pre-receive hook lets only the sync bot move upstream-owned refs,
+          lets everyone else push only under the private prefix, and keeps the
+          bot out of the private prefix.
+
+        forgejo-provision creates the bot and its token, creates missing
+        repositories (a pull mirror is refused: it cannot take pushes), gives
+        the bot write access and installs the hook. Unlike a pull mirror, the
+        copy can carry private branches.
+      '';
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          upstream = lib.mkOption {
+            type = lib.types.str;
+            example = "https://github.com/acme/widget.git";
+            description = "Upstream git URL the copy follows (read anonymously).";
+          };
+          privatePrefix = lib.mkOption {
+            type = lib.types.str;
+            default = "internal/";
+            description = "Branch prefix that is local work: never synced, and the only thing people may push.";
+          };
+        };
+      });
+    };
+
+    upstreamSync = {
+      botUsername = lib.mkOption {
+        type = lib.types.str;
+        default = "upstream-sync";
+        description = "Local Forgejo account the sync pushes as (no SSO, no known password).";
+      };
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "5min";
+        description = "How often upstream copies are synced (systemd time span).";
+      };
+    };
+
     actions.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -566,6 +639,18 @@ in
           FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
           FORGEJO_ORGS_JSON=${organizationsJson} \
             ${provisionOrgs}/bin/forgejo-provision-orgs
+        '' + lib.optionalString (cfg.upstreamCopies != { }) ''
+
+          FORGEJO_API=${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1"} \
+          FORGEJO_ADMIN_USER=${lib.escapeShellArg cfg.admin.username} \
+          FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
+          FORGEJO_CLI=${lib.escapeShellArg forgejoCli} \
+          UPSTREAM_BOT=${lib.escapeShellArg cfg.upstreamSync.botUsername} \
+          UPSTREAM_TOKEN_FILE=${upstreamTokenFile} \
+          UPSTREAM_COPIES_JSON=${upstreamCopiesJson} \
+          FORGEJO_REPOS_ROOT=${dataRoot}/git/repositories \
+          FORGEJO_UID=${toString forgejoUid} \
+            ${provisionUpstreamCopies}/bin/forgejo-provision-upstream-copies
         '';
       };
 
@@ -577,6 +662,40 @@ in
 
       portablevps.migration.quiesceUnits = [ "forgejo.service" ];
     }
+
+    (lib.mkIf (cfg.upstreamCopies != { }) {
+      systemd.services.forgejo-upstream-sync = {
+        description = "Sync Forgejo upstream copies from their upstream repositories";
+        after = [ "forgejo.service" "forgejo-provision.service" "network-online.target" ];
+        wants = [ "network-online.target" ];
+        requires = [ "forgejo.service" ];
+        unitConfig.ConditionPathExists = [ "!/run/portablevps/restore-mode" upstreamTokenFile ];
+        environment = {
+          FORGEJO_URL = "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}";
+          UPSTREAM_TOKEN_FILE = upstreamTokenFile;
+          UPSTREAM_COPIES_JSON = "${upstreamCopiesJson}";
+          UPSTREAM_CACHE_DIR = "${upstreamStateDir}/cache";
+          GIT_SSL_CAINFO = "/etc/ssl/certs/ca-certificates.crt";
+          HOME = upstreamStateDir;
+        };
+        serviceConfig = {
+          Type = "oneshot";
+          StateDirectory = "portablevps/forgejo-upstream-sync";
+          StateDirectoryMode = "0700";
+          ExecStart = "${upstreamSync}/bin/forgejo-upstream-sync";
+          TimeoutStartSec = "30min";
+        };
+      };
+
+      systemd.timers.forgejo-upstream-sync = {
+        wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+        timerConfig = {
+          OnBootSec = "2min";
+          OnUnitActiveSec = cfg.upstreamSync.interval;
+          RandomizedDelaySec = "30s";
+        };
+      };
+    })
 
     (lib.mkIf (!prototype) {
       sops.secrets = {

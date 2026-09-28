@@ -156,6 +156,10 @@ The first cloud target is an already-created VPS or rescue system that is
 reachable over SSH. Provider API provisioning is intentionally not part of this
 step.
 
+Forgejo *upstream copies* (a repo that follows an upstream such as GitHub and
+still carries private `internal/**` branches) are described in
+`docs/forgejo-upstream-copies.md`.
+
 Operational recovery procedures live in `docs/operations-runbooks.md`. Use that
 runbook for Netbird registration checks, bad upgrade rollback, migration
 rollback decisions, and backup failures. Use `docs/disaster-recovery.md` when a

@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- **Forgejo upstream copies: a repository that follows an upstream and can
+  still carry private branches.** New
+  `portablevps.apps.forgejo.upstreamCopies."<owner>/<repo>" = { upstream; privatePrefix ? "internal/"; }`,
+  plus `upstreamSync.{botUsername, interval}`.
+
+  A pull mirror is read-only as a whole, and Forgejo 16's branch protection
+  can't express "everything is upstream's except `internal/**`": a `**` rule
+  overrides a more specific one, and there are no rule priorities. So this
+  combines three pieces:
+  - **Sync.** A `forgejo-upstream-sync` timer (every 5 minutes by default)
+    copies branches and tags from the upstream, read anonymously.
+    - The default branch and tags move fast-forward only. A rewrite upstream
+      fails the run loudly instead of rewriting history here.
+    - Other branches follow upstream exactly, including rebases.
+    - Deletions are copied.
+    - The private prefix is never fetched, pushed or deleted.
+    - Only changed refs are pushed. One failing copy doesn't stop the others.
+    - The bot's token reaches git through `GIT_CONFIG_*` environment
+      variables, never argv.
+  - **Hook.** A `pre-receive` hook, installed in the repo's
+    `hooks/pre-receive.d` (still honoured by Forgejo 16's central hooks):
+    - Only the sync bot may move upstream-owned refs.
+    - Everyone else may only push under the private prefix. This also covers
+      merges done in the web UI.
+    - The bot may never touch the private prefix.
+  - **Provisioning.** `forgejo-provision` creates the local bot (no SSO, a
+    random password nobody knows) and its token. The token is kept in
+    `/var/lib`, outside the backups, and re-issued if missing or invalid.
+    Provisioning then creates missing repositories with upstream's default
+    branch, and refuses an existing pull mirror, which can't take pushes. It
+    gives the bot write access and installs the hook.
+
+  Tested against Forgejo 16.0.5 with a local upstream:
+  - first sync;
+  - developer pushes to the default branch and other branches refused, and to
+    `internal/` allowed;
+  - new, rebased, deleted and tagged refs copied, with `internal/` untouched;
+  - an upstream rewrite of the default branch refused while other refs still
+    applied;
+  - an upstream `internal/` branch not copied;
+  - re-runs idempotent.
+
+  The three scripts are shellcheck-clean.
+
+  Documented in `docs/forgejo-upstream-copies.md` (configuration, sync and hook
+  rules, the developer workflow, provisioning, removal and limitations). The
+  design is in ADR 0005. A runbook entry, "Forgejo Upstream Copy Sync Failing",
+  covers the rest; its recovery for a deliberate upstream rewrite was run
+  against the test instance.
+
 - **Fix: `server adopt --password` now reaches the password prompt.** The
   password bootstrap ran `sshpass ssh …` without restricting authentication.
   So ssh first offered every key the agent holds, including an `IdentityAgent`
