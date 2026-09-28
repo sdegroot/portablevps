@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Fix: upstream copies no longer issue a new sync-bot token on every
+  deploy.** `provision-upstream-copies.sh` validated the stored token with
+  `GET /user`, which needs `read:user`. The token deliberately has only
+  `write:repository`, so the check always got 403. Every `forgejo-provision`
+  run therefore issued another token and left the previous ones valid.
+  - **Now:** the check uses `GET /repos/search?limit=1`, which is within the
+    token's scope and works before any copy exists.
+  - **Tested against Forgejo 16.0.5** with sign-in required and restricted
+    users: two provisionings issue one token (unchanged, one in the database),
+    and a corrupted token is still re-issued.
+  - **Tokens already issued** by earlier deploys stay valid until removed by
+    hand.
+
 - **Forgejo package publishers: CI can publish packages.** Forgejo's
   automatic Actions token can't publish packages, and Forgejo has no
   `permissions: packages: write`. New

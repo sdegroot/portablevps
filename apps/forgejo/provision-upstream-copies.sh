@@ -42,9 +42,13 @@ case "$code" in
 esac
 
 # --- its token: kept on the host, regenerated if missing or no longer valid ------
+# Validated against an endpoint inside the token's own scope (write:repository
+# implies read:repository). GET /user would need read:user, which the token
+# deliberately lacks: it always answered 403, so every deploy issued a new
+# token and left the old one valid.
 token_ok=no
 if [ -s "$UPSTREAM_TOKEN_FILE" ]; then
-  code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: token $(tr -d '\n' < "$UPSTREAM_TOKEN_FILE")" "$FORGEJO_API/user")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: token $(tr -d '\n' < "$UPSTREAM_TOKEN_FILE")" "$FORGEJO_API/repos/search?limit=1")"
   [ "$code" = 200 ] && token_ok=yes
 fi
 if [ "$token_ok" = no ]; then
