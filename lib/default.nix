@@ -321,11 +321,13 @@ let
     {
       nixosConfigurations = cloudConfigurations // localVmConfigurations;
       serverInfo = lib.mapAttrs (_name: server: server.info) servers;
-      # Fleet-level NetBird intent (access policies), consumed by
-      # `cloud:netbird-policy-sync`. Not per-server: policies are cross-cutting.
+      # Fleet-level NetBird intent (access policies and people), consumed by
+      # `pvps network policy-sync`. Not per-server: policies are cross-cutting.
+      # users: { "<email>" = [ "<group>" ... ]; } — the groups a person's peers join.
       netbird = {
         policies = netbird.policies or [ ];
         disableDefaultPolicy = netbird.disableDefaultPolicy or false;
+        users = netbird.users or { };
       };
     };
 in

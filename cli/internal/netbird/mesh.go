@@ -396,4 +396,31 @@ func (c *Client) FindDefaultPolicy() (*Policy, error) {
 type FleetPolicies struct {
 	Policies             []PolicySpec `json:"policies"`
 	DisableDefaultPolicy bool         `json:"disableDefaultPolicy"`
+	// Users maps a NetBird user's email to the groups their peers join.
+	Users map[string][]string `json:"users"`
+}
+
+// PolicyUpToDate reports whether an existing managed policy already matches
+// the declared spec, so a reconcile (and --dry-run) can say "unchanged"
+// instead of rewriting every policy on every run.
+func PolicyUpToDate(p Policy, spec PolicySpec, groupIDs map[string]string) bool {
+	payload, _, err := buildPolicyPayload(spec, groupIDs)
+	if err != nil || !p.Enabled || p.Description != spec.Description || len(p.Rules) != 1 {
+		return false
+	}
+	want := payload["rules"].([]any)[0].(map[string]any)
+	r := p.Rules[0]
+	ports := r.Ports
+	if ports == nil {
+		ports = []string{}
+	}
+	return r.Enabled &&
+		r.Name == want["name"] &&
+		r.Description == want["description"] &&
+		r.Action == want["action"] &&
+		r.Bidirectional == want["bidirectional"] &&
+		r.Protocol == want["protocol"] &&
+		stringsEqual(ports, want["ports"].([]string)) &&
+		stringsEqual(rawGroupIDs(r.Sources), want["sources"].([]string)) &&
+		stringsEqual(rawGroupIDs(r.Destinations), want["destinations"].([]string))
 }

@@ -440,9 +440,10 @@ NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-sync SERVER=<name>
 
 `netbird-sync` creates any missing groups, ensures a reusable setup key named
 `portablevps-<server>` whose auto-groups are those groups (so a fresh join is
-grouped automatically — and printing the key with the exact `secrets:set`
-command to store it), and adds an already-joined peer to its declared groups
-(additive; it does not remove memberships). `NETBIRD_API_TOKEN` is an operator
+grouped automatically; a newly created key is stored in the server's sops
+secrets), adds an already-joined peer to its declared groups, and removes it
+from any other **managed** group — one named by a policy, a server or a user
+(see below). A role change therefore also takes the old role's access away. `NETBIRD_API_TOKEN` is an operator
 credential — keep it local, and it may be an `op://` reference.
 
 ### NetBird access policies from the operator plane
@@ -460,27 +461,48 @@ declare fleet policies in the consumer flake (`netbird.nix`, surfaced as the
       sources = [ "operators" ]; destinations = [ "portablevps-servers" ];
       protocol = "tcp"; ports = [ "22" ]; }
   ];
+  # People: the groups each NetBird user's devices join.
+  users = { "alice@example.org" = [ "operators" ]; };
   disableDefaultPolicy = false;   # flip to true for default-deny
 }
 ```
 
 ```sh
-NETBIRD_API_TOKEN=... mise exec -- task cloud:netbird-policy-sync
+pvps network policy-sync --dry-run   # read-only: print the plan
+pvps network policy-sync
 ```
 
-`netbird-policy-sync` creates/updates the declared policies (named
-`portablevps:<name>` so it only manages its own), prunes managed policies you
-removed, and creates any referenced groups. Policies are an allow-list: with
-`disableDefaultPolicy = true` the mesh is **default-deny** and only declared
-flows are permitted.
+`policy-sync` does the following:
+
+- It creates or updates the declared policies, named `portablevps:<name>`, so
+  it only ever manages its own.
+- It prunes managed policies you removed.
+- It reconciles **membership** of every managed group, meaning every group
+  named by a policy, a server's `netbird.groups` or a user:
+  - Each declared user's `auto_groups` becomes their unmanaged groups plus
+    their declared ones.
+  - Undeclared users lose their managed groups.
+  - Each managed group ends up containing exactly the declared servers' and
+    declared users' peers. Anything added there by hand is removed.
+  - NetBird's `All` group and console-made groups are never touched.
+- It sets NetBird's `Default` allow-all to match `disableDefaultPolicy`. It
+  also **re-enables** `Default` when the flag goes back to false, which is the
+  recovery path after a lockout.
+
+`--dry-run` only reads the account.
+
+Policies are an allow-list. With `disableDefaultPolicy = true`, the mesh is
+**default-deny** and only declared flows are permitted.
 
 **Lockout warning:** you administer servers over the mesh (SSH is NetBird-only).
 Disabling the default allow-all without a policy that lets your `operators`
 group reach the servers on port 22 will cut off your own access. For that
 reason flipping to default-deny is double-gated: `disableDefaultPolicy = true`
-in the flake **and** `CONFIRM_DEFAULT_DENY=yes` on the command. Put the peers
-you administer from into the `operators` group first, confirm the
-`operators-ssh` policy works, then flip it.
+in the flake **and** `--confirm-default-deny` on the command. Declare
+yourself in `users` with the `operators` group first, check with `--dry-run`
+that your devices end up there, then flip it. To recover, set
+`disableDefaultPolicy = false` and run `policy-sync` again, or re-enable
+`Default` in the NetBird console. Neither path depends on mesh ACLs.
 
 **Account-global warning:** `disableDefaultPolicy` is a property of the whole
 NetBird **account**, not of your fleet's groups. Disabling the default allow-all
