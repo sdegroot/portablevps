@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **`network policy-sync` now reconciles people and group membership, not
+  only policies.**
+  - **People:** the fleet's `.#netbird` output gains `users`
+    (`{ "<email>" = [ groups ]; }`). Each declared user's NetBird
+    `auto_groups` become their unmanaged groups plus their declared ones, and
+    undeclared users lose managed groups.
+  - **Managed groups:** every group named by a policy, a server's
+    `netbird.groups` or a user. policy-sync sets each one's membership to
+    exactly the declared servers' and users' peers and removes anything else,
+    so a role change or an offboarding takes access away. NetBird's `All` and
+    console-made groups are never touched.
+  - **`--dry-run`:** reads the account and prints every group, policy, user
+    and `Default` change it would make. Policies that already match report
+    `unchanged` instead of being rewritten on every run.
+  - **Recovery:** `disableDefaultPolicy = false` now **re-enables** NetBird's
+    `Default` policy. Before, the code could only disable it, so the
+    documented lockout recovery did not work.
+- **`network sync <server>` removes the peer from managed groups it no longer
+  declares.** Before, it only ever added, so a repurposed server kept its old
+  role's access. Seen live: an Authentik box still in `website`.
+- The legacy Python `task cloud:netbird-policy-sync` still reconciles
+  policies only. It ignores `users` and membership, so use
+  `pvps network policy-sync`.
+
 - **Forgejo 16.0.5 and Forgejo Runner 13 are the new defaults** (were 15.0.4
   and 12). The upgrade was rehearsed on PostgreSQL 18:
   - 15.0.4 was provisioned like production (orgs and teams through
