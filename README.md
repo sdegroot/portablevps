@@ -160,6 +160,10 @@ Forgejo *upstream copies* (a repo that follows an upstream such as GitHub and
 still carries private `internal/**` branches) are described in
 `docs/forgejo-upstream-copies.md`.
 
+Forgejo's package registry and publishing packages from Forgejo Actions (a
+per-organization publisher bot) are described in
+`docs/forgejo-package-registry.md`.
+
 Operational recovery procedures live in `docs/operations-runbooks.md`. Use that
 runbook for Netbird registration checks, bad upgrade rollback, migration
 rollback decisions, and backup failures. Use `docs/disaster-recovery.md` when a
