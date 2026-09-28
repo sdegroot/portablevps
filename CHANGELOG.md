@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Runner jobs find the Docker daemon without per-workflow configuration.**
+  New `portablevps.apps.forgejoRunner.jobEnv` sets environment variables in
+  every job (the runner's `runner.envs`).
+
+  When jobs share the host network, the default sets
+  `DOCKER_HOST=tcp://127.0.0.1:2375`, the Docker-in-Docker sidecar. So
+  Testcontainers, `docker build` and similar tools just work, and workflows
+  stay portable across runners. Before, each workflow had to hard-code this
+  runner's layout. On any other network the default is empty, because the
+  sidecar's loopback address isn't reachable from a job there.
+
+  This grants no new access: with host networking, jobs could already reach
+  the sidecar.
+
+  Tested:
+  - The rendered runner config contains `runner.envs.DOCKER_HOST` on a
+    host-network runner.
+  - With `container.network = "bridge"` the default evaluates to `{}`.
+
 - **`network policy-sync` now reconciles people and group membership, not
   only policies.**
   - **People:** the fleet's `.#netbird` output gains `users`

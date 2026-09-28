@@ -20,6 +20,7 @@ let
     runner = {
       file = "${dataRoot}/runner/.runner";
       capacity = cfg.capacity;
+      envs = cfg.jobEnv;
       timeout = cfg.timeout;
     };
     container = {
@@ -94,6 +95,28 @@ in
       type = lib.types.enum [ "trace" "debug" "info" "warn" "error" ];
       default = "info";
       description = "Runner log level.";
+    };
+
+    jobEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = lib.optionalAttrs (cfg.container.network == "host") {
+        DOCKER_HOST = cfg.container.dockerHost;
+      };
+      defaultText = lib.literalExpression ''
+        lib.optionalAttrs (container.network == "host") { DOCKER_HOST = container.dockerHost; }
+      '';
+      description = ''
+        Environment variables set in every job (the runner's `runner.envs`).
+
+        By default, when job containers share the host network, this points
+        DOCKER_HOST at the Docker-in-Docker sidecar, so tools inside a job
+        (Testcontainers, `docker build`, …) find a daemon without every
+        workflow having to know this runner's layout. On any other network the
+        sidecar's loopback address is not reachable from a job, so nothing is
+        set. This does not grant anything new: with host networking, jobs can
+        reach the sidecar anyway -- which is also why these runners must stay
+        disposable and hold no secrets.
+      '';
     };
 
     container = {
