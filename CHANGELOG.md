@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **PostgreSQL metrics.** New `portablevps.postgres.metrics.enable` makes the
+  host's OTel collector scrape the cluster (the contrib `postgresql`
+  receiver): connections, transactions, cache hits, database and table sizes,
+  row churn, dead rows, scans, deadlocks, temp files and checkpoints. Opt-in;
+  hosts that leave it off are unchanged.
+  - **Least privilege:** it connects as `portablevps_monitor`, holding only
+    `pg_monitor` plus `CONNECT` on the cluster's databases, with
+    `CONNECTION LIMIT 10`. The password is generated on the box
+    (`/var/lib/portablevps/postgres-monitor.env`, root only) and reconciled on
+    every activation.
+  - **Tested** against postgres:18, otelcol-contrib 0.151.0 and
+    VictoriaMetrics v1.144.0 with Prometheus naming. A limit of 3 connections
+    was too few: the receiver opens several at once.
+    `postgresql.database.locks` stays off because it mostly reports the
+    scraper's own catalog locks.
+
+- **Consumer Grafana dashboards.** New
+  `portablevps.apps.monitoring.grafana.extraDashboards.<name> = ./file.json`
+  provisions a consumer's own dashboards next to the built-in fleet ones. The
+  build fails on invalid JSON or a missing `uid`, and an assertion rejects a
+  name that collides with a built-in dashboard.
+
 - **Fix: upstream copies no longer issue a new sync-bot token on every
   deploy.** `provision-upstream-copies.sh` validated the stored token with
   `GET /user`, which needs `read:user`. The token deliberately has only

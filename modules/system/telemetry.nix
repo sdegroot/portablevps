@@ -22,6 +22,12 @@ let
   proxyMetricsEnabled = config.portablevps.proxy.metrics.enable or false;
   proxyMetricsPort = config.portablevps.proxy.metrics.port or 8082;
 
+  # PostgreSQL statistics (modules/services/postgres), scraped as its read-only
+  # pg_monitor role. The password reaches the collector through its environment.
+  pgMetrics = config.portablevps.postgres.metrics or { };
+  postgresMetricsEnabled =
+    (config.portablevps.postgres.enable or false) && (pgMetrics.enable or false);
+
   # Resource attributes stamped on every metric/log. service.name (the
   # application) is added when set so telemetry can be differentiated by app, not
   # just host. host.name comes from the CONFIGURED machine name, not the OS
@@ -116,6 +122,32 @@ in
             scrape_interval = cfg.scrapeInterval;
             static_configs = [{ targets = [ "127.0.0.1:${toString proxyMetricsPort}" ]; }];
           }];
+        } // lib.optionalAttrs postgresMetricsEnabled {
+          postgresql = {
+            endpoint = "127.0.0.1:5432";
+            transport = "tcp";
+            username = pgMetrics.internal.role;
+            password = "\${env:PORTABLEVPS_PG_MONITOR_PASSWORD}";
+            databases = pgMetrics.internal.databases;
+            collection_interval = pgMetrics.collectionInterval;
+            # Loopback to the container's published port; nothing to verify.
+            tls.insecure = true;
+            # Off by default upstream; the ones a dashboard needs to answer "is
+            # the database healthy". postgresql.database.locks is left off: it
+            # is mostly the scraper's own catalog locks, one series per relation.
+            metrics = lib.genAttrs [
+              "postgresql.blks_hit"
+              "postgresql.blks_read"
+              "postgresql.deadlocks"
+              "postgresql.sequential_scans"
+              "postgresql.temp_files"
+              "postgresql.tup_deleted"
+              "postgresql.tup_fetched"
+              "postgresql.tup_inserted"
+              "postgresql.tup_returned"
+              "postgresql.tup_updated"
+            ] (_: { enabled = true; });
+          };
         };
         processors = {
           batch = { timeout = "10s"; send_batch_size = 1024; };
@@ -137,7 +169,8 @@ in
           pipelines = {
             metrics = {
               receivers = [ "hostmetrics" "podman_stats" ]
-                ++ lib.optional proxyMetricsEnabled "prometheus";
+                ++ lib.optional proxyMetricsEnabled "prometheus"
+                ++ lib.optional postgresMetricsEnabled "postgresql";
               processors = [ "batch" "resourcedetection" "resource" ];
               exporters = [ "otlphttp" ];
             };
@@ -157,7 +190,13 @@ in
     # hardening enough to see all processes.
     systemd.services.opentelemetry-collector = {
       path = [ pkgs.systemd ];
+      # The metrics password file must exist before the collector reads its
+      # environment; PostgreSQL itself may come up later (scrapes just fail
+      # until it does).
+      requires = lib.optional postgresMetricsEnabled pgMetrics.internal.passwordService;
+      after = lib.optional postgresMetricsEnabled pgMetrics.internal.passwordService;
       serviceConfig = {
+        EnvironmentFile = lib.mkIf postgresMetricsEnabled [ pgMetrics.internal.envFile ];
         DynamicUser = lib.mkForce false;
         User = lib.mkForce "root";
         Group = lib.mkForce "root";
