@@ -88,6 +88,40 @@ world-readable store.
 One consequence: a non-superuser cannot `CREATE EXTENSION`. Declare what the app
 needs in `portablevps.postgres.extensions` instead of in a migration.
 
+### Database metrics
+
+```nix
+portablevps.postgres.metrics.enable = true;   # needs portablevps.telemetry.endpoint
+```
+
+The host's OpenTelemetry collector then scrapes the cluster's statistics views
+and ships them with the rest of the host's telemetry. The series are
+`postgresql_*`, e.g. `postgresql_backends_ratio`, `postgresql_commits_total`,
+`postgresql_blks_hit_total`, `postgresql_db_size_bytes`,
+`postgresql_table_size_bytes`, `postgresql_rows_ratio{state="dead"}` and
+`postgresql_deadlocks_total`. They carry the host's `service_name`, so a
+dashboard can select them by application.
+
+It connects as `portablevps_monitor`, a role holding only `pg_monitor` and
+`CONNECT` on the cluster's databases, capped at 10 connections. It can read
+statistics and sizes, not a single row of application data. Its password is
+generated on the box into `/var/lib/portablevps/postgres-monitor.env` (root
+only) and re-applied on every activation, so a restored or rebuilt host
+converges without anything in sops.
+
+### Your own dashboards
+
+The monitoring box provisions consumer dashboards next to the built-in fleet
+ones:
+
+```nix
+portablevps.apps.monitoring.grafana.extraDashboards.website = ./dashboards/website.json;
+```
+
+The name becomes the file name and must not collide with a built-in dashboard.
+Each file needs its own stable `uid`; the build fails on invalid JSON or a
+missing uid. Like the built-ins they are read-only in the UI: change the file.
+
 ## Private registry
 
 ```nix

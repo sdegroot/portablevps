@@ -86,7 +86,24 @@ let
   # Static config mounted read-only from the Nix store.
   scrapeConfig = ./scrape.yml;
   grafanaProvisioning = ./grafana/provisioning;
-  grafanaDashboards = ./grafana/dashboards;
+  # The built-in fleet dashboards, plus any the consumer adds
+  # (grafana.extraDashboards). Built into one store directory because the file
+  # provider reads a single path. Each extra is checked at build time: invalid
+  # JSON or a missing uid fails the deploy instead of a dashboard silently not
+  # loading.
+  builtinDashboards = ./grafana/dashboards;
+  extraDashboards = cfg.grafana.extraDashboards;
+  grafanaDashboards =
+    if extraDashboards == { } then builtinDashboards
+    else pkgs.runCommand "portablevps-grafana-dashboards" { nativeBuildInputs = [ pkgs.jq ]; } ''
+      mkdir -p $out
+      cp ${builtinDashboards}/*.json $out/
+      ${lib.concatStrings (lib.mapAttrsToList (name: path: ''
+        jq -e '.uid | type == "string" and length > 0' ${path} >/dev/null \
+          || { echo "grafana.extraDashboards.${name}: not valid JSON or no uid" >&2; exit 1; }
+        cp ${path} $out/${name}.json
+      '') extraDashboards)}
+    '';
 
   # Per-host presence alerts are generated from the fleet lists (one absent()
   # alert per expected host, so a dark node keeps firing). Emitted as JSON —
@@ -390,6 +407,18 @@ in
           — a split-DNS forwarder reachable from the bridge is the clean general fix.
         '';
       };
+      extraDashboards = lib.mkOption {
+        type = lib.types.attrsOf lib.types.path;
+        default = { };
+        example = lib.literalExpression "{ website = ./dashboards/website.json; }";
+        description = ''
+          Consumer-specific Grafana dashboards, provisioned next to the built-in
+          fleet ones. The attribute name becomes the file name (`<name>.json`),
+          so it must not collide with a built-in dashboard. Each file is a
+          dashboard model with its own stable `uid`; like the built-ins it is
+          read-only in the UI and changed by editing the file.
+        '';
+      };
       oidc = {
         enable = lib.mkEnableOption "Authentik (generic OAuth) SSO for Grafana; the local admin login stays as break-glass";
         name = lib.mkOption { type = lib.types.str; default = "Authentik"; description = "OAuth provider display name."; };
@@ -424,6 +453,11 @@ in
         {
           assertion = cfg.grafana.rootUrl != "";
           message = "portablevps.apps.monitoring.grafana.rootUrl must be set to the externally-reachable Grafana URL (used for GF_SERVER_ROOT_URL and OAuth redirects).";
+        }
+        {
+          assertion = lib.all (name: !(builtins.pathExists (builtinDashboards + "/${name}.json")))
+            (lib.attrNames extraDashboards);
+          message = "portablevps.apps.monitoring.grafana.extraDashboards: a name collides with a built-in dashboard (${lib.concatStringsSep ", " (lib.attrNames (builtins.readDir builtinDashboards))}).";
         }
         {
           assertion = !cfg.deadMansSwitch.enable || cfg.deadMansSwitch.pulseUrl != "";
