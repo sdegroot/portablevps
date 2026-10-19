@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Self-upgrade from a Forgejo or Gitea repo.** New
+  `portablevps.autoUpgrade.tokenFormat = "git-token-header"` hands
+  `tokenSecret` to git as an `Authorization: token` header, scoped to
+  `https://<tokenHost>/`, so a box can pull a private `git+https:` flake. The
+  default, `access-tokens`, is unchanged (GitHub). Verified with nix 2.34.8
+  against Forgejo 16: the fetch fails without the header and succeeds with it.
+
 - **PostgreSQL metrics.** New `portablevps.postgres.metrics.enable` makes the
   host's OTel collector scrape the cluster (the contrib `postgresql`
   receiver): connections, transactions, cache hits, database and table sizes,

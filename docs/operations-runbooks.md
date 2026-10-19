@@ -285,6 +285,13 @@ Prerequisites:
   EnvironmentFile on `nixos-upgrade`, so it never lands in the world-readable
   nix.conf. Rotate before it expires (≤1 yr); if it lapses, self-upgrade stops and
   the box keeps its last good generation.
+- **A flake on Forgejo or Gitea** (`git+https://<host>/<owner>/<repo>?dir=…`)
+  instead of GitHub: set `tokenFormat = "git-token-header"` and
+  `tokenHost = "<host>"`. The token (read-only on the repo, e.g. Forgejo's
+  `read:repository` for a bot that can read it) then reaches git as an
+  `Authorization: token` header for `https://<host>/` only, through the same
+  root-only EnvironmentFile. nix's `access-tokens` doesn't apply to
+  `git+https:` URLs.
 - **`main` must hold the live config** — the box tracks `main`. Arm with one
   operator `portablevps server deploy <box>`; the timer self-drives after.
 

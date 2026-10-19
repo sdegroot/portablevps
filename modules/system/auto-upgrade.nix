@@ -14,7 +14,8 @@
 # (runtime/podman.nix) rolls the container.
 #
 # Repo auth: a fine-grained, read-only token (Contents: Read-only) passed to nix
-# as an `access-tokens` entry, used with a `github:`-style flake URL. We use a
+# as an `access-tokens` entry, used with a `github:`-style flake URL (or, for a
+# Forgejo/Gitea `git+https:` flake, as a git header; see tokenFormat). We use a
 # token rather than an SSH deploy key because deploy keys are un-expiring, per-repo
 # SSH credentials outside org token governance (and are disabled at the org level
 # here) — a fine-grained token is centrally visible, revocable, and expiring. See
@@ -63,7 +64,18 @@ in
     tokenHost = lib.mkOption {
       type = lib.types.str;
       default = "github.com";
-      description = "Host the `tokenSecret` authenticates to, as the nix `access-tokens` key.";
+      description = "Host the `tokenSecret` authenticates to (its `access-tokens` key, or the host of the `git+https:` URL).";
+    };
+
+    tokenFormat = lib.mkOption {
+      type = lib.types.enum [ "access-tokens" "git-token-header" ];
+      default = "access-tokens";
+      description = ''
+        How the token reaches the fetch. `access-tokens`: a nix `access-tokens`
+        entry, which only `github:`/`gitlab:` flake URLs use. `git-token-header`:
+        an `Authorization: token <token>` header that git sends to
+        `https://<tokenHost>/` only, for a `git+https:` flake on Forgejo or Gitea.
+      '';
     };
 
     dates = lib.mkOption {
@@ -101,13 +113,25 @@ in
     (lib.mkIf (cfg.tokenSecret != null) {
       sops.secrets.${cfg.tokenSecret} = { };
 
-      # Render `NIX_CONFIG=access-tokens = <host>=<token>` and hand it to the
+      # Render the token as `NIX_CONFIG=access-tokens = <host>=<token>` (or as
+      # git config, see tokenFormat) and hand it to the
       # nixos-upgrade service as an EnvironmentFile, so the token stays in sops
       # (root-only) rather than world-readable /etc/nix/nix.conf.
       sops.templates."portablevps/autoupgrade-token.env" = {
         mode = "0400";
         owner = "root";
-        content = "NIX_CONFIG=access-tokens = ${cfg.tokenHost}=${config.sops.placeholder.${cfg.tokenSecret}}";
+        content =
+          let token = config.sops.placeholder.${cfg.tokenSecret}; in
+          if cfg.tokenFormat == "access-tokens" then
+            "NIX_CONFIG=access-tokens = ${cfg.tokenHost}=${token}"
+          else
+            # nix fetches `git+https:` with the git CLI, which reads extra config
+            # from GIT_CONFIG_* (verified with nix 2.34.8 against Forgejo 16).
+            ''
+              GIT_CONFIG_COUNT=1
+              GIT_CONFIG_KEY_0=http.https://${cfg.tokenHost}/.extraHeader
+              GIT_CONFIG_VALUE_0="Authorization: token ${token}"
+            '';
       };
 
       systemd.services.nixos-upgrade.serviceConfig.EnvironmentFile =
