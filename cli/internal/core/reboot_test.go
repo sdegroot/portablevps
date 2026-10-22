@@ -14,6 +14,7 @@ type rebootHost struct {
 	bootedSystem  string
 	currentSystem string
 	failedUnits   string
+	probeOut      string // the failed-unit healthcheck probe's verdict
 	systemStates  []string
 	stateCalls    int
 	runs          []string
@@ -52,6 +53,9 @@ func (h *rebootHost) Run(_ string, command string) (string, error) {
 	case "sudo systemctl list-units --type=service --state=failed --plain --no-legend":
 		return h.failedUnits, nil
 	default:
+		if strings.Contains(command, "verdict=") {
+			return h.probeOut, nil
+		}
 		return "", nil
 	}
 }
@@ -137,5 +141,50 @@ func TestRebootFailsOnFailedServices(t *testing.T) {
 	_, err := Reboot(RebootEnv{Host: host, Attempts: 1, Sleep: noSleep}, "web.example")
 	if err == nil || !strings.Contains(err.Error(), "failed services") {
 		t.Fatalf("expected failed-service error, got %v", err)
+	}
+}
+
+func TestRebootToleratesHealthcheckFalsePositive(t *testing.T) {
+	// The authentik case: a container's healthcheck fired inside its start
+	// period during boot and left a failed transient unit; the container is
+	// healthy.
+	host := &rebootHost{
+		bootIDs:       []string{"old", "new"},
+		bootedSystem:  "/nix/store/new-system",
+		currentSystem: "/nix/store/new-system",
+		failedUnits:   "100507dcf79d-2b4df64d68634cf6.service loaded failed failed [systemd-run] podman healthcheck run 100507dcf79d",
+		probeOut:      "healthcheck-transient-ok unit=100507dcf79d-2b4df64d68634cf6.service cid=100507dcf79d\nverdict=benign units= 100507dcf79d-2b4df64d68634cf6.service",
+	}
+	var warns []string
+	report := func(_, status, msg string) {
+		if status == "warn" {
+			warns = append(warns, msg)
+		}
+	}
+	if _, err := Reboot(RebootEnv{Host: host, Attempts: 1, Sleep: noSleep, Report: report}, "web.example"); err != nil {
+		t.Fatalf("a healthcheck false-positive must not fail the reboot, got %v", err)
+	}
+	if !strings.Contains(strings.Join(host.runs, " | "), "reset-failed 100507dcf79d-2b4df64d68634cf6.service") {
+		t.Errorf("expected the stale transient unit to be reset-failed, got %v", host.runs)
+	}
+	if len(warns) == 0 {
+		t.Error("expected a warning explaining the tolerated false-positive")
+	}
+}
+
+func TestRebootFailsWhenHealthcheckContainerStaysUnhealthy(t *testing.T) {
+	host := &rebootHost{
+		bootIDs:       []string{"old", "new"},
+		bootedSystem:  "/nix/store/new-system",
+		currentSystem: "/nix/store/new-system",
+		failedUnits:   "100507dcf79d-2b4df64d68634cf6.service loaded failed failed [systemd-run] podman healthcheck run 100507dcf79d",
+		probeOut:      "verdict=real reason=container-not-healthy unit=100507dcf79d-2b4df64d68634cf6.service cid=100507dcf79d health=unhealthy",
+	}
+	_, err := Reboot(RebootEnv{Host: host, Attempts: 1, Sleep: noSleep}, "web.example")
+	if err == nil || !strings.Contains(err.Error(), "failed services") {
+		t.Fatalf("an unhealthy container must still fail the reboot, got %v", err)
+	}
+	if strings.Contains(strings.Join(host.runs, " | "), "reset-failed") {
+		t.Error("must not reset-failed anything on a real failure")
 	}
 }

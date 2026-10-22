@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- **CLI: release builds pin `nixos-rebuild` and `nixos-anywhere`.** The
+  GoReleaser build now bakes in the exact `github:NixOS/nixpkgs/<rev>` and
+  `github:nix-community/nixos-anywhere/<rev>` from `cli/flake.lock`, as the
+  nix build already did. Released binaries up to 0.3.0 ran
+  `nix run nixpkgs#nixos-rebuild`, which resolves through the operator's flake
+  registry (nixpkgs-unstable HEAD). That nixos-rebuild broke deploys on
+  2026-09-30, and operators had to pin the registry by hand with
+  `NIX_CONFIG="flake-registry = …"`. A release build without the pins now
+  fails, and CI checks that the built binary carries them
+  (`cli/scripts/tool-flake-refs.sh`, `verify-tool-flake-pins.sh`).
+  `pvps doctor` reports which nixos-rebuild a binary uses.
+
+- **CLI: finds `nix` when it is not on `PATH`.** If the shell didn't source
+  the Nix profile, pvps now looks in `/nix/var/nix/profiles/default/bin`,
+  `~/.nix-profile/bin` and `/run/current-system/sw/bin`. It adds the first one
+  that has `nix` to its own `PATH`, so `nixos-rebuild`'s own `nix` calls work
+  too. `pvps doctor` warns when it had to.
+
+- **`pvps server deploy --backup-first`.** It runs the server's backup (as
+  `pvps backup run`) before switching, and deploys nothing if the backup
+  fails. A server without `portablevps-backup.service` is refused with exit
+  78, rather than deployed without the backup you asked for. The flag can't be
+  combined with `--dry-run`.
+
+- **Fix: a deploy whose SSH session drops mid-switch is judged by the host.**
+  A switch that restarts NetBird drops the mesh SSH session it runs over, so
+  `nixos-rebuild` exited 255 and the deploy reported FAIL, though the host
+  finished the switch. Now the CLI reconnects with bounded retries and the
+  real admin key, so no fail2ban strikes. It reads the switch's outcome from
+  the host's journal and `/run/current-system`. The transient switch unit is
+  garbage-collected, so its `Result` no longer exists by then. It passes only
+  when the host finished switching to the new generation.
+
+- **Fix: a switch that exits 4 but converges passes with a warning.** Exit 4
+  means the switch applied but a unit failed. It used to pass only when every
+  failed unit was a podman healthcheck false-positive. Now it also passes when
+  nothing is failed any more and the host stays `running`, with nothing in
+  auto-restart, across several samples. That covers units that failed once
+  during the switch and recovered through their own `Restart=`; the warning
+  names them. On 2026-10-22 authentik's upgrade hit this: the NetBird
+  Postgres proxy exited 143 on stop, and authentik's containers hit a podman
+  exit-file race. A crash loop, a degraded host, or a unit that stays failed
+  still fails the deploy.
+
+- **Fix: `pvps server reboot` tolerates the podman healthcheck
+  false-positive.** A container whose healthcheck fires inside its start
+  period during boot left a failed transient unit, so a good reboot FAILed.
+  The reboot now verifies it the same way deploy does: tolerated only if the
+  container then reports healthy, then reset and reported as a warning. The
+  check is shared with deploy.
+
 - **Inputs updated (2026-10-22).** nixpkgs `nixos-26.05` 2026-07-24 →
   2026-10-21 (Linux 6.18.39 → 6.18.57, OpenSSH 10.4p1 → 10.5p1, OpenSSL
   3.6.3 → 3.6.5, systemd 260.2 → 260.5, Traefik 3.7.6 → 3.7.13, Podman

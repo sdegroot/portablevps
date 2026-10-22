@@ -30,10 +30,11 @@ func newDoctorCmd(g *globalOptions) *cobra.Command {
 			}
 
 			env := core.Env{
-				RepoRoot:   repoRoot,
-				Runner:     adapters.ExecRunner{},
-				HasCommand: adapters.HasCommand,
-				Getenv:     os.Getenv,
+				RepoRoot:       repoRoot,
+				Runner:         adapters.ExecRunner{},
+				HasCommand:     adapters.HasCommand,
+				Getenv:         os.Getenv,
+				NixAddedToPath: core.NixAddedToPath,
 			}
 			checks := core.RunDoctor(env, server)
 

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -8,6 +9,12 @@ import (
 type fakeHost struct {
 	runs                 []string
 	failTrue             bool
+	trueCalls            int
+	dropped              int    // "true" calls after the preflight that fail (an SSH drop)
+	epoch                string // `date +%s`; "" = unreadable
+	switchJournal        string // the switch-to-configuration journal query
+	settleOut            string // the post-switch settle sample
+	failedDuringSwitch   string // the "Failed with result" journal query
 	failRestoreModeCheck bool
 	journal              string // returned for journalctl commands
 	probeOut             string // returned for the failed-unit health probe
@@ -18,8 +25,23 @@ type fakeHost struct {
 
 func (f *fakeHost) Run(host, command string) (string, error) {
 	f.runs = append(f.runs, command)
-	if command == "true" && f.failTrue {
-		return "", &DeployError{Code: 1, Msg: "unreachable"}
+	if command == "true" {
+		f.trueCalls++
+		if f.failTrue || (f.trueCalls > 1 && f.trueCalls <= 1+f.dropped) {
+			return "", &DeployError{Code: 1, Msg: "unreachable"}
+		}
+	}
+	if command == "date +%s" {
+		return f.epoch, nil
+	}
+	if strings.Contains(command, "grep 'switching to system configuration'") {
+		return f.switchJournal, nil
+	}
+	if strings.Contains(command, "Failed with result") {
+		return f.failedDuringSwitch, nil
+	}
+	if strings.Contains(command, "is-system-running") {
+		return f.settleOut, nil
 	}
 	if f.failRestoreModeCheck && strings.Contains(command, "restore-mode") {
 		return "", &DeployError{Code: 1, Msg: "not in restore mode"}
@@ -79,6 +101,31 @@ func (r *recordRunner) sawContaining(sub string) bool {
 	return false
 }
 
+const testTarget = "/nix/store/abc123-nixos-system-web"
+
+// switched renders the journal lines switch-to-configuration logs, as the
+// verification query sees them, for one switch ending in status.
+func switched(status int) string {
+	out := "switching to system configuration " + testTarget + "\n"
+	switch status {
+	case 0:
+		out += "finished switching to system configuration " + testTarget + "\n"
+	default:
+		out += "switching to system configuration " + testTarget + " failed (status " + strconv.Itoa(status) + ")\n"
+	}
+	return out + "active=inactive"
+}
+
+func onTarget() map[string]string {
+	return map[string]string{"readlink -f /run/current-system": testTarget}
+}
+
+// reports collects Report calls by status ("ok", "warn", "fail", "info", ...).
+func reports() (func(_, status, msg string), map[string][]string) {
+	got := map[string][]string{}
+	return func(_, status, msg string) { got[status] = append(got[status], msg) }, got
+}
+
 func TestDeployRunsSwitchAndReportsSuccess(t *testing.T) {
 	host := &fakeHost{}
 	runner := &recordRunner{}
@@ -100,11 +147,16 @@ func TestDeployRunsSwitchAndReportsSuccess(t *testing.T) {
 }
 
 func TestDeployFailedSwitchSurfacesBlueGreenHint(t *testing.T) {
-	host := &fakeHost{journal: "blue-green(website): idle green failed health check; kept blue on old image"}
+	host := &fakeHost{
+		journal:       "blue-green(website): idle green failed health check; kept blue on old image",
+		switchJournal: switched(4),
+		outputs:       onTarget(),
+		probeOut:      "verdict=real reason=non-healthcheck-unit unit=website-bluegreen.service",
+	}
 	runner := &recordRunner{fail: true}
 	var infos []string
 	env := DeployEnv{
-		RepoRoot: "/repo", Runner: runner, Host: host,
+		RepoRoot: "/repo", Runner: runner, Host: host, Sleep: noSleep,
 		Report: func(_, status, msg string) {
 			if status == "info" {
 				infos = append(infos, msg)
@@ -130,11 +182,15 @@ func TestDeployFailedSwitchSurfacesBlueGreenHint(t *testing.T) {
 func TestDeployTreatsHealthcheckFalsePositiveAsSuccess(t *testing.T) {
 	// switch-to-configuration exited non-zero, but the only failed unit is a
 	// podman healthcheck transient whose container came up healthy.
-	host := &fakeHost{probeOut: "healthcheck-transient-ok unit=abc123def456-9f.service cid=abc123def456\nverdict=benign units= abc123def456-9f.service"}
+	host := &fakeHost{
+		probeOut:      "healthcheck-transient-ok unit=abc123def456-9f.service cid=abc123def456\nverdict=benign units= abc123def456-9f.service",
+		switchJournal: switched(4),
+		outputs:       onTarget(),
+	}
 	runner := &recordRunner{fail: true}
 	var warns, oks []string
 	env := DeployEnv{
-		RepoRoot: "/repo", Runner: runner, Host: host,
+		RepoRoot: "/repo", Runner: runner, Host: host, Sleep: noSleep,
 		Report: func(_, status, msg string) {
 			switch status {
 			case "warn":
@@ -166,11 +222,13 @@ func TestDeployRealUnitFailureStillFails(t *testing.T) {
 	// A non-healthcheck unit failed to start: a genuine failure, must not be
 	// swallowed by the healthcheck-tolerance path.
 	host := &fakeHost{
-		probeOut: "verdict=real reason=non-healthcheck-unit unit=grafana.service",
-		journal:  "blue-green(website): idle green failed health check; kept blue on old image",
+		probeOut:      "verdict=real reason=non-healthcheck-unit unit=grafana.service",
+		journal:       "blue-green(website): idle green failed health check; kept blue on old image",
+		switchJournal: switched(4),
+		outputs:       onTarget(),
 	}
 	runner := &recordRunner{fail: true}
-	err := Deploy(DeployEnv{RepoRoot: "/repo", Runner: runner, Host: host}, "web", "1.2.3.4")
+	err := Deploy(DeployEnv{RepoRoot: "/repo", Runner: runner, Host: host, Sleep: noSleep}, "web", "1.2.3.4")
 	if e, ok := err.(*DeployError); !ok || e.ExitCode() != 70 {
 		t.Fatalf("a real unit failure must still exit 70, got %v", err)
 	}

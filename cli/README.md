@@ -23,6 +23,16 @@ mise use -g github:sdegroot/portablevps
 go run ./cmd/pvps doctor
 ```
 
+`go run`/`go build` leave `nixos-rebuild` and `nixos-anywhere` unpinned (they
+resolve through your flake registry, and `pvps doctor` warns). To build a
+binary pinned the way releases and `nix build` are:
+
+```sh
+set -a; eval "$(scripts/tool-flake-refs.sh)"; set +a
+goreleaser build --snapshot --clean --single-target
+scripts/verify-tool-flake-pins.sh dist
+```
+
 The CLI operates on the consumer repo given by `--project` (default:
 `$PORTABLEVPS_PROJECT`, else the current directory).
 

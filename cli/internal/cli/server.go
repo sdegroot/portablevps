@@ -134,7 +134,7 @@ func newServerRebootCmd(g *globalOptions) *cobra.Command {
 
 func newServerDeployCmd(g *globalOptions) *cobra.Command {
 	var hf hostFlags
-	var dryRun bool
+	var dryRun, backupFirst bool
 	cmd := &cobra.Command{
 		Use:   "deploy [server]",
 		Short: "Push the committed config to a running server in place (nixos-rebuild switch)",
@@ -142,6 +142,13 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 			"in-place nixos-rebuild switch over admin SSH, built on the remote. No " +
 			"identity or data changes (unlike repurpose). Use --dry-run to build and " +
 			"show what would change without switching.\n\n" +
+			"--backup-first runs the server's backup (as `pvps backup run`) before " +
+			"switching and deploys nothing if it fails; use it before a change that " +
+			"cannot be rolled back by switching generations, such as a one-way " +
+			"database migration. A server without backups is refused.\n\n" +
+			"If the SSH session drops mid-switch (the switch restarted the mesh " +
+			"client it runs over), the outcome is read from the host itself: its " +
+			"journal and /run/current-system.\n\n" +
 			"[server] may be a bare name or a path to its definition file " +
 			"(servers/<name>.nix), so you can shell tab-complete it.",
 		Args: cobra.MaximumNArgs(1),
@@ -166,11 +173,12 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 
 			prog := output.NewProgress(cmd.OutOrStdout(), "server.deploy", server, g.json)
 			env := core.DeployEnv{
-				RepoRoot: ctx.RepoRoot,
-				Runner:   adapters.ExecRunner{},
-				Host:     ssh,
-				Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
-				DryRun:   dryRun,
+				RepoRoot:    ctx.RepoRoot,
+				Runner:      adapters.ExecRunner{},
+				Host:        ssh,
+				Report:      func(phase, status, msg string) { prog.Phase(phase, status, msg) },
+				DryRun:      dryRun,
+				BackupFirst: backupFirst,
 			}
 			if err := core.Deploy(env, server, host); err != nil {
 				prog.Result("fail", err.Error(), exitCodeOf(err))
@@ -180,12 +188,14 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 			if dryRun {
 				msg = "dry run complete for .#" + server + " on " + host + " (no changes made)"
 			}
-			prog.Result("pass", msg, 0, "host", host, "dryRun", dryRun)
+			prog.Result("pass", msg, 0, "host", host, "dryRun", dryRun, "backupFirst", backupFirst)
 			return nil
 		},
 	}
 	hf.register(cmd)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "build and show what would change, but do not switch")
+	cmd.Flags().BoolVar(&backupFirst, "backup-first", false, "run the server's backup before switching; deploy nothing if it fails")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "backup-first")
 	return cmd
 }
 
