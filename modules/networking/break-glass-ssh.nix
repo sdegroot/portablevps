@@ -17,7 +17,17 @@ let
   # A bundled (Nix-store) copy is optional. When present it makes opening
   # break-glass SSH independent of a live download during an incident; empty
   # string means no bundled fallback ships for that country.
-  zoneBundledFor = code: toString (cfg.countryZoneFiles.${code} or "");
+  #
+  # A path literal such as ./data/nl.zone already lies inside the flake's
+  # `-source` store path, so `toString` would reference that whole tree and
+  # every portablevps commit (even CLI or docs only) would change every host's
+  # system. builtins.path copies just the file, named after its content.
+  zoneBundledFor = code:
+    let file = cfg.countryZoneFiles.${code} or null;
+    in if file == null then ""
+       else if builtins.isPath file
+       then "${builtins.path { path = file; name = baseNameOf file; }}"
+       else toString file;
 
   # Render a bash associative-array body ([nl]=<url> [de]=<url> ...) from a
   # per-country function, over exactly the configured country codes.

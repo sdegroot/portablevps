@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Fix: a portablevps commit no longer changes every host's system.** The
+  break-glass watchdog referenced its bundled `nl.zone` file by its path
+  inside the portablevps source tree. That made the whole source tree part of
+  every host's system. Any commit, even a CLI or docs-only one, gave every
+  server a new generation: self-upgrading hosts switched for nothing, and
+  hand-deployed hosts looked out of date. The watchdog now copies only the
+  zone file into the store. The first deploy after this changes the watchdog
+  once; after that, only changes that matter to a host change it.
+
 - **authentik: `baseUrl` option.** `portablevps.apps.authentik.baseUrl`
   (default `null`) renders `AUTHENTIK_WEB__BASE_URL`. authentik 2026.8 copies it
   into the tenant's base URL setting at startup when that setting is still
