@@ -127,7 +127,15 @@ func Reboot(env RebootEnv, host string) (RebootResult, error) {
 		return RebootResult{}, deployErr(70, "checking failed units on %s: %v", host, err)
 	}
 	if failed = strings.TrimSpace(failed); failed != "" {
-		return RebootResult{}, deployErr(70, "%s returned from reboot with failed services: %s", host, firstLine(failed))
+		// Every container starts during boot, so the podman healthcheck
+		// false-positive (see failedUnitsProbe) is as likely here as after a
+		// switch. Tolerate exactly that, verified the same way as deploy does.
+		v := probeFailedUnits(env.Host, host)
+		if !v.Benign {
+			return RebootResult{}, deployErr(70, "%s returned from reboot with failed services: %s", host, firstLine(failed))
+		}
+		clearHealthcheckTransients(env.Host, host, v.Units)
+		report("verify", "warn", "ignoring known podman healthcheck false-positive (restarted container healthy; failed unit(s): "+v.Units+")")
 	}
 	report("verify", "ok", current)
 	return RebootResult{BootID: afterBootID, System: current}, nil

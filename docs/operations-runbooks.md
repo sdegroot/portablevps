@@ -158,7 +158,10 @@ portablevps server reboot <server>
 
 The command waits for a changed kernel boot ID, then requires the booted and
 current NixOS generations to match and rejects a host that returns with failed
-system services.
+system services. One failure is tolerated, verified the same way as on deploy:
+a podman healthcheck transient that fired while its container was still
+starting, when the container then reports healthy. It is reset and reported as
+a warning.
 
 If SSH is unavailable but the provider console works, reboot and select the
 previous NixOS generation in the bootloader menu. After the machine is reachable,
@@ -213,6 +216,35 @@ has corrupted state.
 
 Do not overwrite PostgreSQL state until you have identified the snapshot to
 restore and accepted the data loss window.
+
+## Deploying A Change
+
+```sh
+portablevps server deploy <server>                 # switch in place
+portablevps server deploy <server> --dry-run       # build + show what would change
+portablevps server deploy <server> --backup-first  # backup, then switch
+```
+
+- **`--backup-first`** runs the server's backup (exactly `portablevps backup
+  run`) before switching and deploys nothing if the backup fails. Use it before
+  a change that switching generations cannot undo, such as an application
+  upgrade with one-way database migrations. A server without
+  `portablevps-backup.service` is refused (exit 78) rather than deployed
+  without the backup you asked for. It cannot be combined with `--dry-run`.
+- **The result comes from the host, not the SSH session.** A switch that
+  restarts the mesh client (NetBird) drops the session it runs over, and
+  `nixos-rebuild` exits 255 while the host goes on to finish the switch. The
+  CLI then reconnects (bounded, with the real admin key) and reads the switch's
+  outcome from the host's journal and `/run/current-system`. It passes when the
+  host finished switching to the new generation.
+- **switch-to-configuration exit 4** (the switch applied, but some unit failed)
+  passes with a warning only when the host verifiably converged: the new
+  generation is current, and either the only failed units are podman
+  healthcheck transients whose containers went healthy, or nothing is failed
+  and the host stays `running` with nothing in auto-restart across several
+  samples (a unit that failed once during the switch and came back through its
+  own `Restart=`). The warning names the units that failed during the switch.
+  Anything else fails the deploy.
 
 ## Zero-Downtime App Deploys (Blue-Green)
 
