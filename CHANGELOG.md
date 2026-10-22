@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Design proposal: runtime security and maintenance mode (ADR 0006).** A
+  three-layer plan for this fleet, piloted on the public edge:
+  - stop services that never need to exec from starting programs
+    (`NoExecPaths=/` + `ExecPaths=`; not a seccomp `~execve` filter, which
+    stops the unit from starting at all);
+  - record session execs, service-account execs and persistence changes with
+    kernel audit, shipped through the existing journald → VictoriaLogs pipeline;
+  - alert on SSH logins, unexpected execs and log silence through vmalert-logs.
+
+  Operator work is covered by `pvps maintenance` windows: Alertmanager silences
+  that `deploy`, `reboot`, `backup run` and `ssh` open automatically. Proposed
+  only; nothing changes yet.
+
 - **Inputs updated (2026-10-22).** nixpkgs `nixos-26.05` 2026-07-24 →
   2026-10-21 (Linux 6.18.39 → 6.18.57, OpenSSH 10.4p1 → 10.5p1, OpenSSL
   3.6.3 → 3.6.5, systemd 260.2 → 260.5, Traefik 3.7.6 → 3.7.13, Podman
