@@ -10,6 +10,11 @@
   the 2026-10-20 `nixos-unstable`; disko and sops-nix to their current heads.
   The new kernel only runs after a reboot, and `autoUpgrade` never reboots.
 
+- **authentik 2026.8.5** (was 2026.5.2), pinned by digest. From 2026.8 the
+  server trusts `X-Forwarded-*` only from `trustedProxyCidrs`; the default list
+  already covers a proxy on loopback or the NetBird range. The migrations are
+  one-way: going back to 2026.5 means restoring the database.
+
 - **Forgejo 16.0.6** (default image, was 16.0.5). It is a security release:
   it closes Actions' fork-PR protections being skipped for
   `pull_request_review` events, and leaks of label and release metadata
