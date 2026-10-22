@@ -164,6 +164,10 @@ Forgejo's package registry and publishing packages from Forgejo Actions (a
 per-organization publisher bot) are described in
 `docs/forgejo-package-registry.md`.
 
+Requiring signed commits on Forgejo's default branches, Forgejo's own signing
+key, outgoing mail, and commit bots for automation are described in
+`docs/forgejo-signed-commits.md`.
+
 Operational recovery procedures live in `docs/operations-runbooks.md`. Use that
 runbook for Netbird registration checks, bad upgrade rollback, migration
 rollback decisions, and backup failures. Use `docs/disaster-recovery.md` when a
