@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Inputs updated (2026-10-22).** nixpkgs `nixos-26.05` 2026-07-24 →
+  2026-10-21 (Linux 6.18.39 → 6.18.57, OpenSSH 10.4p1 → 10.5p1, OpenSSL
+  3.6.3 → 3.6.5, systemd 260.2 → 260.5, Traefik 3.7.6 → 3.7.13, Podman
+  5.8.2 → 5.8.8, Nix 2.34.8 → 2.34.9). `nixpkgs-netbird` (NetBird 0.73.1 →
+  0.81.2) and `nixpkgs-postgres` (PostgreSQL client tools 18.4 → 18.6) move to
+  the 2026-10-20 `nixos-unstable`; disko and sops-nix to their current heads.
+  The new kernel only runs after a reboot, and `autoUpgrade` never reboots.
+
 - **Forgejo 16.0.6** (default image, was 16.0.5). It is a security release:
   it closes Actions' fork-PR protections being skipped for
   `pull_request_review` events, and leaks of label and release metadata
