@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Forgejo 16.0.6** (default image, was 16.0.5). It is a security release:
+  it closes Actions' fork-PR protections being skipped for
+  `pull_request_review` events, and leaks of label and release metadata
+  through the API. It also has bug fixes. Not 17.0.0: Forgejo advises against
+  upgrading to it while an issue that blocks pushes and merges is open. The
+  signed-commit tests pass on 16.0.6 unchanged.
+
 - **Fix: a secret-only change now restarts its container on the same deploy.**
   - **Cause:** `restartChangedQuadlets` hashes each `.container` and its
     `EnvironmentFile`, and was ordered only after `etc`. Activation snippets
