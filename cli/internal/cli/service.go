@@ -28,7 +28,7 @@ func newServiceCmd(g *globalOptions) *cobra.Command {
 
 func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 	var sourceServer, sourceHost, targetHost, marker string
-	var prewarmTLS bool
+	var prewarmTLS, allowStale bool
 	var hf hostFlags
 	cmd := &cobra.Command{
 		Use:   "migrate [server]",
@@ -69,13 +69,17 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 			if source.ServiceKey == "" || target.ServiceKey == "" || source.ServiceKey != target.ServiceKey {
 				return ExitError{Code: 64, Message: "source and target must declare the same non-empty serviceKey"}
 			}
+			prog := output.NewProgress(cmd.OutOrStdout(), "service.migrate", server, g.json)
+			if err := guardCheckout(ctx, prog, allowStale, false); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
 			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 
-			prog := output.NewProgress(cmd.OutOrStdout(), "service.migrate", server, g.json)
 			var certs core.CertPrewarmer
 			if prewarmTLS {
 				certs = adapters.CurlCertChecker{}
@@ -105,6 +109,7 @@ func newServiceMigrateCmd(g *globalOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&prewarmTLS, "prewarm-tls", true, "abort before touching the source if the target's certificate never becomes valid")
 	cmd.Flags().StringVar(&hf.sshPort, "ssh-port", "22", "admin SSH port")
 	cmd.Flags().StringVar(&hf.adminKey, "admin-key", "", "admin SSH private key override (default: 1Password/per-server file/cloud-admin fallback)")
+	registerAllowStale(cmd, &allowStale)
 	return cmd
 }
 
@@ -163,6 +168,7 @@ func migrateDNSSyncFunc(ctx *config.Context, ssh core.HostRunner, cmd *cobra.Com
 func newServiceRestoreCmd(g *globalOptions) *cobra.Command {
 	var hf hostFlags
 	var marker string
+	var allowStale bool
 	cmd := &cobra.Command{
 		Use:   "restore [server]",
 		Short: "Restore a service onto an already-installed host from its backup (DR)",
@@ -181,13 +187,17 @@ func newServiceRestoreCmd(g *globalOptions) *cobra.Command {
 			if host == "" {
 				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
 			}
+			prog := output.NewProgress(cmd.OutOrStdout(), "service.restore", server, g.json)
+			if err := guardCheckout(ctx, prog, allowStale, false); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
 			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 
-			prog := output.NewProgress(cmd.OutOrStdout(), "service.restore", server, g.json)
 			env := core.ServiceEnv{
 				RepoRoot: ctx.RepoRoot,
 				Host:     ssh,
@@ -204,5 +214,6 @@ func newServiceRestoreCmd(g *globalOptions) *cobra.Command {
 	}
 	hf.register(cmd)
 	cmd.Flags().StringVar(&marker, "marker", "", "optional demo marker to verify after restore")
+	registerAllowStale(cmd, &allowStale)
 	return cmd
 }

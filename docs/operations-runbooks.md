@@ -225,6 +225,20 @@ portablevps server deploy <server> --dry-run       # build + show what would cha
 portablevps server deploy <server> --backup-first  # backup, then switch
 ```
 
+- **It deploys your local checkout, so that checkout must be current.** A
+  deploy builds the tree it is run from, not what the remote holds. Before
+  anything touches the host, the CLI refreshes the remote's default branch
+  (`origin/HEAD`, else `origin/main`), giving up after 30 s with a warning. It
+  then **refuses (exit 65)** in two cases:
+  - **The checkout is behind that branch.** Switching would roll the host back
+    to an older config. With an app's one-way migrations, the old code then runs
+    against a newer database.
+  - **Tracked files under the project directory have uncommitted changes.**
+
+  Commits not yet pushed only warn, because a host that self-upgrades from that
+  branch reverts them on its next poll. `--allow-stale` deploys anyway. A
+  `--dry-run` only warns. `server repurpose`, `service migrate` and `service
+  restore` switch hosts too, and are guarded the same way.
 - **`--backup-first`** runs the server's backup (exactly `portablevps backup
   run`) before switching and deploys nothing if the backup fails. Use it before
   a change that switching generations cannot undo, such as an application

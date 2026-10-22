@@ -134,7 +134,7 @@ func newServerRebootCmd(g *globalOptions) *cobra.Command {
 
 func newServerDeployCmd(g *globalOptions) *cobra.Command {
 	var hf hostFlags
-	var dryRun, backupFirst bool
+	var dryRun, backupFirst, allowStale bool
 	cmd := &cobra.Command{
 		Use:   "deploy [server]",
 		Short: "Push the committed config to a running server in place (nixos-rebuild switch)",
@@ -149,6 +149,12 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 			"If the SSH session drops mid-switch (the switch restarted the mesh " +
 			"client it runs over), the outcome is read from the host itself: its " +
 			"journal and /run/current-system.\n\n" +
+			"The deploy builds the LOCAL checkout. It first refreshes the remote's " +
+			"default branch (origin/HEAD, else origin/main) and refuses when the " +
+			"checkout is behind it, which would roll the host back, or has " +
+			"uncommitted changes in the project. --allow-stale overrides; a dry run " +
+			"only warns. Commits not yet pushed only warn: a host that self-upgrades " +
+			"from that branch would revert them.\n\n" +
 			"[server] may be a bare name or a path to its definition file " +
 			"(servers/<name>.nix), so you can shell tab-complete it.",
 		Args: cobra.MaximumNArgs(1),
@@ -165,13 +171,18 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
 			}
 
+			prog := output.NewProgress(cmd.OutOrStdout(), "server.deploy", server, g.json)
+			if err := guardCheckout(ctx, prog, allowStale, dryRun); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
+
 			ssh, cleanup, err := hf.sshAdapter(g, ctx, server)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 
-			prog := output.NewProgress(cmd.OutOrStdout(), "server.deploy", server, g.json)
 			env := core.DeployEnv{
 				RepoRoot:    ctx.RepoRoot,
 				Runner:      adapters.ExecRunner{},
@@ -196,6 +207,7 @@ func newServerDeployCmd(g *globalOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "build and show what would change, but do not switch")
 	cmd.Flags().BoolVar(&backupFirst, "backup-first", false, "run the server's backup before switching; deploy nothing if it fails")
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "backup-first")
+	registerAllowStale(cmd, &allowStale)
 	return cmd
 }
 
