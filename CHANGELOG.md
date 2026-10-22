@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **authentik: `baseUrl` option.** `portablevps.apps.authentik.baseUrl`
+  (default `null`) renders `AUTHENTIK_WEB__BASE_URL`. authentik 2026.8 copies it
+  into the tenant's base URL setting at startup when that setting is still
+  empty; with neither it nor a host on the embedded outpost, authentik logs a
+  "Base URL is not configured" deprecation. A configured base URL becomes
+  required in a later release. Setting the option changes the env file, so both
+  authentik containers restart once on that deploy.
+
 - **CLI: release builds pin `nixos-rebuild` and `nixos-anywhere`.** The
   GoReleaser build now bakes in the exact `github:NixOS/nixpkgs/<rev>` and
   `github:nix-community/nixos-anywhere/<rev>` from `cli/flake.lock`, as the

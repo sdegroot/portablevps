@@ -127,6 +127,8 @@ let
     AUTHENTIK_STORAGE__MEDIA__BACKEND = "file";
     AUTHENTIK_STORAGE__MEDIA__FILE__PATH = "/media";
     AUTHENTIK_BOOTSTRAP_EMAIL = cfg.bootstrapEmail;
+  } // lib.optionalAttrs (cfg.baseUrl != null) {
+    AUTHENTIK_WEB__BASE_URL = cfg.baseUrl;
   } // lib.optionalAttrs smtpEnabled {
     AUTHENTIK_EMAIL__HOST = cfg.smtp.host;
     AUTHENTIK_EMAIL__PORT = toString cfg.smtp.port;
@@ -195,6 +197,19 @@ in
         CIDRs authentik trusts for X-Forwarded-* headers. Includes the NetBird
         CGNAT range (100.64.0.0/10) so a mesh-fronting proxy's forwarded
         X-Forwarded-Proto is honoured (otherwise logins loop http<->https).
+      '';
+    };
+
+    baseUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://auth.example.com";
+      description = ''
+        The public base URL authentik is served under, rendered as
+        AUTHENTIK_WEB__BASE_URL. authentik 2026.8 copies it into the tenant's
+        base URL setting at startup when that setting is still empty (and
+        otherwise falls back to the embedded outpost's host); a configured base
+        URL becomes required in a later release. null leaves it unset.
       '';
     };
 
