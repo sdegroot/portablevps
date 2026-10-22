@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Deploys refuse a stale or dirty checkout.** `server deploy`, `server
+  repurpose`, `service migrate` and `service restore` build the local checkout.
+  They now first refresh the remote's default branch (`origin/HEAD`, else
+  `origin/main`, with a 30 s timeout that only warns). They refuse (exit 65)
+  when the checkout is behind that branch or has uncommitted changes to tracked
+  files in the project. `--allow-stale` overrides, and `--dry-run` only warns.
+  Unpushed commits warn, because a self-upgrading host reverts them.
+  - **Why:** on 2026-10-22 an operator deployed authentik from a checkout 8
+    commits behind main, just after merging a PR. That rolled the host back to
+    July's nixpkgs and authentik 2026.5.2, on a database 2026.8.5 had already
+    migrated.
+  - **Checks run first:** they come before any SSH, 1Password lookup or
+    destructive-target prompt, so a refusal costs seconds.
+  - **Testing:** the tests use real git repositories (behind, ahead, dirty
+    inside and outside the project, staged, untracked, no `origin/HEAD`, a
+    detached worktree, a failed fetch).
+
 - **Fix: a portablevps commit no longer changes every host's system.** The
   break-glass watchdog referenced its bundled `nl.zone` file by its path
   inside the portablevps source tree. That made the whole source tree part of

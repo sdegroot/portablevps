@@ -168,6 +168,7 @@ func newServerAdoptCmd(g *globalOptions) *cobra.Command {
 func newServerRepurposeCmd(g *globalOptions) *cobra.Command {
 	var hf hostFlags
 	var resetPaths []string
+	var allowStale bool
 	cmd := &cobra.Command{
 		Use:   "repurpose [server]",
 		Short: "Switch a running host to a different server config in place (no reinstall)",
@@ -187,6 +188,11 @@ func newServerRepurposeCmd(g *globalOptions) *cobra.Command {
 			if host == "" {
 				return ExitError{Code: 64, Message: "no --host and no mesh host could be derived; pass --host <addr>"}
 			}
+			prog := output.NewProgress(cmd.OutOrStdout(), "server.repurpose", server, g.json)
+			if err := guardCheckout(ctx, prog, allowStale, false); err != nil {
+				prog.Result("fail", err.Error(), exitCodeOf(err))
+				return silentExit(err)
+			}
 			if err := confirmDestroyTarget(g, cmd, host); err != nil {
 				return err
 			}
@@ -200,7 +206,6 @@ func newServerRepurposeCmd(g *globalOptions) *cobra.Command {
 			}
 			defer cleanup()
 
-			prog := output.NewProgress(cmd.OutOrStdout(), "server.repurpose", server, g.json)
 			env := core.RepurposeEnv{
 				RepoRoot:       ctx.RepoRoot,
 				Host:           ssh,
@@ -218,6 +223,7 @@ func newServerRepurposeCmd(g *globalOptions) *cobra.Command {
 	}
 	hf.register(cmd)
 	cmd.Flags().StringSliceVar(&resetPaths, "reset-path", nil, "data dir to clear before switching (repeatable; must be under /data or /var/lib)")
+	registerAllowStale(cmd, &allowStale)
 	return cmd
 }
 
