@@ -94,7 +94,14 @@
   # maintainer, and restart-on-change isn't confirmed in its docs — worth an ADR
   # + a spike before adopting it under the whole fleet's container runtime.
   system.activationScripts.restartChangedQuadlets = {
-    deps = [ "etc" ];
+    # After sops-nix has written this generation's secrets and templates: an
+    # EnvironmentFile or a mounted secret must already be the NEW one when it
+    # is hashed and the container restarts. Ordered only by "etc", this step
+    # ran before setupSecrets (snippets otherwise go alphabetically), so a
+    # secret-only change hashed the previous env file and restarted nothing,
+    # and a definition that mounts a newly added secret restarted before that
+    # secret existed.
+    deps = [ "etc" ] ++ lib.optional (config.system.activationScripts ? setupSecrets) "setupSecrets";
     text = ''
       stateDir=/var/lib/portablevps/quadlet-hashes
       # First run (state dir absent): seed hashes only, never restart.

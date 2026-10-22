@@ -82,9 +82,10 @@ The key is rendered to Forgejo with a final newline added, because
 prototype mode (no secrets, e.g. a local VM) there is no private key, so
 signing stays off and the build prints a warning.
 
-**A deploy does not restart Forgejo** when only its environment changes (mail
-settings, the SMTP password). Restart `forgejo.service` after such a deploy.
-The signing key is different: changing it restarts Forgejo.
+A deploy restarts Forgejo when its container definition or its environment
+file changes (mail settings, the SMTP password, a new `publicKey`). Rotating
+the private key without changing `publicKey` is not a rotation:
+`forgejo-provision` refuses the mismatch.
 
 ## `signing`: what Forgejo signs
 
