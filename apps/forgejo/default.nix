@@ -18,6 +18,18 @@ let
     then "/etc/portablevps/forgejo.env"
     else config.sops.templates."portablevps/forgejo.env".path;
 
+  # The instance signing key, as the container sees it. ssh-keygen finds the
+  # private key by stripping ".pub" from SIGNING_KEY, so both live side by side.
+  signingKeyDir = "/etc/forgejo-signing";
+  # Prototype mode has no secrets, so no private key: signing stays off there
+  # (with a warning) rather than failing the build of every local VM.
+  signingActive = cfg.signing.enable && !prototype;
+  signingPublicKeyFile = pkgs.writeText "forgejo-signing-key.pub" "${cfg.signing.publicKey}\n";
+  signingPublicKeyBlob = lib.concatStringsSep " " (lib.take 2 (lib.splitString " " cfg.signing.publicKey));
+  mailerSecrets =
+    lib.optionalAttrs (cfg.mailer.enable && cfg.mailer.usernameSecret != null) { FORGEJO__mailer__USER = cfg.mailer.usernameSecret; }
+    // lib.optionalAttrs (cfg.mailer.enable && cfg.mailer.passwordSecret != null) { FORGEJO__mailer__PASSWD = cfg.mailer.passwordSecret; };
+
   plainEnv = {
     USER_UID = toString forgejoUid;
     USER_GID = toString forgejoUid;
@@ -47,7 +59,19 @@ let
     # break-glass admin.
     FORGEJO__service__ENABLE_PASSWORD_SIGNIN_FORM =
       lib.boolToString (!(cfg.oidc.enable && cfg.oidc.hidePasswordForm));
-    FORGEJO__service__ENABLE_NOTIFY_MAIL = "false";
+    # The image writes these into /data/gitea/conf/app.ini, where they persist,
+    # so every mail and signing key is set in both states: turning a feature
+    # off must overwrite what turning it on wrote.
+    FORGEJO__mailer__ENABLED = lib.boolToString cfg.mailer.enable;
+    FORGEJO__service__ENABLE_NOTIFY_MAIL = lib.boolToString (cfg.mailer.enable && cfg.mailer.notifications);
+    # Without confirmation, an address a user adds is activated on the spot,
+    # and an activated address is what makes a signed commit "Verified".
+    FORGEJO__service__REGISTER_EMAIL_CONFIRM = lib.boolToString (cfg.mailer.enable && cfg.mailer.confirmEmails);
+    # It would otherwise default to the [service] value above. Accounts created
+    # by OIDC auto-registration carry the address the identity provider vouches for.
+    FORGEJO__oauth2_client__REGISTER_EMAIL_CONFIRM = "false";
+    FORGEJO__repository_0X2E_signing__FORMAT = if signingActive then "ssh" else "openpgp";
+    FORGEJO__repository_0X2E_signing__SIGNING_KEY = if signingActive then "${signingKeyDir}/key.pub" else "none";
     FORGEJO__openid__ENABLE_OPENID_SIGNIN = "false";
     FORGEJO__openid__ENABLE_OPENID_SIGNUP = "false";
     FORGEJO__security__INSTALL_LOCK = "true";
@@ -62,13 +86,23 @@ let
     FORGEJO__oauth2_client__ACCOUNT_LINKING = "auto";
     FORGEJO__oauth2_client__USERNAME = cfg.oidc.usernameClaim;
     FORGEJO__oauth2_client__UPDATE_AVATAR = "true";
+  } // lib.optionalAttrs cfg.mailer.enable {
+    FORGEJO__mailer__PROTOCOL = cfg.mailer.protocol;
+    FORGEJO__mailer__SMTP_ADDR = cfg.mailer.host;
+    FORGEJO__mailer__SMTP_PORT = toString cfg.mailer.port;
+    FORGEJO__mailer__FROM = cfg.mailer.from;
+  } // lib.optionalAttrs signingActive {
+    FORGEJO__repository_0X2E_signing__SIGNING_NAME = cfg.signing.name;
+    FORGEJO__repository_0X2E_signing__SIGNING_EMAIL = cfg.signing.email;
+    FORGEJO__repository_0X2E_signing__MERGES = lib.concatStringsSep "," cfg.signing.merges;
+    FORGEJO__repository_0X2E_signing__CRUD_ACTIONS = lib.concatStringsSep "," cfg.signing.crudActions;
   } // cfg.extraEnv;
 
   secretEnv = {
     FORGEJO__database__PASSWD = cfg.postgres.passwordSecret;
     FORGEJO__security__SECRET_KEY = cfg.secretKeySecret;
     FORGEJO__security__INTERNAL_TOKEN = cfg.internalTokenSecret;
-  };
+  } // mailerSecrets;
 
   demoSecret = key:
     if key == cfg.postgres.passwordSecret then "demo-password"
@@ -157,8 +191,25 @@ let
     runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.jq ];
     text = builtins.readFile ./provision-package-publishers.sh;
   };
+  commitBotsJson = pkgs.writeText "forgejo-commit-bots.json" (builtins.toJSON (lib.mapAttrs
+    (_: bot: { inherit (bot) repositories secretName; })
+    cfg.commitBots));
+  provisionCommitBots = pkgs.writeShellApplication {
+    name = "forgejo-provision-commit-bots";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.jq pkgs.openssh ];
+    text = builtins.readFile ./provision-commit-bots.sh;
+  };
+  # Upstream copies are never protected: upstream owns their default branch,
+  # and its commits are signed with keys Forgejo does not know.
+  signedCommitsExcludeJson = pkgs.writeText "forgejo-signed-commits-exclude.json" (builtins.toJSON
+    (lib.unique (cfg.requireSignedCommits.exclude ++ lib.attrNames cfg.upstreamCopies)));
+  requireSignedCommits = pkgs.writeShellApplication {
+    name = "forgejo-require-signed-commits";
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.jq ];
+    text = builtins.readFile ./require-signed-commits.sh;
+  };
   oidcAutoRegister = cfg.oidc.enable && cfg.oidc.autoRegister;
-  forgejoCli = "podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
+  forgejoCli ="podman exec --user ${toString forgejoUid}:${toString forgejoUid} forgejo forgejo";
   disabledOpenSshServicePath = "/run/portablevps/forgejo-disabled-openssh-s6";
   disabledOpenSshService = pkgs.runCommand "forgejo-disabled-openssh-s6-service" { } ''
     mkdir -p "$out"
@@ -547,6 +598,175 @@ in
       };
     };
 
+    mailer = {
+      enable = lib.mkEnableOption ''
+        outgoing mail through an SMTP relay: notifications for what users
+        watch, confirmation of email addresses, and failed runs of workflows
+        that set enable-email-notifications
+      '';
+      host = lib.mkOption {
+        type = lib.types.str;
+        example = "smtp-relay.example.com";
+        description = "SMTP relay host.";
+      };
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 587;
+        description = "SMTP port (587 = STARTTLS, 465 = implicit TLS).";
+      };
+      protocol = lib.mkOption {
+        type = lib.types.enum [ "smtp+starttls" "smtps" "smtp" ];
+        default = "smtp+starttls";
+        description = "How Forgejo talks to the relay.";
+      };
+      from = lib.mkOption {
+        type = lib.types.str;
+        example = "Code <code@example.com>";
+        description = "From address of every mail (a sender the relay may send for).";
+      };
+      usernameSecret = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = "forgejo/smtp-username";
+        description = "sops key for the SMTP username (null omits SMTP auth).";
+      };
+      passwordSecret = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = "forgejo/smtp-password";
+        description = "sops key for the SMTP password (null omits SMTP auth).";
+      };
+      notifications = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Mail users about activity on what they watch (issues, pull requests,
+          reviews). Each user can still turn this off in their settings.
+        '';
+      };
+      confirmEmails = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Require a mailed confirmation before an email address a user adds to
+          their account becomes active. Forgejo only counts a signed commit as
+          verified when its committer address is active on the signer's
+          account, so without this anyone can claim any unused address.
+          Accounts created by OIDC auto-registration are not affected: the
+          identity provider vouches for that address.
+        '';
+      };
+    };
+
+    signing = {
+      enable = lib.mkEnableOption ''
+        an SSH key Forgejo signs its own commits with (merges, edits in the web
+        editor or through the API, initial commits), so they count as verified
+      '';
+      publicKey = lib.mkOption {
+        type = lib.types.str;
+        example = "ssh-ed25519 AAAAC3Nza... forgejo-signing";
+        description = ''
+          Public half of the signing key. forgejo-provision fails if it does not
+          belong to the private key in privateKeySecret.
+        '';
+      };
+      privateKeySecret = lib.mkOption {
+        type = lib.types.str;
+        default = "forgejo/signing-key";
+        description = "sops key holding the private key (OpenSSH format, no passphrase).";
+      };
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = "Forgejo";
+        description = "Committer name on commits Forgejo signs.";
+      };
+      email = lib.mkOption {
+        type = lib.types.str;
+        example = "code@example.com";
+        description = "Committer email on commits Forgejo signs.";
+      };
+      merges = lib.mkOption {
+        type = lib.types.listOf (lib.types.enum [ "never" "always" "pubkey" "twofa" "basesigned" "commitssigned" "approved" ]);
+        # Forgejo's default adds "twofa": Forgejo's own 2FA, which SSO accounts
+        # do not have (the IdP does MFA). With it, no merge would ever be signed.
+        default = [ "pubkey" "basesigned" "commitssigned" ];
+        description = ''
+          When a merge is signed (all rules must hold): pubkey = the merger has
+          a key on their account, basesigned = the target branch's head is
+          verified, commitssigned = every commit being merged is verified.
+        '';
+      };
+      crudActions = lib.mkOption {
+        type = lib.types.listOf (lib.types.enum [ "never" "always" "pubkey" "twofa" "parentsigned" ]);
+        default = [ "pubkey" "parentsigned" ];
+        description = ''
+          When an edit made in the web editor or through the contents API is
+          signed (all rules must hold): pubkey = the author has a key on their
+          account, parentsigned = the parent commit is verified. Forgejo's
+          automatic Actions token has no account and so never gets a signature.
+        '';
+      };
+    };
+
+    requireSignedCommits = {
+      enable = lib.mkEnableOption ''
+        a branch protection rule on every repository's default branch that only
+        accepts verified commits: signed with a key on the committer's account
+        (SSH keys must be verified there too) by an address active on that
+        account, or signed by Forgejo itself. A timer reapplies it, so new
+        repositories are covered without a deploy. Additive: an existing rule
+        only gets require_signed_commits switched on, and a repository dropped
+        from the scope keeps its rule. A protected branch also refuses force
+        pushes and deletion. Archived repositories, pull mirrors and upstream
+        copies are skipped
+      '';
+      exclude = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "acme/legacy" ];
+        description = "Repositories (\"owner/repo\") never protected by this.";
+      };
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "15min";
+        description = "How often the rule is reapplied (systemd time span).";
+      };
+    };
+
+    commitBots = lib.mkOption {
+      default = { };
+      example = lib.literalExpression ''
+        { pin-bot.repositories = [ "acme/fleet" ]; }
+      '';
+      description = ''
+        Local accounts that commit from automation, keyed by username.
+        forgejo-provision creates each bot, gives it write access to its
+        repositories, keeps a write:repository token for it on the host and
+        stores that token as an Actions secret on each repository (rewritten on
+        every run; the token is re-issued only when it stops working).
+
+        With signing enabled the bot also gets an SSH key whose private half is
+        discarded on creation: it only makes the bot pass the "pubkey" rule,
+        so commits it creates through the API (contents API, merges) are
+        signed by Forgejo and pass requireSignedCommits. A plain git push of
+        a commit the bot made itself is not signed. Forgejo's automatic job
+        token can do neither, and cannot push to a protected branch at all.
+      '';
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          repositories = lib.mkOption {
+            type = lib.types.nonEmptyListOf lib.types.str;
+            example = [ "acme/fleet" ];
+            description = "Repositories (\"owner/repo\") the bot may write to.";
+          };
+          secretName = lib.mkOption {
+            type = lib.types.str;
+            default = "COMMIT_BOT_TOKEN";
+            description = "Repository Actions secret holding the bot's token.";
+          };
+        };
+      });
+    };
+
     actions.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -562,6 +782,19 @@ in
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
+      assertions = [
+        {
+          assertion = cfg.requireSignedCommits.enable -> cfg.signing.enable;
+          message = "portablevps.apps.forgejo.requireSignedCommits needs signing.enable: Forgejo cannot sign a merge without its own key, so every merge into a protected default branch would be refused.";
+        }
+        {
+          assertion = cfg.signing.enable -> lib.length (lib.splitString " " cfg.signing.publicKey) >= 2;
+          message = "portablevps.apps.forgejo.signing.publicKey must be an OpenSSH public key line (\"ssh-ed25519 AAAA...\").";
+        }
+      ];
+      warnings = lib.optional (cfg.signing.enable && prototype)
+        "portablevps.apps.forgejo.signing is off in prototype mode (no private key): merges into protected branches will be refused.";
+
       portablevps.postgres = {
         database = lib.mkDefault cfg.postgres.database;
         user = lib.mkDefault cfg.postgres.user;
@@ -595,7 +828,10 @@ in
         # Forgejo's SSH_LISTEN_HOST and always binds all interfaces, so mask it
         # and use Forgejo's built-in SSH server behind the NetBird-only proxy.
         Volume=${disabledOpenSshServicePath}:/etc/s6/openssh:Z
-
+        ${lib.optionalString signingActive ''
+          Volume=${config.sops.templates."portablevps/forgejo-signing-key".path}:${signingKeyDir}/key:ro
+          Volume=${signingPublicKeyFile}:${signingKeyDir}/key.pub:ro
+        ''}
         [Service]
         ExecStartPre=${pkgs.systemd}/bin/systemd-tmpfiles --create
         Restart=always
@@ -648,6 +884,16 @@ in
               --username ${lib.escapeShellArg cfg.admin.username} \
               --password "$admin_password" \
               --must-change-password=false
+          fi
+        '' + lib.optionalString signingActive ''
+
+          # A mismatched pair would only show at the first merge (unsigned, and
+          # refused on a protected branch), so check it here, loudly.
+          signing_key=${lib.escapeShellArg config.sops.templates."portablevps/forgejo-signing-key".path}
+          derived="$(${pkgs.openssh}/bin/ssh-keygen -y -f "$signing_key" | ${pkgs.gawk}/bin/awk '{ print $1 " " $2 }')"
+          if [ "$derived" != ${lib.escapeShellArg signingPublicKeyBlob} ]; then
+            echo "forgejo-provision: signing.publicKey does not match the private key in ${cfg.signing.privateKeySecret}" >&2
+            exit 1
           fi
         '' + lib.optionalString oauthEnabled ''
 
@@ -704,6 +950,16 @@ in
           FORGEJO_REPOS_ROOT=${dataRoot}/git/repositories \
           FORGEJO_UID=${toString forgejoUid} \
             ${provisionUpstreamCopies}/bin/forgejo-provision-upstream-copies
+        '' + lib.optionalString (cfg.commitBots != { }) ''
+
+          FORGEJO_API=${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1"} \
+          FORGEJO_ADMIN_USER=${lib.escapeShellArg cfg.admin.username} \
+          FORGEJO_ADMIN_PASSWORD_FILE=${adminPasswordFile} \
+          FORGEJO_CLI=${lib.escapeShellArg forgejoCli} \
+          BOTS_JSON=${commitBotsJson} \
+          BOT_STATE_DIR=/var/lib/portablevps/forgejo-commit-bots \
+          SIGNING_ELIGIBLE=${lib.boolToString signingActive} \
+            ${provisionCommitBots}/bin/forgejo-provision-commit-bots
         '';
       };
 
@@ -750,17 +1006,65 @@ in
       };
     })
 
+    (lib.mkIf cfg.requireSignedCommits.enable {
+      systemd.services.forgejo-require-signed-commits = {
+        description = "Require verified commits on every Forgejo repository's default branch";
+        after = [ "forgejo.service" "forgejo-provision.service" ];
+        requires = [ "forgejo.service" ];
+        unitConfig.ConditionPathExists = "!/run/portablevps/restore-mode";
+        environment = {
+          FORGEJO_API = "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/v1";
+          FORGEJO_ADMIN_USER = cfg.admin.username;
+          FORGEJO_ADMIN_PASSWORD_FILE = "${adminPasswordFile}";
+          EXCLUDE_JSON = "${signedCommitsExcludeJson}";
+        };
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${requireSignedCommits}/bin/forgejo-require-signed-commits";
+          TimeoutStartSec = "10min";
+        };
+      };
+
+      systemd.timers.forgejo-require-signed-commits = {
+        wantedBy = lib.optional (!config.portablevps.restoreMode) "timers.target";
+        timerConfig = {
+          # Relative to the timer's own start, so a deploy that adds it applies
+          # the rules a minute later instead of waiting a whole interval.
+          OnActiveSec = "1min";
+          OnUnitActiveSec = cfg.requireSignedCommits.interval;
+          RandomizedDelaySec = "30s";
+        };
+      };
+    })
+
     (lib.mkIf (!prototype) {
       sops.secrets = {
         ${cfg.secretKeySecret} = { };
         ${cfg.internalTokenSecret} = { };
         ${cfg.admin.passwordSecret} = { };
-      } // lib.optionalAttrs oauthEnabled { ${cfg.oidc.clientSecretSecret} = { }; };
+      } // lib.optionalAttrs oauthEnabled { ${cfg.oidc.clientSecretSecret} = { }; }
+      // lib.mapAttrs' (_: secret: lib.nameValuePair secret { }) mailerSecrets
+      // lib.optionalAttrs cfg.signing.enable { ${cfg.signing.privateKeySecret} = { }; };
 
       sops.templates."portablevps/forgejo.env" = {
         path = "/etc/portablevps/forgejo.env";
         mode = "0400";
         content = envContent;
+      };
+    })
+
+    (lib.mkIf signingActive {
+      # The key as Forgejo's git user reads it inside the container (ssh-keygen
+      # refuses a private key anyone else can read). Rendered rather than
+      # mounted as the secret itself, to restore the final newline that
+      # `pvps secret set` strips: without it OpenSSH calls the key "invalid
+      # format". An extra newline is harmless.
+      sops.templates."portablevps/forgejo-signing-key" = {
+        content = "${config.sops.placeholder.${cfg.signing.privateKeySecret}}\n";
+        uid = forgejoUid;
+        gid = forgejoUid;
+        mode = "0400";
+        restartUnits = [ "forgejo.service" ];
       };
     })
 

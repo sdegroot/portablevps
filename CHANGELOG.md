@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- **Forgejo: signed commits on every default branch.** Four new options of
+  `portablevps.apps.forgejo`, described in `docs/forgejo-signed-commits.md`:
+  - **`requireSignedCommits`** protects every repository's default branch
+    with "require signed commits", from a timer, so new repositories are
+    covered without a deploy. It is additive: an existing rule only gets the
+    flag, and nothing is removed. Archived repositories, pull mirrors and
+    upstream copies are skipped, as is `exclude`. It lists repositories per
+    owner: the admin's repository search misses private repositories of
+    organizations it does not own.
+  - **`signing`** gives Forgejo an SSH key from sops, so merges, web and API
+    edits and initial commits are signed. The merge rules leave out Forgejo's
+    default `twofa`: SSO accounts have no Forgejo 2FA, so with it no merge was
+    ever signed. `forgejo-provision` fails if the configured public key does
+    not belong to the private key.
+  - **`mailer`** sends mail through an SMTP relay, for notifications and for
+    confirming an address a user adds. A commit only counts as verified for
+    an address that is active on the signer's account, and without
+    confirmation any added address was active at once. Accounts created by
+    OIDC auto-registration still need no mail.
+  - **`commitBots`** are local accounts with write access, a token stored as
+    an Actions secret on their repositories, and a key that makes Forgejo sign
+    what they commit through the API. Forgejo's own Actions token cannot push
+    to a protected branch at all.
+  - **Mail and signing settings are now written in both states.** The image
+    persists them in `app.ini`, so turning a feature off overwrites what
+    turning it on wrote. With everything off: `[mailer] ENABLED = false` and
+    `[repository.signing] SIGNING_KEY = none`.
+  - **Tested** against Forgejo 16.0.5 with mailpit (39 checks). Refused:
+    unsigned pushes, keys that are not verified, unconfirmed committer
+    addresses, force pushes, and squashing an unsigned PR. Signed by Forgejo:
+    merges and squashes of signed PRs, and bot commits through the contents
+    API. Mail went out over STARTTLS with authentication, from the configured
+    sender: a confirmation for an address added in the web UI, and PR
+    notifications.
+
 - **Self-upgrade from a Forgejo or Gitea repo.** New
   `portablevps.autoUpgrade.tokenFormat = "git-token-header"` hands
   `tokenSecret` to git as an `Authorization: token` header, scoped to
