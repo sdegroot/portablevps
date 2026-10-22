@@ -10,8 +10,15 @@ builds:
     goarch: [amd64, arm64]
     env:
       - CGO_ENABLED=0
+    # The tool flake refs pin nixos-rebuild / nixos-anywhere to cli/flake.lock,
+    # as the nix build does. They come from scripts/tool-flake-refs.sh; a
+    # missing variable fails the build rather than shipping a binary that
+    # resolves `nixpkgs` through the operator's flake registry.
     ldflags:
-      - -s -w -X github.com/sdegroot/portablevps/internal/core.Version={{.Version}}
+      - -s -w
+      - -X github.com/sdegroot/portablevps/internal/core.Version={{.Version}}
+      - -X github.com/sdegroot/portablevps/internal/core.NixpkgsFlake={{ .Env.PVPS_NIXPKGS_FLAKE }}
+      - -X github.com/sdegroot/portablevps/internal/core.NixosAnywhereFlake={{ .Env.PVPS_NIXOS_ANYWHERE_FLAKE }}
 
 archives:
   - id: portablevps

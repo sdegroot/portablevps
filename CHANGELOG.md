@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **CLI: release builds pin `nixos-rebuild` and `nixos-anywhere`.** The
+  GoReleaser build now bakes in the exact `github:NixOS/nixpkgs/<rev>` and
+  `github:nix-community/nixos-anywhere/<rev>` from `cli/flake.lock`, as the
+  nix build already did. Released binaries up to 0.3.0 ran
+  `nix run nixpkgs#nixos-rebuild`, which resolves through the operator's flake
+  registry (nixpkgs-unstable HEAD). That nixos-rebuild broke deploys on
+  2026-09-30, and operators had to pin the registry by hand with
+  `NIX_CONFIG="flake-registry = …"`. A release build without the pins now
+  fails, and CI checks that the built binary carries them
+  (`cli/scripts/tool-flake-refs.sh`, `verify-tool-flake-pins.sh`).
+  `pvps doctor` reports which nixos-rebuild a binary uses.
+
+- **CLI: finds `nix` when it is not on `PATH`.** If the shell didn't source
+  the Nix profile, pvps now looks in `/nix/var/nix/profiles/default/bin`,
+  `~/.nix-profile/bin` and `/run/current-system/sw/bin`. It adds the first one
+  that has `nix` to its own `PATH`, so `nixos-rebuild`'s own `nix` calls work
+  too. `pvps doctor` warns when it had to.
+
 - **Inputs updated (2026-10-22).** nixpkgs `nixos-26.05` 2026-07-24 →
   2026-10-21 (Linux 6.18.39 → 6.18.57, OpenSSH 10.4p1 → 10.5p1, OpenSSL
   3.6.3 → 3.6.5, systemd 260.2 → 260.5, Traefik 3.7.6 → 3.7.13, Podman

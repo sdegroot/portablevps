@@ -64,6 +64,13 @@ mise use -g github:sdegroot/portablevps
 # at https://github.com/sdegroot/portablevps/releases/latest and extract it
 ```
 
+Every way pins the `nixos-rebuild` and `nixos-anywhere` it runs to the
+revisions in `cli/flake.lock`, so a deploy does not depend on what `nixpkgs`
+your flake registry points at. Only a plain `go build` from source leaves them
+unpinned, and `pvps doctor` warns about that. If `nix` is installed but not on
+your shell's `PATH` (a non-login shell), pvps finds it in the standard install
+locations by itself, and `pvps doctor` says so.
+
 See `cli/README.md` for building from source.
 
 ## Developing and testing this tool locally

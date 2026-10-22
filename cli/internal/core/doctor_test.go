@@ -197,3 +197,30 @@ func writeMode(t *testing.T, path, content string, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+func TestDoctorWarnsWhenNixWasFoundOffPath(t *testing.T) {
+	env, _ := testEnv(t, map[string]map[string]any{}, map[string]bool{"flake": true, "git": true}, nil)
+	env.NixAddedToPath = "/nix/var/nix/profiles/default/bin"
+	got := statuses(RunDoctor(env, ""))
+	if got["nix not on PATH; pvps uses /nix/var/nix/profiles/default/bin/nix"] != StatusWarn {
+		t.Fatalf("expected a nix-off-PATH warning, got %v", got)
+	}
+	if _, ok := got["nix available"]; ok {
+		t.Error("must not also report nix as plainly available")
+	}
+}
+
+func TestDoctorReportsTheNixosRebuildPin(t *testing.T) {
+	saved := NixpkgsFlake
+	t.Cleanup(func() { NixpkgsFlake = saved })
+	env, _ := testEnv(t, map[string]map[string]any{}, map[string]bool{"flake": true, "git": true}, nil)
+
+	NixpkgsFlake = "nixpkgs"
+	if got := statuses(RunDoctor(env, "")); got["nixos-rebuild is not pinned (resolved through your flake registry)"] != StatusWarn {
+		t.Fatalf("expected an unpinned warning for a source build, got %v", got)
+	}
+	NixpkgsFlake = "github:NixOS/nixpkgs/0bb7ec54c8483066ec9d7720e780a5caa71f8612"
+	if got := statuses(RunDoctor(env, "")); got["nixos-rebuild pinned to github:NixOS/nixpkgs/0bb7ec54c8483066ec9d7720e780a5caa71f8612"] != StatusOK {
+		t.Fatalf("expected the pin reported OK, got %v", got)
+	}
+}

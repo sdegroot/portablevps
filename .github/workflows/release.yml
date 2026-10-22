@@ -24,6 +24,12 @@ jobs:
       - name: Run tests
         working-directory: cli
         run: go test ./...
+      - name: Pin the tool flakes the CLI runs (from cli/flake.lock)
+        # nixos-rebuild and nixos-anywhere come from these exact revisions, as in
+        # the nix build; without them a release would resolve `nixpkgs` through
+        # the operator's flake registry. GoReleaser refuses to build without them.
+        working-directory: cli
+        run: scripts/tool-flake-refs.sh | tee -a "$GITHUB_ENV"
       - name: GoReleaser release
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -33,6 +39,9 @@ jobs:
           workdir: cli
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the released binaries carry the pins
+        working-directory: cli
+        run: scripts/verify-tool-flake-pins.sh dist
       - name: Attest build provenance
         # Opportunistic: mise's github backend verifies this when present and
         # simply skips the check when it's not, so it must never fail the

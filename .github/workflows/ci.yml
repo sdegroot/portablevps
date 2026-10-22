@@ -35,6 +35,22 @@ jobs:
           version: "~> v2.18"
           args: check
           workdir: cli
+      - name: Release build pins its tool flakes
+        # The same pin + check as the release workflow, on every PR, so a
+        # change can't quietly ship a release whose nixos-rebuild follows the
+        # operator's flake registry again.
+        working-directory: cli
+        run: scripts/tool-flake-refs.sh | tee -a "$GITHUB_ENV"
+      - name: GoReleaser snapshot build
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2.18"
+          args: build --snapshot --clean --single-target
+          workdir: cli
+      - name: Verify the snapshot binary carries the pins
+        working-directory: cli
+        run: scripts/verify-tool-flake-pins.sh dist
       - name: Go CLI flake check
         working-directory: cli
         run: nix flake check --print-build-logs

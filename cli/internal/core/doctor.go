@@ -32,6 +32,9 @@ type Env struct {
 	Runner     CommandRunner
 	HasCommand func(name string) bool
 	Getenv     func(name string) string
+	// NixAddedToPath is the directory pvps had to prepend to PATH to find nix
+	// (see EnsureNixOnPath); "" when nix was already on PATH.
+	NixAddedToPath string
 }
 
 // RunDoctor returns the environment/repository health checks, optionally
@@ -44,11 +47,25 @@ func RunDoctor(env Env, serverName string) []Check {
 
 	// 1. Required tooling.
 	for _, tool := range []string{"nix", "git", "ssh"} {
-		if env.HasCommand(tool) {
-			add(StatusOK, tool+" available", "")
-		} else {
+		switch {
+		case !env.HasCommand(tool):
 			add(StatusFail, tool+" not found", "install "+tool+" and re-run")
+		case tool == "nix" && env.NixAddedToPath != "":
+			add(StatusWarn, "nix not on PATH; pvps uses "+env.NixAddedToPath+"/nix",
+				"add "+env.NixAddedToPath+" to your shell's PATH (pvps finds it on its own, other tools may not)")
+		default:
+			add(StatusOK, tool+" available", "")
 		}
+	}
+
+	// 1b. Where nixos-rebuild comes from. A release or `nix build` of the CLI
+	// pins it; a plain `go build` resolves `nixpkgs` through the operator's flake
+	// registry (nixpkgs-unstable HEAD), whose nixos-rebuild has broken deploys.
+	if NixpkgsFlake == "nixpkgs" {
+		add(StatusWarn, "nixos-rebuild is not pinned (resolved through your flake registry)",
+			"use a pvps release or `nix build` of the CLI; a source build follows whatever `nixpkgs` your registry points at")
+	} else {
+		add(StatusOK, "nixos-rebuild pinned to "+NixpkgsFlake, "")
 	}
 
 	// 2. Consumer repository layout. Walk up so a consumer that is a subdirectory

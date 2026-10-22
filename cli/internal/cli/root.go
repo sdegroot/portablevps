@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 
@@ -63,6 +64,7 @@ func newRootCmd() *cobra.Command {
 
 // Execute runs the CLI and returns the process exit code.
 func Execute() int {
+	core.NixAddedToPath = core.EnsureNixOnPath(exec.LookPath, os.Getenv, os.Setenv, core.IsExecutableFile)
 	err := newRootCmd().Execute()
 	if err == nil {
 		return 0
