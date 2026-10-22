@@ -15,6 +15,11 @@
   already covers a proxy on loopback or the NetBird range. The migrations are
   one-way: going back to 2026.5 means restoring the database.
 
+- **PostgreSQL image pinned to 18.6 by digest** (was the floating
+  `postgres:18`). Podman never re-pulls a tag it already has, so each host
+  stayed on whatever 18.x it pulled first. A changed pin restarts the
+  container on switch.
+
 - **Forgejo 16.0.6** (default image, was 16.0.5). It is a security release:
   it closes Actions' fork-PR protections being skipped for
   `pull_request_review` events, and leaks of label and release metadata
