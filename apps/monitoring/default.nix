@@ -192,14 +192,21 @@ let
     }) cfg.immutableBackupHosts;
   };
 
-  alertsDir = pkgs.runCommand "portablevps-monitoring-rules" { } ''
+  # vmalert refuses to start on a rule file it cannot parse, which would stop
+  # every alert, so the directory is checked with its own parser (-dryRun) when
+  # it is built and a broken rule fails the deploy instead.
+  alertsDir = pkgs.runCommand "portablevps-monitoring-rules" { nativeBuildInputs = [ pkgs.victoriametrics ]; } ''
     mkdir -p "$out"
     cp ${./rules}/*.yml "$out"/
+    ${lib.concatStrings (lib.mapAttrsToList (name: file: ''
+      cp ${file} "$out/extra-${name}.yml"
+    '') cfg.extraRules)}
     ${lib.optionalString (cfg.monitoredHosts != [ ]) ''cp ${fleetPresenceFile} "$out/fleet-presence.yml"''}
     ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupPresenceFile} "$out/backup-presence.yml"''}
     ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupMaintenancePresenceFile} "$out/backup-maintenance-presence.yml"''}
     ${lib.optionalString (cfg.restoreDrillHosts != [ ]) ''cp ${restoreDrillPresenceFile} "$out/restore-drill-presence.yml"''}
     ${lib.optionalString (cfg.immutableBackupHosts != [ ]) ''cp ${immutabilityPresenceFile} "$out/backup-immutability-presence.yml"''}
+    vmalert -dryRun -rule="$out/*.yml" -loggerLevel=ERROR
   '';
 
   vlogsAlertsDir = pkgs.runCommand "portablevps-monitoring-vlogs-rules" { } ''
@@ -350,6 +357,18 @@ in
       description = "Hosts whose backup credentials must pass the scheduled S3 DeleteObject-deny probe.";
     };
 
+    extraRules = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = { };
+      example = lib.literalExpression "{ my-app = ./alerts/my-app.yml; }";
+      description = ''
+        vmalert rule files (MetricsQL over VictoriaMetrics) for the applications the fleet runs, by
+        name. Each is mounted as extra-<name>.yml beside the built-in rules and alerts through the
+        same Alertmanager. Every file is checked with vmalert -dryRun when the configuration is
+        built.
+      '';
+    };
+
     alertEmailFrom = lib.mkOption { type = lib.types.str; default = ""; example = "alerts@example.com"; description = "Alert email From address. Required when monitoring is enabled."; };
     alertEmailTo = lib.mkOption { type = lib.types.str; default = ""; example = "oncall@example.com"; description = "Alert email recipient. Required when monitoring is enabled."; };
     alertRepeatInterval = lib.mkOption { type = lib.types.str; default = "4h"; description = "Alertmanager repeat interval for a still-firing alert."; };
@@ -470,6 +489,10 @@ in
         {
           assertion = cfg.alertEmailFrom != "" && cfg.alertEmailTo != "";
           message = "portablevps.apps.monitoring: set alertEmailFrom and alertEmailTo — alerts are e-mailed and there is no default recipient.";
+        }
+        {
+          assertion = lib.all (name: builtins.match "[a-z0-9][a-z0-9-]*" name != null) (lib.attrNames cfg.extraRules);
+          message = "portablevps.apps.monitoring.extraRules: a name must be lowercase letters, digits and dashes; it becomes the file name extra-<name>.yml.";
         }
         {
           assertion = cfg.grafana.rootUrl != "";

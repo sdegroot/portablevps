@@ -785,7 +785,10 @@ Monitoring is push-based. App hosts enable an OpenTelemetry collector when
 Podman stats, and journald logs to the monitoring server's OTLP gateway over
 NetBird. The monitoring server runs VictoriaMetrics, VictoriaLogs, vmalert,
 Alertmanager, and Grafana. Its fleet is declared with
-`portablevps.apps.monitoring.monitoredHosts` and `backupHosts`.
+`portablevps.apps.monitoring.monitoredHosts` and `backupHosts`. An application's
+own Prometheus endpoint is read on loopback by its host's collector
+(`portablevps.telemetry.prometheusTargets`), and its alert rules are added with
+`portablevps.apps.monitoring.extraRules` (see `docs/run-your-own-app.md`).
 
 Portablevps also emits custom operational metrics through the same gateway:
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Feature: an application's own metrics and alerts.**
+  - **`portablevps.telemetry.prometheusTargets`:** Prometheus endpoints of the
+    applications a host runs, by job name. The host's collector reads each on
+    loopback beside the proxy's and pushes the series with the rest of its
+    telemetry, so they carry `host_name` and `service_name` and nothing on the
+    mesh scrapes a host. A target off loopback fails the build, and so does a
+    job named `traefik` on a host whose proxy has metrics on.
+  - **`portablevps.apps.monitoring.extraRules`:** vmalert rule files of the
+    applications, by name, mounted as `extra-<name>.yml` beside the built-in
+    rules.
+  - **Rules are checked when built:** the rules directory is parsed with
+    `vmalert -dryRun`, so a broken rule fails the build. Before, vmalert would
+    refuse to start on it and every alert would stop.
+  - **Testing:** both options evaluated in a consumer flake: the collector's
+    receiver holds the proxy and the application target, and the vmalert unit
+    mounts the extra file. The built-in rules and a consumer's pass the dry-run
+    together, and a broken expression exits 255.
+
 - **Fix: Forgejo upstream copies get upstream's default branch.** A copy's
   first sync pushed all refs at once, and Forgejo, which registers a push's
   branches asynchronously, made an empty repository's first registered branch
