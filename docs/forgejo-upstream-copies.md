@@ -70,7 +70,15 @@ Details:
 - **One failing copy does not stop the others.** The unit fails if any copy
   failed.
 - **The bot's token never appears on a command line.** It reaches git through
-  `GIT_CONFIG_*` environment variables.
+  `GIT_CONFIG_*` environment variables, and curl on stdin.
+- **The first sync pushes the default branch on its own, before the rest.**
+  Forgejo registers a push's branches asynchronously, and an empty repository
+  takes the first branch registered as its default, whatever it was created
+  with. In one push of hundreds of refs that is rarely upstream's, but some
+  feature branch. That puts scheduled workflows on the wrong branch, and it
+  would block the sync's own deletion of that branch, since Forgejo refuses to
+  delete a default branch. The sync waits
+  (up to 60 s) until Forgejo reports the default branch, then pushes the rest.
 
 ## What people may push
 
@@ -123,6 +131,12 @@ git push origin main                              # refused
    An existing repository is reused, **unless it is a pull mirror**:
    provisioning fails, because a mirror can't take pushes. Delete or convert
    the mirror first.
+   An existing repository whose **default branch differs from upstream's** is
+   switched to upstream's, once that branch exists in the copy. This repairs
+   copies filled before the sync pushed the default branch first, and follows
+   upstream when it changes its own. The sync can't do this itself: the bot has
+   write access, and changing the default branch needs admin. If upstream is
+   unreachable, the setting is left as it is.
 4. **Gives the bot write access** to the repository.
 5. **Installs the hook** as
    `<dataRoot>/git/repositories/<owner>/<repo>.git/hooks/pre-receive.d/upstream-copy`.

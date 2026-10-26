@@ -27,6 +27,14 @@ GIT_CONFIG_VALUE_0="Authorization: token $(tr -d '\n' < "$UPSTREAM_TOKEN_FILE")"
 export GIT_CONFIG_VALUE_0
 export GIT_TERMINAL_PROMPT=0
 
+# The copy's default branch as Forgejo reports it, once it has one (an empty
+# repository reports none). The token goes to curl on stdin, not argv.
+repo_default() {
+  printf 'header = "Authorization: token %s"\n' "$(tr -d '\n' < "$UPSTREAM_TOKEN_FILE")" \
+    | curl -sS -K - "$FORGEJO_URL/api/v1/repos/$1" \
+    | jq -r 'if .empty then "" else .default_branch end' 2>/dev/null || true
+}
+
 failed=0
 while IFS= read -r full; do
   upstream="$(jq -r --arg k "$full" '.[$k].upstream' "$UPSTREAM_COPIES_JSON")"
@@ -46,13 +54,20 @@ while IFS= read -r full; do
     git ls-remote --heads --tags --refs "$target" | awk '{print $1" "$2}' \
       | grep -v " refs/heads/$prefix" | sort -k2 > "$cache/have" || true
 
-    specs=()
+    specs=() first=()
     while read -r sha ref; do
       current="$(awk -v r="$ref" '$2 == r {print $1}' "$cache/have")"
       [ "$current" = "$sha" ] && continue
       src="refs/up/${ref#refs/}"
       case "$ref" in
-        "refs/heads/$default_branch" | refs/tags/*) specs+=("$src:$ref") ;;   # fast-forward only
+        "refs/heads/$default_branch")                                         # fast-forward only
+          # Not in Forgejo yet: the copy is still empty. Forgejo registers a
+          # push's branches asynchronously, and an empty repository takes the
+          # first one registered as its default, whatever it was created with;
+          # with hundreds in one push that is rarely upstream's. So this one
+          # goes first, alone, and the rest waits until Forgejo has taken it.
+          if [ -z "$current" ]; then first=("$src:$ref"); else specs+=("$src:$ref"); fi ;;
+        refs/tags/*) specs+=("$src:$ref") ;;                                 # fast-forward only
         *) specs+=("+$src:$ref") ;;
       esac
     done < "$cache/want"
@@ -60,6 +75,16 @@ while IFS= read -r full; do
       awk -v r="$ref" '$2 == r {found = 1} END {exit !found}' "$cache/want" || specs+=(":$ref")  # deleted upstream
     done < "$cache/have"
 
+    if [ "${#first[@]}" -gt 0 ]; then
+      echo "$full: pushing the default branch $default_branch"
+      git -C "$cache" push -q "$target" "${first[@]}"
+      for _ in $(seq 1 60); do
+        [ "$(repo_default "$full")" = "$default_branch" ] && break
+        sleep 1
+      done
+      [ "$(repo_default "$full")" = "$default_branch" ] \
+        || echo "$full: Forgejo has not made $default_branch the default branch; forgejo-provision corrects it" >&2
+    fi
     if [ "${#specs[@]}" -gt 0 ]; then
       echo "$full: pushing ${#specs[@]} ref update(s)"
       git -C "$cache" push -q "$target" "${specs[@]}"
