@@ -22,6 +22,25 @@ let
   proxyMetricsEnabled = config.portablevps.proxy.metrics.enable or false;
   proxyMetricsPort = config.portablevps.proxy.metrics.port or 8082;
 
+  # Prometheus endpoints this host reads on loopback: the proxy's, and those of
+  # the applications it runs (cfg.prometheusTargets). Read here and pushed with
+  # everything else, so nothing on the mesh scrapes a host.
+  scrapeConfigs =
+    lib.optional proxyMetricsEnabled {
+      job_name = "traefik";
+      scrape_interval = cfg.scrapeInterval;
+      static_configs = [{ targets = [ "127.0.0.1:${toString proxyMetricsPort}" ]; }];
+    }
+    ++ lib.mapAttrsToList (name: t: {
+      job_name = name;
+      scrape_interval = cfg.scrapeInterval;
+      metrics_path = t.metricsPath;
+      static_configs = [{ targets = [ t.target ]; }];
+    }) cfg.prometheusTargets;
+  prometheusEnabled = scrapeConfigs != [ ];
+  isLoopback = target:
+    lib.hasPrefix "127.0.0.1:" target || lib.hasPrefix "[::1]:" target || lib.hasPrefix "localhost:" target;
+
   # PostgreSQL statistics (modules/services/postgres), scraped as its read-only
   # pg_monitor role. The password reaches the collector through its environment.
   pgMetrics = config.portablevps.postgres.metrics or { };
@@ -85,9 +104,43 @@ in
       default = "30s";
       description = "hostmetrics / docker_stats collection interval.";
     };
+
+    prometheusTargets = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          target = lib.mkOption {
+            type = lib.types.str;
+            example = "127.0.0.1:4021";
+            description = "host:port of the endpoint, on this host's loopback.";
+          };
+          metricsPath = lib.mkOption {
+            type = lib.types.str;
+            default = "/metrics";
+            example = "/actuator/prometheus";
+            description = "Path of the Prometheus exposition.";
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''{ my-app = { target = "127.0.0.1:9100"; metricsPath = "/actuator/prometheus"; }; }'';
+      description = ''
+        Prometheus endpoints of the applications this host runs, by job name. The collector reads
+        each on loopback every scrapeInterval and pushes its series with the rest of this host's
+        telemetry, stamped with the same host.name and service.* attributes, so an application's
+        metrics need no port on the mesh. Only loopback targets are accepted.
+      '';
+    };
   };
 
   config = lib.mkIf enabled {
+    assertions = lib.mapAttrsToList (name: t: {
+      assertion = isLoopback t.target;
+      message = "portablevps.telemetry.prometheusTargets.${name}.target (${t.target}) must be on loopback: 127.0.0.1, [::1] or localhost.";
+    }) cfg.prometheusTargets ++ lib.optional (cfg.prometheusTargets ? traefik && proxyMetricsEnabled) {
+      assertion = false;
+      message = "portablevps.telemetry.prometheusTargets.traefik: the job name traefik is the proxy's own.";
+    };
+
     services.opentelemetry-collector = {
       enable = true;
       # contrib build for the docker_stats + journald receivers.
@@ -116,12 +169,8 @@ in
 
           # Read the systemd journal directly (journalctl) — no rsyslog / file.
           journald = { };
-        } // lib.optionalAttrs proxyMetricsEnabled {
-          prometheus.config.scrape_configs = [{
-            job_name = "traefik";
-            scrape_interval = cfg.scrapeInterval;
-            static_configs = [{ targets = [ "127.0.0.1:${toString proxyMetricsPort}" ]; }];
-          }];
+        } // lib.optionalAttrs prometheusEnabled {
+          prometheus.config.scrape_configs = scrapeConfigs;
         } // lib.optionalAttrs postgresMetricsEnabled {
           postgresql = {
             endpoint = "127.0.0.1:5432";
@@ -169,7 +218,7 @@ in
           pipelines = {
             metrics = {
               receivers = [ "hostmetrics" "podman_stats" ]
-                ++ lib.optional proxyMetricsEnabled "prometheus"
+                ++ lib.optional prometheusEnabled "prometheus"
                 ++ lib.optional postgresMetricsEnabled "postgresql";
               processors = [ "batch" "resourcedetection" "resource" ];
               exporters = [ "otlphttp" ];

@@ -109,6 +109,40 @@ generated on the box into `/var/lib/portablevps/postgres-monitor.env` (root
 only) and re-applied on every activation, so a restored or rebuilt host
 converges without anything in sops.
 
+### Application metrics
+
+An application that serves Prometheus metrics on loopback is read the same way:
+
+```nix
+portablevps.telemetry.prometheusTargets.my-app = {
+  target = "127.0.0.1:9100";            # loopback only; anything else fails the build
+  metricsPath = "/actuator/prometheus"; # default /metrics
+};
+```
+
+The host's collector reads it every `portablevps.telemetry.scrapeInterval` and
+pushes the series with the rest of the host's telemetry, so they carry the host's
+`host_name` and `service_name` and the endpoint needs no port on the mesh. The
+name is the scrape job; `traefik` is the proxy's own. Names travel Prometheus →
+OTLP → VictoriaMetrics, so check the series after the first push
+(`{__name__=~"my_app_.*"}`).
+
+### Your own alerts
+
+The monitoring box loads consumer rule files next to the built-in ones:
+
+```nix
+portablevps.apps.monitoring.extraRules.my-app = ./alerts/my-app.yml;
+```
+
+Each is a vmalert rule file (MetricsQL over VictoriaMetrics) and is mounted as
+`extra-<name>.yml`; alerts go through the same Alertmanager and e-mail. Every
+rule file is parsed with `vmalert -dryRun` when the configuration is built, so a
+broken rule fails the build instead of stopping vmalert, and with it every alert.
+Pushed metrics have no `up` series: alert on an application going quiet with
+`absent_over_time(...)` over one of its own series. `vmalert-tool unittest`
+tests a rule file against series you write down.
+
 ### Your own dashboards
 
 The monitoring box provisions consumer dashboards next to the built-in fleet
