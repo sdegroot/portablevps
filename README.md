@@ -790,14 +790,16 @@ Alertmanager, and Grafana. Its fleet is declared with
 Portablevps also emits custom operational metrics through the same gateway:
 
 - `portablevps_backup_last_success_timestamp_seconds` after a successful backup.
+- `portablevps_backup_maintenance_timestamp_seconds` after a successful weekly
+  maintenance run (retention, prune, integrity check).
 - `portablevps_deploy_last_success_timestamp_seconds` and
   `portablevps_deploy_last_failure_timestamp_seconds` after deploy attempts.
 - `portablevps_backup_restore_drill_timestamp_seconds` after
   `cloud:restore-candidate` restores a host and verifies the prepared marker.
 
-The alert rules watch for failed deploys, stale backups, and stale restore
-drills. A stale backup also catches a dead timer or a host that stopped
-reporting.
+The alert rules watch for failed deploys, stale backups, failing backup
+maintenance, and stale restore drills. A stale backup also catches a dead
+timer or a host that stopped reporting.
 
 ## Backups
 

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Fix: a crashed backup no longer blocks weekly maintenance for good.**
+  - **What happened:** a restic run that dies leaves its lock in the
+    repository. Hourly backups share their locks and keep working, but
+    maintenance (`forget --prune`, `check`) needs an exclusive lock and failed
+    every week, silently. In the Epistola fleet, two repositories had a lock
+    from 2026-07-10 that blocked maintenance until 2026-10-26: no retention,
+    about 2,500 extra snapshots each, and no integrity check.
+  - **Now:** maintenance runs `restic unlock` first, inside the host's backup
+    `flock`. `unlock` removes only stale locks (dead process on this host, or
+    not refreshed for 30 minutes; a live restic refreshes every 5), so a
+    restore reading the repository from another host keeps its lock.
+  - **Alerts:** a successful run pushes
+    `portablevps_backup_maintenance_timestamp_seconds`.
+    `BackupMaintenanceStale` fires when it is between 8 and 30 days old, and a
+    generated `BackupMaintenanceMetricAbsent` per `backupHosts` entry fires
+    when a host has reported none in 30 days, or ever. So one condition never
+    raises both. Both are warnings. The expressions were checked against
+    VictoriaMetrics v1.144.0 with hosts last maintained 2 and 9 days ago and
+    never.
+  - **Rollout:** no host has the metric yet, so `BackupMaintenanceMetricAbsent`
+    fires for every backup host until its next weekly run. Start
+    `portablevps-backup-maintenance.service` once on each backup host after
+    deploying to avoid that.
+
 - **Fix: `forgejo-provision` no longer fails at boot.** It waited only until
   Forgejo's CLI could reach the database, then called the web API, which at
   boot is not listening yet. On 2026-10-26 the curl was refused 160 ms before

@@ -142,6 +142,26 @@ let
     }) cfg.backupHosts;
   };
 
+  # Maintenance that has never succeeded leaves no series for
+  # BackupMaintenanceStale to age, so each backup host also gets an absent
+  # rule. Every backup host runs the weekly maintenance. The window matches
+  # the stale rule's lookback, so the two hand over at 30 days instead of
+  # both firing for the same host.
+  backupMaintenancePresenceFile = mkPresenceFile "backup-maintenance-presence.yml" {
+    name = "backup-maintenance-presence";
+    interval = "30m";
+    rules = map (host: {
+      alert = "BackupMaintenanceMetricAbsent";
+      expr = ''absent_over_time(portablevps_backup_maintenance_timestamp_seconds{host_name="${host}"}[30d])'';
+      "for" = "1h";
+      labels = { severity = "warning"; host_name = host; };
+      annotations = {
+        summary = "No backup maintenance from ${host}";
+        description = "VictoriaMetrics has no successful restic maintenance (forget, prune, check) from ${host} in 30 days, or ever. Check portablevps-backup-maintenance.service on the host; a repository lock it cannot take is the usual cause.";
+      };
+    }) cfg.backupHosts;
+  };
+
   restoreDrillPresenceFile = mkPresenceFile "restore-drill-presence.yml" {
     name = "restore-drill-presence";
     interval = "1h";
@@ -177,6 +197,7 @@ let
     cp ${./rules}/*.yml "$out"/
     ${lib.optionalString (cfg.monitoredHosts != [ ]) ''cp ${fleetPresenceFile} "$out/fleet-presence.yml"''}
     ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupPresenceFile} "$out/backup-presence.yml"''}
+    ${lib.optionalString (cfg.backupHosts != [ ]) ''cp ${backupMaintenancePresenceFile} "$out/backup-maintenance-presence.yml"''}
     ${lib.optionalString (cfg.restoreDrillHosts != [ ]) ''cp ${restoreDrillPresenceFile} "$out/restore-drill-presence.yml"''}
     ${lib.optionalString (cfg.immutableBackupHosts != [ ]) ''cp ${immutabilityPresenceFile} "$out/backup-immutability-presence.yml"''}
   '';
@@ -314,7 +335,7 @@ in
     backupHosts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Hosts expected to push a backup-success metric. One BackupMetricAbsent alert generated per host (catches a reporter broken since deploy, which a staleness rule cannot).";
+      description = "Hosts expected to push a backup-success metric and a weekly maintenance metric. One BackupMetricAbsent and one BackupMaintenanceMetricAbsent alert generated per host (catches a reporter broken since deploy, which a staleness rule cannot).";
     };
 
     restoreDrillHosts = lib.mkOption {

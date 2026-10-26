@@ -213,6 +213,13 @@ in
       serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_last_success_timestamp_seconds";
     };
 
+    # Weekly maintenance (retention, prune, integrity check) stamps its own
+    # success; the gateway's BackupMaintenanceStale and
+    # BackupMaintenanceMetricAbsent rules watch it.
+    systemd.services.portablevps-backup-maintenance = lib.mkIf backupsPresent {
+      serviceConfig.ExecStartPost = "${reportMetric} portablevps_backup_maintenance_timestamp_seconds";
+    };
+
     # A successful restore drill is only stamped by the operator restore flow
     # after it has restored data and verified the marker on the rebuilt host.
     # The gateway's RestoreDrillStale rule watches this metric.
