@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Fix: `forgejo-provision` no longer fails at boot.** It waited only until
+  Forgejo's CLI could reach the database, then called the web API, which at
+  boot is not listening yet. On 2026-10-26 the curl was refused 160 ms before
+  Forgejo opened port 3000, and the unit stayed failed until it was restarted.
+  The wait loop now also needs `/api/healthz` to answer.
+
 - **Deploys refuse a stale or dirty checkout.** `server deploy`, `server
   repurpose`, `service migrate` and `service restore` build the local checkout.
   They now first refresh the remote's default branch (`origin/HEAD`, else
