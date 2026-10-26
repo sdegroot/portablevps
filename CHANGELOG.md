@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Fix: Forgejo upstream copies get upstream's default branch.** A copy's
+  first sync pushed all refs at once, and Forgejo, which registers a push's
+  branches asynchronously, made an empty repository's first registered branch
+  its default instead of the one it was created with: in practice an arbitrary
+  feature branch. That put scheduled workflows on the wrong branch and would
+  make the sync fail once upstream deleted that branch.
+  - **The sync** now pushes the default branch of an empty copy on its own,
+    waits until Forgejo reports it as the default, and only then pushes the
+    rest.
+  - **`forgejo-provision`** switches an existing copy whose default branch
+    differs from upstream's, which repairs copies that are already wrong and
+    follows upstream when it changes its own.
+  - **Testing:** against a throwaway Forgejo 16.0.5, a 403-branch push into an
+    empty repository reproduced the wrong default. The integration test syncs
+    an upstream with 300 branches sorting before `main`, and repairs a copy set
+    to the wrong branch (which provisioning before this fix leaves wrong). The
+    existing cases still pass: refused developer pushes, rebased and deleted
+    branches, and a rewritten `main` refused.
+
 - **Fix: a crashed backup no longer blocks weekly maintenance for good.**
   - **What happened:** a restic run that dies leaves its lock in the
     repository. Hourly backups share their locks and keep working, but
@@ -25,6 +44,7 @@
     fires for every backup host until its next weekly run. Start
     `portablevps-backup-maintenance.service` once on each backup host after
     deploying to avoid that.
+
 
 - **Fix: `forgejo-provision` no longer fails at boot.** It waited only until
   Forgejo's CLI could reach the database, then called the web API, which at

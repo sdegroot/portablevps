@@ -81,9 +81,22 @@ jq -r 'keys[]' "$UPSTREAM_COPIES_JSON" | while IFS= read -r full; do
       api -X POST "$FORGEJO_API/admin/users/$owner/repos" -d "$body" >/dev/null
     fi
   elif [ "$code" = 200 ]; then
-    if [ "$(api "$FORGEJO_API/repos/$owner/$repo" | jq -r .mirror)" = true ]; then
+    info="$(api "$FORGEJO_API/repos/$owner/$repo")"
+    if [ "$(jq -r .mirror <<< "$info")" = true ]; then
       echo "forgejo-provision: $full is a pull mirror, which cannot take pushes; delete or convert it first" >&2
       exit 1
+    fi
+    # Keep the default branch on upstream's. A copy whose first sync predates
+    # the sync pushing it first got another branch (see upstream-sync.sh), and
+    # upstream may switch its own. The sync bot cannot change it (write access,
+    # not admin), so this happens here, once the branch exists in the copy.
+    # An unreachable upstream leaves the setting as it is.
+    default_branch="$(git ls-remote --symref "$upstream" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)\tHEAD$#\1#p' || true)"
+    current_default="$(jq -r .default_branch <<< "$info")"
+    if [ -n "$default_branch" ] && [ "$default_branch" != "$current_default" ] \
+      && [ "$(status "$FORGEJO_API/repos/$owner/$repo/branches/$default_branch")" = 200 ]; then
+      echo "forgejo-provision: $full default branch $current_default -> $default_branch (upstream's)"
+      api -X PATCH "$FORGEJO_API/repos/$owner/$repo" -d "$(jq -nc --arg b "$default_branch" '{default_branch: $b}')" >/dev/null
     fi
   else
     echo "forgejo-provision: GET /repos/$full returned HTTP $code" >&2

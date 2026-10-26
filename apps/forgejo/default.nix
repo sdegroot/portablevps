@@ -156,7 +156,7 @@ let
   };
   upstreamSync = pkgs.writeShellApplication {
     name = "forgejo-upstream-sync";
-    runtimeInputs = [ pkgs.coreutils pkgs.gawk pkgs.git pkgs.gnugrep pkgs.gnused pkgs.jq ];
+    runtimeInputs = [ pkgs.coreutils pkgs.curl pkgs.gawk pkgs.git pkgs.gnugrep pkgs.gnused pkgs.jq ];
     text = builtins.readFile ./upstream-sync.sh;
   };
   organizationsJson = pkgs.writeText "forgejo-organizations.json" (builtins.toJSON (lib.mapAttrs
