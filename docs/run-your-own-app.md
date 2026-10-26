@@ -149,8 +149,9 @@ Each is a vmalert rule file (MetricsQL over VictoriaMetrics) and is mounted as
 `extra-<name>.yml`; alerts go through the same Alertmanager and e-mail. Every
 rule file is parsed with `vmalert -dryRun` when the configuration is built, so a
 broken rule fails the build instead of stopping vmalert, and with it every alert.
-Pushed metrics have no `up` series: alert on an application going quiet with
-`absent_over_time(...)` over one of its own series. `vmalert-tool unittest`
+The collector pushes an `up` series per target, but it stops with the
+collector, so alert on an application going quiet with `absent_over_time(...)`
+over one of its own series. `vmalert-tool unittest`
 tests a rule file against series you write down.
 
 ### Your own dashboards
