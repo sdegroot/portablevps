@@ -369,10 +369,20 @@ in
           "/etc/portablevps/restic.env"
         ];
       };
+      # A restic run that dies (killed, host rebooted mid-backup) leaves its
+      # lock in the repository. Backups share their locks and keep working, but
+      # forget/prune need an exclusive one and refuse every week until someone
+      # unlocks by hand (observed: two repositories blocked for months by locks
+      # from 2026-07-10). So maintenance unlocks first. `restic unlock` removes
+      # only stale locks: those of a dead process on this host or not refreshed
+      # for 30 minutes. A live restic refreshes its lock every 5 minutes, so a
+      # restore reading this repository from another host keeps its lock, and
+      # the flock keeps this host's own backup out.
       script = ''
         set -euo pipefail
         exec ${pkgs.util-linux}/bin/flock -w 3600 /run/lock/portablevps-backups.lock ${pkgs.writeShellScript "portablevps-backup-maintenance-locked" ''
           set -euo pipefail
+          ${pkgs.restic}/bin/restic unlock
           ${lib.optionalString cfg.retention.enable ''
             ${pkgs.restic}/bin/restic forget \
               --keep-hourly ${toString cfg.retention.keepHourly} \

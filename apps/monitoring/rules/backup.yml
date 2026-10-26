@@ -34,6 +34,22 @@ groups:
             No successful restic backup on {{ $labels.host_name }} for {{ $value | humanizeDuration }}.
             The offsite recovery point is aging out — investigate now.
 
+      # Weekly maintenance applies retention and checks repository integrity.
+      # Backups keep succeeding while it fails, so BackupStale says nothing
+      # about it. Pushed once a week, hence last_over_time. 8 days allows the
+      # timer's random delay and fires on the first missed week.
+      - alert: BackupMaintenanceStale
+        expr: time() - last_over_time(portablevps_backup_maintenance_timestamp_seconds[30d]) > 8 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup maintenance failing on {{ $labels.host_name }}"
+          description: >-
+            No successful restic maintenance (forget, prune, check) on {{ $labels.host_name }} for
+            {{ $value | humanizeDuration }} (schedule is weekly). Old snapshots are piling up and the
+            repository is unverified. Check portablevps-backup-maintenance.service on the host.
+
       # A backup you have never restored is hope, not a backup. The drill metric
       # is pushed once per rehearsal, so last_over_time is required: an instant
       # vector would disappear after the normal query lookback window.
