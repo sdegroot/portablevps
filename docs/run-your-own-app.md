@@ -101,6 +101,8 @@ and ships them with the rest of the host's telemetry. The series are
 `postgresql_table_size_bytes`, `postgresql_rows_ratio{state="dead"}` and
 `postgresql_deadlocks_total`. They carry the host's `service_name`, so a
 dashboard can select them by application.
+The built-in **Role — PostgreSQL** dashboard (`/d/pvps-postgres?var-service=<name>`)
+shows them, with the postgres container's log.
 
 It connects as `portablevps_monitor`, a role holding only `pg_monitor` and
 `CONNECT` on the cluster's databases, capped at 10 connections. It can read
@@ -127,6 +129,14 @@ name is the scrape job; `traefik` is the proxy's own. Names travel Prometheus �
 OTLP → VictoriaMetrics, so check the series after the first push
 (`{__name__=~"my_app_.*"}`).
 
+A Spring Boot application's Micrometer endpoint (`/actuator/prometheus`) fills
+the built-in **Role — JVM / Spring Boot** dashboard
+(`/d/pvps-jvm?var-service=<name>`) with no further work. Its HTTP latency
+percentiles need histogram buckets, which Spring publishes only with
+`management.metrics.distribution.percentiles-histogram.http.server.requests=true`;
+without them the dashboard shows the mean and maximum. Traffic through the
+host's proxy is on **Role — Traefik** (`/d/pvps-traefik`).
+
 ### Your own alerts
 
 The monitoring box loads consumer rule files next to the built-in ones:
@@ -139,14 +149,15 @@ Each is a vmalert rule file (MetricsQL over VictoriaMetrics) and is mounted as
 `extra-<name>.yml`; alerts go through the same Alertmanager and e-mail. Every
 rule file is parsed with `vmalert -dryRun` when the configuration is built, so a
 broken rule fails the build instead of stopping vmalert, and with it every alert.
-Pushed metrics have no `up` series: alert on an application going quiet with
-`absent_over_time(...)` over one of its own series. `vmalert-tool unittest`
+The collector pushes an `up` series per target, but it stops with the
+collector, so alert on an application going quiet with `absent_over_time(...)`
+over one of its own series. `vmalert-tool unittest`
 tests a rule file against series you write down.
 
 ### Your own dashboards
 
 The monitoring box provisions consumer dashboards next to the built-in fleet
-ones:
+and role ones:
 
 ```nix
 portablevps.apps.monitoring.grafana.extraDashboards.website = ./dashboards/website.json;
