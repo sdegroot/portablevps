@@ -856,8 +856,12 @@ in
         };
         script = ''
           set -eu
+          # Wait for the web server too, not only the database: at boot Forgejo
+          # answers the CLI before it listens, and the API steps below would
+          # hit a closed port (observed 2026-10-26).
           for _ in $(seq 1 120); do
-            if ${forgejoCli} admin user list >/dev/null 2>&1; then
+            if ${forgejoCli} admin user list >/dev/null 2>&1 \
+              && ${pkgs.curl}/bin/curl -fsS -o /dev/null ${lib.escapeShellArg "http://${cfg.listenHttp.host}:${toString cfg.listenHttp.port}/api/healthz"}; then
               break
             fi
             sleep 1
