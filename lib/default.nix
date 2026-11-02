@@ -111,6 +111,32 @@ let
           informational, same rationale as `serverType`.
         '';
       };
+      publicIPv4 = lib.mkOption {
+        # A bare dotted quad, no prefix length. Loose on purpose: it catches a
+        # pasted CIDR or hostname, not every out-of-range octet.
+        type = lib.types.nullOr (lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}");
+        default = null;
+        example = "95.211.45.24";
+        description = ''
+          The public IPv4 address the provider assigned to this machine —
+          informational. Nothing connects to it: the tool reaches a server by
+          its mesh name, and `server install` takes its target on the command
+          line. It is recorded so an address seen elsewhere (a provider
+          invoice, an abuse report, a firewall or access log) can be traced
+          back to a machine with `server list`, instead of only living in a
+          one-off install log. Take it from `ip -br addr` on the host, and
+          update it when the machine is reprovisioned.
+        '';
+      };
+      publicIPv6 = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "[0-9a-fA-F]*:[0-9a-fA-F:]*");
+        default = null;
+        example = "2001:db8:5301:109:1c00:6fff:fe00:791";
+        description = ''
+          The machine's routed public IPv6 address (no prefix length) —
+          informational, same rationale as `publicIPv4`.
+        '';
+      };
     };
   };
 

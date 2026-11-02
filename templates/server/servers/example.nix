@@ -4,6 +4,17 @@
 
 let
   name = "example";
+
+  # Which provider this server currently runs on. Provider metadata comes from
+  # portablevps' built-in providers/ (or this repo's providers/ if present).
+  # The public addresses are informational: `server list` shows them so an IP
+  # from an invoice, abuse report or log can be traced to this machine. Take
+  # them from `ip -br addr` on the host; nothing connects to them.
+  placement = {
+    provider = "hetzner";
+    # publicIPv4 = "203.0.113.10";
+    # publicIPv6 = "2001:db8::10";
+  };
 in
 {
   inherit name;
@@ -12,17 +23,12 @@ in
   # with coordinated backup/restore; or set this to a path for a custom profile.
   profile = "single-instance-app";
 
-  # Which provider this server currently runs on. Provider metadata comes from
-  # portablevps' built-in providers/ (or this repo's providers/ if present).
-  placement = {
-    provider = "hetzner";
-  };
+  inherit placement;
 
   # Metadata consumed by both Nix and the portablevps CLI.
   info = {
-    inherit name;
+    inherit name placement;
     provider = "hetzner";
-    placement = { provider = "hetzner"; };
     hostname = name;
     netbirdName = name;
     # Per-server restic repository prefix inside your backup bucket.

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Feature: record a server's public addresses (`placement.publicIPv4` / `publicIPv6`).**
+  - **What:** two optional, typed placement fields beside `serverType` and
+    `location`. `server list` shows them as `PUBLIC IPV4` / `PUBLIC IPV6`
+    columns (`-` when unrecorded), and `server list --json` carries them as
+    `publicIPv4` / `publicIPv6`. A pasted CIDR or hostname fails evaluation.
+    The server template now binds `placement` once and reuses it for
+    `info.placement`, so the two copies cannot drift.
+  - **Why:** nothing recorded which machine owned which public IP. The tool
+    reaches hosts by mesh name and `server install` takes its target on the
+    command line, so an address seen in a provider invoice, an abuse report or
+    a log could only be traced by SSHing round the fleet or digging through old
+    install logs. The fields are informational: nothing connects to them.
+  - **Testing:** Go tests for parsing and for the table and JSON output of
+    `server list`; a consumer fleet of 14 servers evaluated with the addresses
+    read from each host, and with a CIDR value to check it is refused.
+
 - **Feature: role dashboards for Traefik, PostgreSQL and JVM / Spring Boot.**
   - **What:** three built-in Grafana dashboards, each about one service chosen
     at the top (`service`, listing only services that ship that role's

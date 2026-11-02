@@ -28,7 +28,7 @@ func writeRegistry(t *testing.T, json string) func(string) string {
 func TestLoadServersParsesPurposeAndProvider(t *testing.T) {
 	getenv := writeRegistry(t, `{
 		"web":  {"name":"web","provider":"hetzner","purpose":"Website","netbird":{"groups":["portablevps-servers","web"]}},
-		"code": {"name":"code","placement":{"provider":"leaseweb"},"purpose":"Forgejo code hosting","serviceKey":"forgejo"},
+		"code": {"name":"code","placement":{"provider":"leaseweb","publicIPv4":"89.149.243.34","publicIPv6":"2001:db8::1e29"},"purpose":"Forgejo code hosting","serviceKey":"forgejo"},
 		"bare": {"name":"bare","provider":"hetzner"}
 	}`)
 	servers, err := LoadServers(Env{RepoRoot: "/nonexistent", Getenv: getenv})
@@ -51,5 +51,12 @@ func TestLoadServersParsesPurposeAndProvider(t *testing.T) {
 	// a server with no purpose set parses to an empty string, not an error.
 	if got := servers["bare"].Purpose; got != "" {
 		t.Errorf("bare purpose = %q, want empty", got)
+	}
+	// public addresses come from placement; unset ones are empty.
+	if got := servers["code"]; got.PublicIPv4 != "89.149.243.34" || got.PublicIPv6 != "2001:db8::1e29" {
+		t.Errorf("code addresses = %q / %q", got.PublicIPv4, got.PublicIPv6)
+	}
+	if got := servers["bare"]; got.PublicIPv4 != "" || got.PublicIPv6 != "" {
+		t.Errorf("bare addresses = %q / %q, want empty", got.PublicIPv4, got.PublicIPv6)
 	}
 }
