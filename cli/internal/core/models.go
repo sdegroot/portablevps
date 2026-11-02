@@ -20,4 +20,8 @@ type Server struct {
 	NetbirdName      string
 	NetbirdGroups    []string
 	Purpose          string
+	// PublicIPv4/PublicIPv6 are informational (placement.publicIPv{4,6}):
+	// shown by `server list`, never used to connect.
+	PublicIPv4 string
+	PublicIPv6 string
 }

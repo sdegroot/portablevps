@@ -13,7 +13,9 @@ type rawServer struct {
 	Name      string `json:"name"`
 	Provider  string `json:"provider"`
 	Placement struct {
-		Provider string `json:"provider"`
+		Provider   string `json:"provider"`
+		PublicIPv4 string `json:"publicIPv4"`
+		PublicIPv6 string `json:"publicIPv6"`
 	} `json:"placement"`
 	BackupRepository string `json:"backupRepository"`
 	ServiceKey       string `json:"serviceKey"`
@@ -47,6 +49,8 @@ func (r rawServer) toServer(name string) Server {
 		NetbirdName:      netbird,
 		NetbirdGroups:    r.Netbird.Groups,
 		Purpose:          r.Purpose,
+		PublicIPv4:       r.Placement.PublicIPv4,
+		PublicIPv6:       r.Placement.PublicIPv6,
 	}
 }
 
