@@ -7,20 +7,28 @@ A [portablevps](https://github.com/sdegroot/portablevps) consumer repository.
 - `servers/<name>.nix` — one logical server per file.
 - `secrets/<name>.yaml` — sops-encrypted secrets per server.
 - `keys/` — committed public keys (private keys stay in `.local/`).
-- `.sops.yaml` — age recipients allowed to decrypt secrets.
+- `.sops.yaml` — age recipients allowed to decrypt secrets; `pvps secret init`
+  maintains it.
+- `portablevps.toml` — repository defaults for the CLI (`default_server`).
+- `mise.toml` — the `pvps`, `sops` and `age` versions for this repository.
 
 ## First steps
 
-1. Point the `portablevps` input in `flake.nix` at your published tool (or a
-   local checkout during development).
-2. Edit `servers/example.nix` (rename the file to your server name).
-3. Generate the cloud admin keypair and per-server secrets, then fill in
-   `.sops.yaml` recipients.
-4. Provision and install with the portablevps CLI:
+1. `mise install` for the CLI and secret tooling (Nix is a separate install).
+2. Edit `servers/example.nix`: provider placement, backup repository, your
+   app image and the proxy domain. Copy it per additional server; the file name
+   is the server name.
+3. `git add` everything — Nix flakes only see tracked files.
+4. Create the server's keys and secrets:
 
    ```sh
-   nix run github:sdegroot/portablevps# -- preflight
+   pvps key generate example   # admin SSH keypair
+   pvps secret init example    # age key + .sops.yaml rule
+   pvps secret edit example    # fill in the declared secrets
    ```
+
+5. `pvps doctor --server example` to check the repository, then provision
+   and install with `pvps server --help`.
 
 See the portablevps README for the full provisioning, backup, restore, and
 migration workflow.

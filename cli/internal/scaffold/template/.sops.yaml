@@ -1,0 +1,5 @@
+# Which age recipients can decrypt each server's secrets file. Do not edit this
+# by hand: `pvps secret init <server>` adds the rule for secrets/<server>.yaml.
+# sops uses the first rule that matches, so a catch-all rule here would shadow
+# the per-server ones.
+creation_rules: []

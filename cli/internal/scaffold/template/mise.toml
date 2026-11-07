@@ -1,0 +1,7 @@
+# Operator tools for this repository: `mise install` provides the pvps CLI and
+# the sops/age binaries its secret commands run. Nix itself is not managed by
+# mise; install it separately (see the portablevps README).
+[tools]
+"github:sdegroot/portablevps" = "{{.PvpsVersion}}"
+sops = "3"
+age = "1"

@@ -33,6 +33,9 @@ func UpsertRule(path string, rule Rule) error {
 			return write(path, doc)
 		}
 	}
+	// A scaffolded `creation_rules: []` is a flow sequence; write rules in block
+	// style so each one reads (and diffs) on its own lines.
+	rules.Style &^= yaml.FlowStyle
 	rules.Content = append(rules.Content, ruleNode(rule))
 	return write(path, doc)
 }

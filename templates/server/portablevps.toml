@@ -1,0 +1,6 @@
+# Repository defaults for the pvps CLI. Per-operator overrides go in the
+# gitignored .local/portablevps.local.toml. Secret-bearing fields hold
+# references (op://..., env://...), never literal values.
+
+# The server commands act on when --server is not given.
+default_server = "example"

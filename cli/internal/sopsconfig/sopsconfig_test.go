@@ -63,3 +63,22 @@ creation_rules:
 		t.Errorf("existing rule lost:\n%s", data)
 	}
 }
+
+func TestUpsertIntoEmptyFlowSequenceWritesBlockStyleAndKeepsComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".sops.yaml")
+	scaffolded := "# Managed by pvps secret init.\ncreation_rules: []\n"
+	if err := os.WriteFile(path, []byte(scaffolded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertRule(path, Rule{PathRegex: `secrets/web\.yaml$`, Age: "age1web"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	if !strings.Contains(got, "# Managed by pvps secret init.") {
+		t.Fatalf("comment lost:\n%s", got)
+	}
+	if strings.Contains(got, "[") || !strings.Contains(got, "\n    - path_regex:") && !strings.Contains(got, "\n  - path_regex:") {
+		t.Fatalf("expected a block-style rule list:\n%s", got)
+	}
+}

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **Feature: `pvps init` scaffolds a consumer repository.**
+  - **What:** `pvps init [directory] [--server <name>] [--flake-url <url>]`
+    writes the server template embedded in the CLI: `flake.nix`,
+    `servers/<name>.nix`, `portablevps.toml` with `default_server`, a
+    `mise.toml` pinning `pvps`/`sops`/`age`, `.sops.yaml`, `.gitignore` and a
+    README. Existing files are never overwritten (an existing `.gitignore`
+    only gets the `.local/` rules appended), the directory may be a
+    subdirectory of an app repository, and a release build pins the flake
+    input and `mise.toml` to its own tag. `--json` lists each file's action.
+    `templates/server` is now the embedded template rendered for `example`;
+    a test keeps the two identical.
+  - **Template fixes:** `.sops.yaml` starts with no rules — its catch-all
+    placeholder rule matched first and shadowed the per-server rules
+    `pvps secret init` appends. The server file uses the per-server
+    conventions of `pvps key generate` / `pvps secret init`
+    (`keys/servers/<name>-admin.pub`, `secrets/<name>.yaml`), and the README
+    no longer points at a nonexistent `preflight` command. `secret init`
+    writes into an empty `creation_rules: []` in block style.
+  - **Why:** the only way to start a consumer was `nix flake init -t`, which
+    needs Nix, cannot name the server, and produced a `.sops.yaml` that broke
+    the CLI's own secret workflow.
+  - **Testing:** Go tests for rendering, name validation, release pinning,
+    no-overwrite/.gitignore patching, template parity and the sops flow-style
+    upsert; end to end, `init` into a subdirectory of a fresh git repository,
+    then `secret init`, `key generate` and `doctor --server` (flake evaluates).
+
 - **Feature: record a server's public addresses (`placement.publicIPv4` / `publicIPv6`).**
   - **What:** two optional, typed placement fields beside `serverType` and
     `location`. `server list` shows them as `PUBLIC IPV4` / `PUBLIC IPV6`
