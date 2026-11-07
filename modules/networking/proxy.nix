@@ -160,6 +160,19 @@ let
         description = "Pass TLS through to the upstream service.";
       };
 
+      proxyProtocol = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum [ 1 2 ]);
+        default = null;
+        example = 2;
+        description = ''
+          Send a PROXY protocol header of this version to the upstream, so it
+          learns the real client address instead of this proxy's. Only for an
+          upstream that expects it from this host, such as a backend's
+          `portablevps.proxy.edgeEntryPoint` that lists this host in its
+          `trustedIPs`. Any other upstream fails the TLS handshake.
+        '';
+      };
+
       visibility = lib.mkOption {
         type = visibilityType;
         default = "internal";
@@ -167,6 +180,13 @@ let
       };
     };
   };
+
+  # Public routes are the ones reachable from outside the mesh, so they are the
+  # only ones attached to the edge entry point.
+  isPublicVisibility = visibility: visibility != "internal";
+  routerEntryPoints = service:
+    [ cfg.entryPointName ]
+    ++ lib.optional (cfg.edgeEntryPoint.enable && isPublicVisibility service.visibility) cfg.edgeEntryPoint.name;
 
   hostRule = names:
     lib.concatStringsSep " || " (map (name: "Host(`${name}`)") names);
@@ -235,7 +255,7 @@ let
     (name: service:
       {
         rule = hostRule ([ service.domain ] ++ service.aliases);
-        entryPoints = [ cfg.entryPointName ];
+        entryPoints = routerEntryPoints service;
         service = name;
         tls = {
           options = "default";
@@ -267,7 +287,7 @@ let
         name = "${name}-denied-paths";
         value = {
           rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule (service.deniedPathPrefixes or [ ])})";
-          entryPoints = [ cfg.entryPointName ];
+          entryPoints = routerEntryPoints service;
           service = "noop@internal";
           priority = 10000;
           tls = {
@@ -297,14 +317,24 @@ let
       entryPoints = [ cfg.entryPointName ];
       service = name;
       tls.passthrough = service.tlsPassthrough;
+    } // lib.optionalAttrs (cfg.tcp.maxConnectionsPerIP != null) {
+      middlewares = [ "per-ip-connections" ];
     })
     cfg.tcp.services;
 
+  proxyProtocolTransport = version: "proxy-protocol-v${toString version}";
+  tcpProxyProtocolVersions = lib.unique (lib.filter (v: v != null)
+    (map (service: service.proxyProtocol) (lib.attrValues cfg.tcp.services)));
+
   tcpServices = lib.mapAttrs
     (_name: service: {
-      loadBalancer.servers = [
-        { address = "${service.targetHost}:${toString service.targetPort}"; }
-      ];
+      loadBalancer = {
+        servers = [
+          { address = "${service.targetHost}:${toString service.targetPort}"; }
+        ];
+      } // lib.optionalAttrs (service.proxyProtocol != null) {
+        serversTransport = proxyProtocolTransport service.proxyProtocol;
+      };
     })
     cfg.tcp.services;
 
@@ -473,6 +503,42 @@ in
       description = "Open the proxy port on the public host firewall.";
     };
 
+    edgeEntryPoint = {
+      enable = lib.mkEnableOption ''
+        a second TLS entry point for traffic forwarded by a layer-4 edge proxy.
+        It carries only the public routes (visibility netbird-edge or
+        direct-public), so an internal route cannot be reached through the
+        edge by pairing a public SNI with an internal Host header. It reads the
+        PROXY protocol from `trustedIPs`, so the routes see the real client
+        address instead of the edge's. The port opens on the mesh interface
+        only; restrict who may reach it in the mesh ACL'';
+
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = "websecure-edge";
+        description = "Traefik entry point name for edge-forwarded traffic.";
+      };
+
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8443;
+        description = "Port of the edge entry point, opened on the mesh interface.";
+      };
+
+      trustedIPs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "100.85.147.152/32" ];
+        description = ''
+          Mesh addresses of the edge proxies whose PROXY protocol header is
+          believed. A connection from anywhere else is read without one, so an
+          edge that sends the header from an address missing here fails every
+          TLS handshake. When the edge is rebuilt and gets a new mesh address,
+          update this first.
+        '';
+      };
+    };
+
     maintenanceBackendPort = lib.mkOption {
       type = lib.types.port;
       default = 18081;
@@ -623,6 +689,18 @@ in
       description = "TCP services routed by SNI.";
     };
 
+    tcp.maxConnectionsPerIP = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      example = 256;
+      description = ''
+        Cap on simultaneous connections from one client address on each TCP
+        route (Traefik's inFlightConn). Further connections are closed until
+        one ends. Mind clients behind one NAT (offices, mobile carriers) when
+        choosing it. null leaves connections unlimited.
+      '';
+    };
+
     testBackend = {
       enable = lib.mkEnableOption "local proxy smoke-test HTTP backend";
 
@@ -685,6 +763,18 @@ in
           assertion = !cfg.openPublicFirewall || !hasNonDirectPublicRoutes;
           message = "portablevps.proxy.openPublicFirewall can only be true when all proxy routes have visibility = \"direct-public\".";
         }
+        {
+          assertion = !cfg.edgeEntryPoint.enable || cfg.edgeEntryPoint.trustedIPs != [ ];
+          message = "portablevps.proxy.edgeEntryPoint.trustedIPs must list the edge proxies' mesh addresses.";
+        }
+        {
+          assertion = !cfg.edgeEntryPoint.enable || cfg.edgeEntryPoint.port != cfg.port;
+          message = "portablevps.proxy.edgeEntryPoint.port must differ from portablevps.proxy.port.";
+        }
+        {
+          assertion = !cfg.edgeEntryPoint.enable || !cfg.openPublicFirewall;
+          message = "portablevps.proxy.edgeEntryPoint is for a backend behind an edge; a host with openPublicFirewall is the edge itself.";
+        }
       ];
 
       services.traefik = {
@@ -694,6 +784,12 @@ in
           {
             entryPoints.${cfg.entryPointName}.address = ":${toString cfg.port}";
           }
+          (lib.mkIf cfg.edgeEntryPoint.enable {
+            entryPoints.${cfg.edgeEntryPoint.name} = {
+              address = ":${toString cfg.edgeEntryPoint.port}";
+              proxyProtocol.trustedIPs = cfg.edgeEntryPoint.trustedIPs;
+            };
+          })
           (lib.mkIf cfg.metrics.enable {
             # Loopback-only Prometheus endpoint; per-router/service/entrypoint
             # labels (incl. `code`) so 5xx ratios and per-service latency are
@@ -729,10 +825,18 @@ in
           } // lib.optionalAttrs (httpMiddlewares != { }) {
             middlewares = httpMiddlewares;
           });
-          tcp = lib.mkIf (cfg.tcp.services != { }) {
+          tcp = lib.mkIf (cfg.tcp.services != { }) ({
             routers = tcpRouters;
             services = tcpServices;
-          };
+          } // lib.optionalAttrs (tcpProxyProtocolVersions != [ ]) {
+            serversTransports = lib.listToAttrs (map
+              (version: lib.nameValuePair (proxyProtocolTransport version) {
+                proxyProtocol.version = version;
+              })
+              tcpProxyProtocolVersions);
+          } // lib.optionalAttrs (cfg.tcp.maxConnectionsPerIP != null) {
+            middlewares.per-ip-connections.inFlightConn.amount = cfg.tcp.maxConnectionsPerIP;
+          });
           tls = lib.mkIf (!cfg.acme.enable && cfg.testBackend.enable) {
             stores.default.defaultCertificate = {
               certFile = "${testCertificate}/cert.pem";
@@ -817,7 +921,8 @@ in
     })
 
     (lib.mkIf (netbirdEnabled && !config.portablevps.restoreMode) {
-      networking.firewall.interfaces.${netbirdInterface}.allowedTCPPorts = [ cfg.port ];
+      networking.firewall.interfaces.${netbirdInterface}.allowedTCPPorts =
+        [ cfg.port ] ++ lib.optional cfg.edgeEntryPoint.enable cfg.edgeEntryPoint.port;
     })
 
     (lib.mkIf cfg.openPublicFirewall {

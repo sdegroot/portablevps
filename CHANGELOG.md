@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Security: an edge entry point so a layer-4 edge can no longer reach internal routes.**
+  - **What:** `portablevps.proxy.edgeEntryPoint` (`enable`, `name`, `port`
+    8443, `trustedIPs`) adds a second Traefik entry point on a backend. It
+    opens on the mesh interface, carries only the routes whose visibility is
+    not `internal` (with their deny routers), and believes PROXY protocol
+    headers from `trustedIPs` only. On the edge side, a TCP service's new
+    `proxyProtocol = 1 | 2` sends the header through a generated
+    `proxy-protocol-v<N>` servers transport, and
+    `portablevps.proxy.tcp.maxConnectionsPerIP` adds an `inFlightConn` limit
+    to every TCP route.
+  - **Why:** an SNI-passthrough edge forwards by SNI, but the backend's Traefik
+    routes by the HTTP `Host` header, and nothing ties the two together. From
+    the internet, `SNI=auth.example.com` plus `Host: <internal admin name>`
+    reached a mesh-only admin route on the same backend. (Observed on a
+    consumer fleet: authentik's admin console, guarded only by its login.)
+    The backends also saw every public client as the edge's mesh address,
+    which made per-client throttling and audit attribution impossible.
+  - **Testing:** a local Traefik 3.7.16 edge and backend. Public traffic
+    through the edge reaches the app with the real client address. A public
+    SNI with an internal `Host` gets 404. A deny path stays denied. A client's
+    forged `X-Forwarded-For` is replaced. The internal route still answers on
+    the mesh entry point. With the limit set to 2, the third simultaneous
+    connection from one address is closed. A consumer fleet of 14 servers
+    evaluates, with the generated routers and transports checked.
+
 - **Feature: `pvps init` scaffolds a consumer repository.**
   - **What:** `pvps init [directory] [--server <name>] [--flake-url <url>]`
     writes the server template embedded in the CLI: `flake.nix`,

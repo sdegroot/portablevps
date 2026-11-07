@@ -420,6 +420,38 @@ portablevps.proxy = {
 };
 ```
 
+#### Your own layer-4 edge
+
+When a host of yours is the public edge (`openPublicFirewall = true`, SNI
+passthrough to backends over the mesh), give each backend an edge entry point
+and send it the PROXY protocol:
+
+```nix
+# on each backend
+portablevps.proxy.edgeEntryPoint = {
+  enable = true;                          # :8443, mesh interface only
+  trustedIPs = [ "100.85.147.152/32" ];   # the edge's mesh address
+};
+
+# on the edge
+portablevps.proxy.tcp.maxConnectionsPerIP = 256;
+portablevps.proxy.tcp.services.app = {
+  domain = "app.example.com";
+  targetHost = "app.int.example.com";
+  targetPort = 8443;
+  proxyProtocol = 2;
+  visibility = "direct-public";
+};
+```
+
+Without it, the edge reaches the backend's ordinary entry point, which carries
+the internal routes too. The edge routes by SNI and the backend routes by the
+HTTP `Host` header, and nothing ties the two together. A client could open TLS
+for a public name and then ask for an internal one, reaching a mesh-only admin
+UI from the internet. The edge entry point carries only the public routes, so
+that request finds no route. The backend also gets the real client address
+instead of the edge's. Let only the edge reach that port in the mesh ACL.
+
 Traefik listens on port 443 and the host firewall opens that port only on the
 NetBird interface by default. Use NetBird Reverse Proxy TLS passthrough for
 public names and NetBird Custom Zones for internal names. Set
