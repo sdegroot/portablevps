@@ -28,6 +28,31 @@
     upsert; end to end, `init` into a subdirectory of a fresh git repository,
     then `secret init`, `key generate` and `doctor --server` (flake evaluates).
 
+- **Chore: component updates (2026-11-07).**
+  - **What:** Forgejo 16.0.6 → 17.0.1; Grafana 13.0.1 → 13.3.0; Alertmanager
+    v0.32.1 → v0.34.2; VictoriaMetrics and vmalert v1.144.0 → v1.155.0;
+    VictoriaLogs v1.50.0 → v1.53.0; the nginx example image 1.27.3 → 1.30.6.
+    `flake.lock`: nixos-26.05 to 2026-11-05 (kernel 6.18.60, OpenSSH 10.6p1,
+    Traefik 3.7.16, Podman 5.8.9), nixos-unstable to 2026-11-03 (NetBird
+    0.82.0; PostgreSQL stays 18.6), and sops-nix.
+  - **Why:** Forgejo 16.0 reached end of life on 2026-10-29. The rest had
+    fallen two to eleven releases behind.
+  - **Upgrade notes:** Forgejo 17 is a major release, and an older binary
+    refuses a database that 17 has migrated, so take a backup before
+    deploying. Afterwards run `forgejo doctor check --all`. Action-run
+    webhook events are deprecated in 17. VictoriaLogs ≥ 1.51 (whose parser
+    vmalert ≥ 1.147 bundles) rejects a filter pipe that lacks `filter`
+    (`foo | bar`), so a consumer's own vlogs rules and dashboard queries must
+    use `foo | filter bar`. The VictoriaLogs image is now distroless (no
+    shell). From v0.34, Alertmanager sends no CORS headers by default and
+    splits `reason="clientError"` into `authError` and `rateLimited`.
+  - **Testing:** shell, Python and `nix flake check`. Every LogsQL query in
+    the built-in rules and dashboards, plus the 54 in a consumer fleet's
+    dashboards, run against VictoriaLogs v1.53.0: 65 checked, none failed.
+    `vmalert v1.155.0 -dryRun` on `rules/`, `rules-vlogs/` and a consumer's
+    app alerts passes, and a deliberately old-syntax rule is rejected. All 14
+    servers of a consumer fleet evaluate.
+
 - **Feature: record a server's public addresses (`placement.publicIPv4` / `publicIPv6`).**
   - **What:** two optional, typed placement fields beside `serverType` and
     `location`. `server list` shows them as `PUBLIC IPV4` / `PUBLIC IPV6`

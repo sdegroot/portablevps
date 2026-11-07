@@ -59,7 +59,7 @@ in
     # so a restore brings the data back with the machine.
     portablevps.apps.custom.app = {
       enable = true;
-      image = "docker.io/library/nginx:1.27.3"; # use an immutable tag
+      image = "docker.io/library/nginx:1.30.6"; # use an immutable tag
       port = 80;
       # volumes = [ { hostPath = "/data/app"; containerPath = "/var/lib/app"; } ];
       # uid = 1000;                               # if the image runs as non-root

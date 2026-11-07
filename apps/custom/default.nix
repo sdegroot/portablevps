@@ -45,7 +45,7 @@ let
 
       image = lib.mkOption {
         type = lib.types.str;
-        example = "docker.io/library/nginx:1.27.3";
+        example = "docker.io/library/nginx:1.30.6";
         description = "Pinned container image (use an immutable tag/digest, not :latest).";
       };
 

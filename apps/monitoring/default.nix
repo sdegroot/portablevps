@@ -314,11 +314,11 @@ in
     };
 
     images = {
-      victoriametrics = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/victoria-metrics:v1.144.0"; description = "VictoriaMetrics image."; };
-      victorialogs = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/victoria-logs:v1.50.0"; description = "VictoriaLogs image."; };
-      vmalert = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/vmalert:v1.144.0"; description = "vmalert image (keep the tag == victoriametrics)."; };
-      alertmanager = lib.mkOption { type = lib.types.str; default = "docker.io/prom/alertmanager:v0.32.1"; description = "Alertmanager image."; };
-      grafana = lib.mkOption { type = lib.types.str; default = "docker.io/grafana/grafana:13.0.1"; description = "Grafana image."; };
+      victoriametrics = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/victoria-metrics:v1.155.0"; description = "VictoriaMetrics image."; };
+      victorialogs = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/victoria-logs:v1.53.0"; description = "VictoriaLogs image."; };
+      vmalert = lib.mkOption { type = lib.types.str; default = "docker.io/victoriametrics/vmalert:v1.155.0"; description = "vmalert image (keep the tag == victoriametrics)."; };
+      alertmanager = lib.mkOption { type = lib.types.str; default = "docker.io/prom/alertmanager:v0.34.2"; description = "Alertmanager image."; };
+      grafana = lib.mkOption { type = lib.types.str; default = "docker.io/grafana/grafana:13.3.0"; description = "Grafana image."; };
     };
 
     retention = {
