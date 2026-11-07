@@ -11,7 +11,7 @@ tested restic snapshot as everything else.
 ```nix
 portablevps.apps.custom.web = {
   enable = true;
-  image = "docker.io/library/nginx:1.27.3"; # pin an immutable tag or digest
+  image = "docker.io/library/nginx:1.30.6"; # pin an immutable tag or digest
   port = 80;                                 # loopback port the app listens on
 };
 
