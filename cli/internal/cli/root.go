@@ -49,6 +49,7 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVar(&opts.yes, "yes", false, "pre-answer benign confirmations (does NOT satisfy a destructive gate)")
 	pf.StringVar(&opts.confirm, "confirm", "", "confirm a destructive action non-interactively (must equal the target host/server)")
 
+	root.AddCommand(newInitCmd(opts))
 	root.AddCommand(newDoctorCmd(opts))
 	root.AddCommand(newDRCmd(opts))
 	root.AddCommand(newSSHCmd(opts))

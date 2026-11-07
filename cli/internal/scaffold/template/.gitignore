@@ -1,0 +1,11 @@
+# Local secrets, generated private keys, provider tokens, and lifecycle state.
+.local/
+**/.local/
+
+.DS_Store
+.direnv/
+.env
+.env.*
+result
+result-*
+.task/

@@ -33,6 +33,8 @@ goreleaser build --snapshot --clean --single-target
 scripts/verify-tool-flake-pins.sh dist
 ```
 
+Start a new consumer repository with `pvps init [directory] --server <name>`.
+
 The CLI operates on the consumer repo given by `--project` (default:
 `$PORTABLEVPS_PROJECT`, else the current directory).
 

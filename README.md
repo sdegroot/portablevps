@@ -25,7 +25,23 @@ Key properties:
 
 ## Consuming portablevps
 
-Scaffold a consumer repository from the template:
+Scaffold a consumer repository with the CLI (see "Installing the CLI"):
+
+```sh
+pvps init --server my-server            # into the current directory
+pvps init deploy --server my-server     # or a subdirectory, e.g. of an app repo
+```
+
+`pvps init` writes `flake.nix`, `servers/<server>.nix`, `portablevps.toml`
+(`default_server`), `mise.toml` (pinning `pvps`, `sops` and `age`),
+`.sops.yaml`, `.gitignore` and a README. It never overwrites an existing file;
+an existing `.gitignore` only gets the `.local/` rules appended. A release
+build pins the flake input and `mise.toml` to its own version. Keys and
+secrets follow with `pvps key generate <server>` and `pvps secret init
+<server>`.
+
+With Nix alone, the same template (rendered for a server named `example`) is
+available as a flake template:
 
 ```sh
 nix flake init -t github:sdegroot/portablevps#server

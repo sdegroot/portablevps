@@ -1,4 +1,4 @@
-# An example logical server. Copy this file per server (the file name is the
+# A logical server. Copy this file per server (the file name is the
 # server name) and adjust the placement, identity, and routing.
 { ... }:
 
@@ -39,9 +39,10 @@ in
   module = { lib, ... }: {
     networking.hostName = lib.mkDefault name;
 
-    # Your provisioned cloud admin key and encrypted secrets file.
-    portablevps.base.adminAuthorizedKeyFiles = [ ../keys/cloud-admin.pub ];
-    portablevps.secrets.file = ../secrets/secrets.yaml;
+    # The admin key from `pvps key generate` and the secrets file from
+    # `pvps secret init`.
+    portablevps.base.adminAuthorizedKeyFiles = [ ../keys/servers/example-admin.pub ];
+    portablevps.secrets.file = ../secrets/example.yaml;
 
     portablevps.server = {
       inherit name;
