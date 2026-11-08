@@ -1,0 +1,55 @@
+# Password guessing against authentik. Evaluated by vmalert-logs against VictoriaLogs.
+#
+# Every failed password attempt makes authentik log an event with
+#   "action": "login_failed", "client_ip": "<address>", ... "username": "<as typed>"
+# from the server container. Normal level (epistola, 2026-10-09..11-08): about ten
+# a week, and never more than 5 in any quarter of an hour in total. (Until
+# 2026-11-07 every one carried the edge's address, so the per-address history
+# says nothing yet.)
+#
+# Neither rule puts the username in a label or annotation: it is whatever the
+# client typed, often a mistyped password or someone else's address, and it
+# would be copied into every alert email. Look it up in the logs instead.
+#
+# client_ip is the real visitor only while the proxy in front of authentik gets
+# it (portablevps.proxy.edgeEntryPoint with PROXY protocol). If one of these
+# alerts names a proxy's own mesh address, every visitor shares that address and
+# the per-address rule turns into the total.
+groups:
+  - name: authentik-logins
+    type: vlogs
+    interval: 1m
+    rules:
+      - alert: AuthentikLoginFailuresFromOneAddress
+        # One address guessing passwords, for one account or many.
+        expr: |
+          _time:15m CONTAINER_NAME:authentik-server "\"action\": \"login_failed\""
+          | extract "\"client_ip\": \"<client_ip>\"" from _msg
+          | stats by (host.name, client_ip) count() as failures
+          | rename host.name as host_name
+          | filter failures:>10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Password guessing from {{ $labels.client_ip }} on {{ $labels.host_name }}"
+          description: >-
+            {{ $labels.client_ip }} failed {{ $value }} authentik logins in the last
+            15m on {{ $labels.host_name }}. The usernames tried are in the
+            authentik-server log ("login_failed" events).
+
+      - alert: AuthentikLoginFailureBurst
+        # Many failures in total, typically credential stuffing spread over many
+        # addresses so no single one trips the rule above.
+        expr: |
+          _time:15m CONTAINER_NAME:authentik-server "\"action\": \"login_failed\""
+          | stats by (host.name) count() as failures
+          | rename host.name as host_name
+          | filter failures:>30
+        labels:
+          severity: warning
+        annotations:
+          summary: "Burst of failed logins on {{ $labels.host_name }}"
+          description: >-
+            authentik on {{ $labels.host_name }} rejected {{ $value }} passwords in
+            the last 15m (normal: about ten a week). Check whether they come from
+            many addresses or try many accounts in the authentik-server log.

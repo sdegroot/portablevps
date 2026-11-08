@@ -19,13 +19,14 @@ groups:
     interval: 1m
     rules:
       # Rolling 5-minute connection count per host, written to VictoriaMetrics as
-      # proxy_edge_tcp_connections_5m{host_name, stats_result="connections"}.
-      # rules/proxy-edge.yml compares it with its own 7-day average.
+      # proxy_edge_tcp_connections_5m{host_name, service_name, stats_result="connections"}.
+      # rules/proxy-edge.yml compares it with its own 7-day average, and the
+      # "Role — Edge" dashboard lists the edges by it.
       - record: proxy_edge_tcp_connections_5m
         expr: |
           _time:5m _SYSTEMD_UNIT:traefik.service "Handling TCP connection"
-          | stats by (host.name) count() as connections
-          | rename host.name as host_name
+          | stats by (host.name, service.name) count() as connections
+          | rename host.name as host_name, service.name as service_name
 
       - alert: ProxyEdgeSingleSourceFlood
         # One client opening connections at a sustained ~3/s. The per-IP
