@@ -1,0 +1,54 @@
+# Attack-shaped traffic on an HTTP proxy, per backend service. Complements
+# proxy-http.yml (which catches a broken backend) and proxy-edge.yml (which
+# watches a TCP-passthrough edge). Needs portablevps.proxy.metrics.enable.
+#
+# Each rule compares a service with its own 7-day average and also requires an
+# absolute floor, so a quiet service going from 2 to 40 requests stays silent.
+# Thresholds were set on a week of epistola traffic (2026-11-01..08):
+#   - 4xx per service per 5m: about 2 on average; two scanner bursts on the
+#     demo, the larger 2354.
+#   - requests per service per 5m: Forgejo averages 690 (peak 2229); every other
+#     service averages under 13 (peak 1209).
+groups:
+  - name: proxy-attack
+    interval: 1m
+    rules:
+      - alert: ProxyClientErrorSurge
+        # A burst of 4xx on one service: a vulnerability scanner walking paths
+        # (404/405), credential guessing (401/403), or a broken client. Expect
+        # this about once a week from internet scanners; it says who is being
+        # probed and when, not that anything got in.
+        expr: |
+          sum by (host_name, service) (increase(traefik_service_requests_total{code=~"4.."}[5m])) > 1500
+          and
+          sum by (host_name, service) (increase(traefik_service_requests_total{code=~"4.."}[5m]))
+            > 20 * avg_over_time((sum by (host_name, service) (increase(traefik_service_requests_total{code=~"4.."}[5m])))[7d:5m])
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "4xx burst on {{ $labels.service }} ({{ $labels.host_name }})"
+          description: >-
+            {{ $labels.service }} on {{ $labels.host_name }} answered {{ $value | humanize }}
+            client errors in the last 5m, over twenty times its 7-day average. The
+            Traefik dashboard's "Errors by status code" panel shows which codes
+            (404/405 point at a path scanner, 401/403 at credential guessing).
+
+      - alert: ProxyRequestSurge
+        # Total requests on one service far above its normal level: a scraper, an
+        # application-layer flood, or a link that went viral. Different from
+        # ProxyEdgeConnectionSurge, which counts connections at the edge; HTTP/2
+        # carries many requests on one connection, so this sees floods that one.
+        expr: |
+          sum by (host_name, service) (increase(traefik_service_requests_total[5m])) > 5000
+          and
+          sum by (host_name, service) (increase(traefik_service_requests_total[5m]))
+            > 10 * avg_over_time((sum by (host_name, service) (increase(traefik_service_requests_total[5m])))[7d:5m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Request surge on {{ $labels.service }} ({{ $labels.host_name }})"
+          description: >-
+            {{ $labels.service }} on {{ $labels.host_name }} received {{ $value | humanize }}
+            requests in the last 5m, more than ten times its 7-day average.

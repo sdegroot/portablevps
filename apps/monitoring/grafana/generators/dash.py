@@ -1,10 +1,10 @@
 """Shared helpers for the generated built-in dashboards (role-*.json).
 
-Each role script (traefik.py, postgres.py, jvm.py) builds one dashboard with
+Each role script (traefik.py, postgres.py, jvm.py, edge.py) builds one dashboard with
 these helpers and prints its JSON model. Regenerate all of them from this
 directory with:
 
-    for d in traefik postgres jvm; do python3 $d.py > ../dashboards/role-$d.json; done
+    for d in traefik postgres jvm edge; do python3 $d.py > ../dashboards/role-$d.json; done
 
 Commit the script and the JSON together: Grafana provisions only the JSON.
 """
