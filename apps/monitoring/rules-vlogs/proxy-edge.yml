@@ -47,7 +47,8 @@ groups:
             {{ $labels.client_ip }} opened {{ $value }} connections in the last 5m
             through {{ $labels.host_name }} (normal peak: under 400 for the busiest
             client). Check its targets in the edge's "Handling TCP connection" log
-            lines. Blocking it means a deny rule in the provider firewall.
+            lines. To block it, drop it in the host firewall: a cloud provider's
+            firewall (Hetzner's, for one) often has only allow rules.
 
       - alert: ProxyEdgeConnectionLimitHit
         # Traefik's InFlightConnTCP middleware refused a connection because one IP
