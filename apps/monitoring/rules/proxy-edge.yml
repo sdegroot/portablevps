@@ -1,0 +1,41 @@
+# Edge (TCP passthrough) anomaly rules over metrics. The log-based half lives in
+# rules-vlogs/proxy-edge.yml, which also records the connection count used here.
+groups:
+  - name: proxy-edge
+    interval: 30s
+    rules:
+      - alert: ProxyEdgeConnectionSurge
+        # Connections per 5 minutes far above this host's own 7-day average, with
+        # an absolute floor so a quiet edge doubling from 10 to 20 stays silent.
+        # The floor is about 1.6x the busiest 5 minutes seen on the epistola edge
+        # in the week before this rule was written.
+        expr: |
+          proxy_edge_tcp_connections_5m
+            > 10 * avg_over_time(proxy_edge_tcp_connections_5m[7d])
+          and
+          proxy_edge_tcp_connections_5m > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Connection surge on the edge {{ $labels.host_name }}"
+          description: >-
+            {{ $labels.host_name }} forwarded {{ $value }} connections in the last 5m,
+            more than ten times its 7-day average. ProxyEdgeSingleSourceFlood fires
+            as well when it is one client; otherwise it is many (a botnet, or a
+            link that went viral).
+
+      - alert: ProxyOpenConnectionsHigh
+        # Concurrent TCP connections held open through Traefik. Needs
+        # portablevps.proxy.metrics.enable on the host.
+        expr: |
+          sum by (host_name) (traefik_open_connections{protocol="TCP", entrypoint!="metrics"}) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many open TCP connections on {{ $labels.host_name }}"
+          description: >-
+            Traefik on {{ $labels.host_name }} has held {{ $value }} TCP connections
+            open for 5m. Slow-loris style clients hold connections without sending,
+            and the per-IP limit only caps each source separately.
