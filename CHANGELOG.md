@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **DR: restore, drill and migrate accept a healthcheck false positive at the switch, like deploy.**
+  - **What:** `ServiceEnv.switchTo` judges a non-zero `nixos-rebuild switch` from the host's own record through the
+    new `verifyFailedSwitch`, which `deploy` uses as well. A podman healthcheck that failed while its container was
+    still starting, or a unit that failed during the switch and has since recovered, counts as a completed switch,
+    with a warning. A unit that stays failed, a crash loop or a degraded host still fails. The restore path publishes
+    no deploy outcome: a drill host runs another server's configuration, so it would land under that server's name.
+  - **Why:** the first authentik drill (2026-11-08) failed at finalize with exit 4. The only failed unit was the
+    healthcheck of `authentik-worker`, run seconds after the container started. authentik itself came up with zero
+    restarts. `pvps server deploy` already tolerated this case; the restore path stopped before verifying anything.
+  - **Testing:**
+    - New tests: a healthcheck false positive at finalize is accepted (the transient is reset, no deploy report, the
+      marker is still verified); a crash loop after finalize fails before verification; a drill passes through it,
+      publishes its metric and takes the role back. All three fail with the old `switchTo`.
+    - `deploy`'s own tests pass unchanged.
+    - The authentik drill re-run with this build passed. The false positive did not recur in that run, so this path
+      has no live run yet.
+
 - **DR: a remote drill lends the spare the source's network role, picks the right key, and checks the apps run.**
   - **What:**
     - **Network role:** with a `[network]` API token and `--restore-server`, `pvps dr --mode remote` adds the spare's

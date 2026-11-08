@@ -80,12 +80,16 @@ func (env ServiceEnv) report() func(string, string, string) {
 }
 
 // switchTo runs an in-place nixos-rebuild switch to profile on host, built on
-// the remote.
+// the remote. A non-zero exit is judged from the host's own record like a
+// deploy (verifyFailedSwitch): when the switch applied and the only failures
+// were transient (a podman healthcheck that ran while its container was still
+// starting, say), the switch counts as done.
 func (env ServiceEnv) switchTo(profile, host string) error {
 	nixSSHOpts := env.Host.NixSSHOpts()
 	if routed, ok := env.Host.(interface{ NixSSHOptsFor(string) string }); ok {
 		nixSSHOpts = routed.NixSSHOptsFor(host)
 	}
+	since := hostEpoch(env.Host, host)
 	if err := env.Stream.Stream(env.RepoRoot,
 		map[string]string{"NIX_SSHOPTS": nixSSHOpts},
 		"nix", "--extra-experimental-features", "nix-command flakes",
@@ -94,7 +98,13 @@ func (env ServiceEnv) switchTo(profile, host string) error {
 		"--target-host", "admin@"+host,
 		"--build-host", "admin@"+host,
 		"--elevate=sudo", "--no-reexec"); err != nil {
-		return err
+		report := env.report()
+		report("switch", "info", fmt.Sprintf("nixos-rebuild exited with %v; checking the switch on %s itself", err, host))
+		j := verifyFailedSwitch(env.Host, host, since, err, env.sleep())
+		if !j.OK {
+			return fmt.Errorf("%s", j.Failure)
+		}
+		report("switch", "warn", j.Warning)
 	}
 	if switched, ok := env.Host.(interface{ SwitchedTo(profile, host string) }); ok {
 		switched.SwitchedTo(profile, host)
