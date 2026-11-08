@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **DR: a remote drill lends the spare the source's network role, picks the right key, and checks the apps run.**
+  - **What:**
+    - **Network role:** with a `[network]` API token and `--restore-server`, `pvps dr --mode remote` adds the spare's
+      NetBird peer to the source's role groups right after the backup. It takes back exactly those groups on every
+      exit path. `--no-network-role` turns this off.
+    - **Key:** a spare that still runs the source's configuration (NetBird shows the source's hostname) is reached
+      with the source's admin key from the first login.
+    - **Apps:** after the marker checks, the drill waits up to two minutes for every unit `apps.target` wants to be
+      running. Otherwise it fails with exit 71 and publishes no drill metric.
+    - **Peer matching:** `network policy-sync` and `network sync` now match a declared server's peer by NetBird
+      peer name first, and by hostname only as a fallback.
+  - **Why:** the epistola-hq drill of 2026-11-08 failed at finalize. On the default-deny mesh the spare had no
+    role groups, so it could not resolve the Forgejo registry and HQ's unit failed before anything was verified. The
+    workaround, a policy-sync mid-drill, only worked because policy-sync matched peers by hostname. That same
+    matching silently stripped a drill spare of its own groups. A re-run then burned a failed login on the spare's
+    own key.
+  - **Testing:**
+    - Unit tests: lending happens after the backup and before the restore; take-back happens on success, on a failed
+      restore and on a failed apps check; a failed take-back fails the drill; a partial lend is undone; the spare is
+      found by name, not hostname; a missing group is refused.
+    - Matching: a drill spare keeps its own groups in `PlanMembership`, and `FindPeer` prefers the name. The test
+      fails with the old hostname-first order.
+    - The apps check's script ran read-only on two live hosts (pass in about 0.1 s).
+
 - **Monitoring: `ProxyEdgeSingleSourceFlood` gives the right blocking advice.**
   - **What:** the annotation now says to block the address in the host firewall, not with "a deny rule in the
     provider firewall".

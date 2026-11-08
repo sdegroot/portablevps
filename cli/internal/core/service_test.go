@@ -583,3 +583,139 @@ func TestSeedAndVerifyBackupPathChecksRunAsRoot(t *testing.T) {
 		}
 	}
 }
+
+// fakeDrillNetwork records when the drill lent and took back the network role,
+// relative to the host commands, so tests can check the ordering.
+type fakeDrillNetwork struct {
+	host       *fakeHost
+	granted    []string
+	lendErr    error
+	revokeErr  error
+	lentAt     int // len(host.runs) when Lend was called; -1 if never
+	revokedAt  int
+	revokeRuns int
+}
+
+func newFakeDrillNetwork(host *fakeHost, granted ...string) *fakeDrillNetwork {
+	return &fakeDrillNetwork{host: host, granted: granted, lentAt: -1, revokedAt: -1}
+}
+
+func (f *fakeDrillNetwork) Lend() ([]string, func() error, error) {
+	f.lentAt = len(f.host.runs)
+	if f.lendErr != nil {
+		return nil, nil, f.lendErr
+	}
+	return f.granted, func() error {
+		f.revokeRuns++
+		f.revokedAt = len(f.host.runs)
+		return f.revokeErr
+	}, nil
+}
+
+func drillHost() *fakeHost {
+	return &fakeHost{outputs: map[string]string{
+		"find /etc/portablevps/backups/paths.d":   "yes\n",
+		"paths.d/postgres; then echo yes":         "yes\n",
+		"portablevps-backup-restore-drill-report": "reported\n",
+	}}
+}
+
+func indexOfRun(runs []string, substr string) int {
+	for i, r := range runs {
+		if strings.Contains(r, substr) {
+			return i
+		}
+	}
+	return -1
+}
+
+// The restored app needs the source's mesh role before finalize starts it (the
+// HQ drill of 2026-11-08 failed at finalize without it), the role must not be
+// lent before the source's backup ran, and it is taken back once the drill is
+// done, after the apps check.
+func TestRestoreDrillLendsTheMeshRoleAroundTheRestore(t *testing.T) {
+	host := drillHost()
+	network := newFakeDrillNetwork(host, "hq")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := indexOfRun(host.runs, "portablevps-backup.service")
+	restore := indexOfRun(host.runs, "restore.sh")
+	apps := indexOfRun(host.runs, "show -p Wants --value apps.target")
+	if network.lentAt < 0 || network.lentAt <= backup || network.lentAt > restore {
+		t.Fatalf("role lent at run %d; want after the backup (%d) and before restore.sh (%d)", network.lentAt, backup, restore)
+	}
+	if network.revokeRuns != 1 || network.revokedAt <= apps {
+		t.Fatalf("role taken back %d times at run %d; want once, after the apps check (%d)", network.revokeRuns, network.revokedAt, apps)
+	}
+}
+
+func TestRestoreDrillTakesTheMeshRoleBackWhenTheRestoreFails(t *testing.T) {
+	host := drillHost()
+	host.failContaining = "restore.sh"
+	network := newFakeDrillNetwork(host, "hq")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err == nil {
+		t.Fatal("expected the restore failure")
+	}
+	if network.revokeRuns != 1 {
+		t.Fatalf("a failed drill must still take the role back; revoked %d times", network.revokeRuns)
+	}
+}
+
+func TestRestoreDrillSurfacesAFailedRoleTakeBack(t *testing.T) {
+	host := drillHost()
+	network := newFakeDrillNetwork(host, "hq")
+	network.revokeErr = fmt.Errorf("netbird 503")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "netbird 503") {
+		t.Fatalf("a failed take-back must fail the drill loudly, got %v", err)
+	}
+}
+
+func TestRestoreDrillStopsBeforeRestoringWhenLendingFails(t *testing.T) {
+	host := drillHost()
+	network := newFakeDrillNetwork(host)
+	network.lendErr = fmt.Errorf("token expired")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "token expired") {
+		t.Fatalf("expected the lend failure, got %v", err)
+	}
+	if indexOfRun(host.runs, "restore.sh") >= 0 {
+		t.Fatal("must not wipe the restore host when its network role could not be lent")
+	}
+}
+
+// Data restored but the app not running is a failed drill: exit 71, like a
+// missing marker, and the role is still taken back.
+func TestRestoreDrillFailsWhenAppsDoNotRun(t *testing.T) {
+	host := drillHost()
+	host.failContaining = "show -p Wants --value apps.target"
+	network := newFakeDrillNetwork(host, "hq")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &recordRunner{}, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if e, ok := err.(*ProvisionError); !ok || e.ExitCode() != 71 {
+		t.Fatalf("expected exit 71 when apps do not run, got %v", err)
+	}
+	if indexOfRun(host.runs, "portablevps-backup-restore-drill-report") >= 0 {
+		t.Fatal("must not publish the drill metric when the apps do not run")
+	}
+	if network.revokeRuns != 1 {
+		t.Fatalf("role must be taken back after a failed apps check; revoked %d times", network.revokeRuns)
+	}
+}

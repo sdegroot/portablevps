@@ -162,18 +162,53 @@ type Peer struct {
 	Hostname string `json:"hostname"`
 }
 
-// FindPeer returns the peer whose hostname or name matches, or nil.
+// FindPeer returns the peer named name, or else the peer whose hostname is
+// name, or nil. The peer name wins for the same reason as in serverFor: a
+// machine running another server's configuration (a restore-drill spare)
+// carries that server's hostname, and must not be mistaken for it.
 func (c *Client) FindPeer(name string) (*Peer, error) {
 	var peers []Peer
 	if err := c.request("GET", "/api/peers", nil, &peers); err != nil {
 		return nil, err
 	}
+	return pickPeer(peers, name), nil
+}
+
+func pickPeer(peers []Peer, name string) *Peer {
 	for i := range peers {
-		if peers[i].Hostname == name || peers[i].Name == name {
-			return &peers[i], nil
+		if peers[i].Name == name {
+			return &peers[i]
 		}
 	}
-	return nil, nil
+	for i := range peers {
+		if peers[i].Hostname == name {
+			return &peers[i]
+		}
+	}
+	return nil
+}
+
+// RemovePeerFromGroup takes a peer out of a group (idempotent). It returns true
+// if it changed the group.
+func (c *Client) RemovePeerFromGroup(groupID, peerID string) (bool, error) {
+	var group Group
+	if err := c.request("GET", "/api/groups/"+groupID, nil, &group); err != nil {
+		return false, err
+	}
+	ids := group.peerIDs()
+	rest := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != peerID {
+			rest = append(rest, id)
+		}
+	}
+	if len(rest) == len(ids) {
+		return false, nil
+	}
+	if err := c.SetGroupPeers(groupID, rest); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EnsurePeerInGroup adds a peer to a group (idempotent, additive). It returns

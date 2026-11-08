@@ -142,6 +142,43 @@ Because this drives the same systemd units, PATH, and repo self-init
 (`ExecStartPre = init-backup-repo.sh`) as a live host, it catches
 service-level backup regressions that invoking the scripts directly would miss.
 
+## Remote DR Drill (real hosts)
+
+`pvps dr <server> --source-server <live> --restore-server <spare> --mode remote
+--confirm <spare>.<mesh_domain>` runs the same proof against real machines:
+seed markers on the live source, run its production backup, restore onto a
+spare (its data is wiped) and verify every marker there. It then waits until
+every unit `apps.target` wants is running, because restored data alone does not
+prove the service comes back, and only then publishes
+`portablevps_backup_restore_drill_timestamp_seconds`.
+
+**Network role.** On a default-deny NetBird mesh, access and DNS follow role
+groups, and a spare has none. The restored application then cannot reach what
+its role grants (a private image registry, say), its unit fails, and the drill
+stops at finalize before verifying anything. So when `portablevps.toml` has a
+`[network]` API token and the spare is given as `--restore-server`, the drill
+lends the spare the source's declared NetBird groups (all but the source's own
+machine-name group) right after the backup, and takes back exactly those on
+every exit path, pass or fail. `--no-network-role` turns this off.
+
+**A spare an earlier drill left behind** still runs the source's configuration
+and accepts only the source's admin key. The drill reads the spare's peer from
+NetBird and, when its hostname is the source's, uses the source's key from the
+first login, so no failed login reaches fail2ban.
+
+**Peer identity.** `network policy-sync` and `network sync` match a declared
+server to its peer by NetBird peer name first and by hostname only as a
+fallback. The hostname follows the configuration a machine runs, so a drill
+spare carries the source's; before this, a sync during a drill silently gave the
+spare the source's groups and took away its own.
+
+**Still manual after a drill:** stop the spare's inherited upgrade and backup
+timers (the drill guard already makes the backup units skip), switch it back to
+its own configuration with `pvps server deploy`, and wipe the restored
+`/data/*` and `/var/lib/traefik/acme.json` (the source's TLS private keys).
+Until it is switched back, the spare reports logs and metrics under the
+source's host name.
+
 ## Cloud Provider Flow
 
 This flow rebuilds a **lost or retired** machine onto a replacement host. With

@@ -213,3 +213,90 @@ func TestRemovePeerFromUndeclared(t *testing.T) {
 		t.Fatalf("unexpected PUTs %v", puts)
 	}
 }
+
+// TestPlanMembershipKeepsADrillSpareOnItsOwnIdentity reproduces the epistola-hq
+// restore drill of 2026-11-08: the spare ran HQ's configuration, so its
+// hostname was HQ's. Matching on the hostname put the spare into HQ's groups
+// and took it out of its own. The peer name must win.
+func TestPlanMembershipKeepsADrillSpareOnItsOwnIdentity(t *testing.T) {
+	groups := []Group{
+		{ID: "g-srv", Name: "portablevps-servers", Peers: rawIDs("p-hq", "p-spare")},
+		{ID: "g-hq", Name: "hq", Peers: rawIDs("p-hq")},
+		{ID: "g-hqbox", Name: "hq-box", Peers: rawIDs("p-hq")},
+		{ID: "g-spare", Name: "spare-box", Peers: rawIDs("p-spare")},
+	}
+	peers := []PeerInfo{
+		{ID: "p-hq", Name: "hq-box", Hostname: "hq-box"},
+		{ID: "p-spare", Name: "spare-box", Hostname: "hq-box"}, // runs HQ's config
+	}
+	want := DesiredMembership{Servers: map[string][]string{
+		"hq-box":    {"portablevps-servers", "hq", "hq-box"},
+		"spare-box": {"portablevps-servers", "spare-box"},
+	}}
+	want.Managed = ManagedGroups(FleetPolicies{}, want.Servers)
+	plan := PlanMembership(want, groups, peers, nil)
+	if len(plan.Groups)+len(plan.Warnings) != 0 {
+		t.Fatalf("a spare carrying the source's hostname must keep its own groups; got %+v", plan)
+	}
+}
+
+// TestPlanMembershipFallsBackToHostname keeps a peer whose NetBird name was
+// changed (e.g. de-duplicated with a suffix) matched through its hostname.
+func TestPlanMembershipFallsBackToHostname(t *testing.T) {
+	groups := []Group{{ID: "g-srv", Name: "portablevps-servers"}}
+	peers := []PeerInfo{{ID: "p1", Name: "box1-a1b2", Hostname: "box1"}}
+	want := DesiredMembership{Servers: map[string][]string{"box1": {"portablevps-servers"}}}
+	want.Managed = ManagedGroups(FleetPolicies{}, want.Servers)
+	plan := PlanMembership(want, groups, peers, nil)
+	if len(plan.Groups) != 1 || !reflect.DeepEqual(plan.Groups[0].Add, []string{"box1-a1b2"}) {
+		t.Fatalf("expected the renamed peer to join via its hostname, got %+v", plan.Groups)
+	}
+}
+
+// TestPickPeerPrefersName: FindPeer must return the server's own peer, not a
+// drill spare that carries its hostname, whatever order the API lists them in.
+func TestPickPeerPrefersName(t *testing.T) {
+	peers := []Peer{
+		{ID: "p-spare", Name: "spare-box", Hostname: "hq-box"},
+		{ID: "p-hq", Name: "hq-box", Hostname: "hq-box"},
+		{ID: "p-old", Name: "old-a1b2", Hostname: "old"},
+	}
+	if p := pickPeer(peers, "hq-box"); p == nil || p.ID != "p-hq" {
+		t.Fatalf("pickPeer(hq-box) = %+v, want p-hq", p)
+	}
+	if p := pickPeer(peers, "old"); p == nil || p.ID != "p-old" {
+		t.Fatalf("pickPeer(old) = %+v, want the hostname fallback p-old", p)
+	}
+	if p := pickPeer(peers, "nobody"); p != nil {
+		t.Fatalf("pickPeer(nobody) = %+v, want nil", p)
+	}
+}
+
+// TestRemovePeerFromGroup keeps the other members and is a no-op for a peer
+// that is not in the group.
+func TestRemovePeerFromGroup(t *testing.T) {
+	var put map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			_, _ = w.Write([]byte(`{"id":"g1","name":"hq","peers":[{"id":"a"},{"id":"b"}]}`))
+		case "PUT":
+			_ = json.NewDecoder(r.Body).Decode(&put)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	c := New("t", srv.URL)
+	changed, err := c.RemovePeerFromGroup("g1", "b")
+	if err != nil || !changed {
+		t.Fatalf("RemovePeerFromGroup(b) = %v, %v", changed, err)
+	}
+	if got := put["peers"]; !reflect.DeepEqual(got, []any{"a"}) {
+		t.Fatalf("PUT peers = %v, want [a]", got)
+	}
+	put = nil
+	changed, err = c.RemovePeerFromGroup("g1", "zzz")
+	if err != nil || changed || put != nil {
+		t.Fatalf("removing a non-member must not write: changed=%v err=%v put=%v", changed, err, put)
+	}
+}
