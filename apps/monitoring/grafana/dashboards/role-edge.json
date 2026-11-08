@@ -1034,6 +1034,42 @@
     {
       "id": 18,
       "type": "logs",
+      "title": "Blocked addresses",
+      "description": "Bans and unbans by the proxy's automatic blocking (portablevps.proxy.tcp.autoBlock): fail2ban jails portablevps-proxy-limit and portablevps-proxy-flood.",
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "victorialogs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "victorialogs"
+          },
+          "expr": "service.name:=\"$service\" host.name:~\"${host:regex}\" SYSLOG_IDENTIFIER:~\"fail2ban\" \"[portablevps-proxy-\"",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "prettifyLogMessage": false
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      }
+    },
+    {
+      "id": 19,
+      "type": "logs",
       "title": "Errors and rejections",
       "description": "Every Traefik line at error level on the edge: forwarding errors, per-IP rejections, configuration problems.",
       "datasource": {
@@ -1064,11 +1100,11 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 40
       }
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "logs",
       "title": "Connections",
       "description": "One line per forwarded connection: the client address and the backend it went to.",
@@ -1100,7 +1136,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 49
       }
     }
   ]

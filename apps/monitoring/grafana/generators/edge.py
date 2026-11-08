@@ -31,6 +31,8 @@ SUP = ('service.name:="$service" host.name:~"${host:regex}" SYSLOG_IDENTIFIER:sy
 CLIENT = 'extract_regexp "\\"remoteAddr\\":\\"(?P<client_ip>[^\\"]+):[0-9]+\\"" from _msg'
 TARGET = 'extract_regexp "\\"address\\":\\"(?P<target>[^\\"]+)\\"" from _msg'
 REJECTED_IP = 'extract_regexp "max number of connections reached for (?P<client_ip>[^\\"]+)" from _msg'
+BANS = ('service.name:="$service" host.name:~"${host:regex}" SYSLOG_IDENTIFIER:~"fail2ban" '
+        '"[portablevps-proxy-"')
 # Instant stats panels count over the dashboard's time range.
 RANGE = "_time:$__range"
 
@@ -137,6 +139,10 @@ d.advance(10)
 
 # ---------------------------------------------------------------- logs
 d.row("Logs")
+d.place(d.logs("Blocked addresses", BANS,
+               "Bans and unbans by the proxy's automatic blocking (portablevps.proxy.tcp.autoBlock): fail2ban jails portablevps-proxy-limit and portablevps-proxy-flood."),
+        0, 24, 6)
+d.advance(6)
 d.place(d.logs("Errors and rejections", f'{LOGS} "\\"level\\":\\"error\\""',
                "Every Traefik line at error level on the edge: forwarding errors, per-IP rejections, configuration problems."),
         0, 24, 9)

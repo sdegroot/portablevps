@@ -107,3 +107,26 @@ groups:
             on {{ $labels.host_name }}. Traefik is logging faster than the unit's
             rate limit allows, usually because of a connection flood. The
             connection-count alerts undercount while this lasts.
+
+      - alert: ProxyAddressBlocked
+        # The proxy's automatic blocking (portablevps.proxy.tcp.autoBlock)
+        # banned an address: fail2ban logs `NOTICE [portablevps-proxy-<jail>] Ban <ip>`
+        # (or `Increase Ban` for a repeat offender). Nothing to do unless the
+        # address is a legitimate client, such as an office or a partner.
+        expr: |
+          _time:10m SYSLOG_IDENTIFIER:~"fail2ban" "[portablevps-proxy-" "Ban "
+          | extract_regexp "\\[(?P<jail>portablevps-proxy-[a-z]+)\\] (Increase )?Ban (?P<client_ip>[0-9a-fA-F.:]+)" from _msg
+          | filter client_ip:~"."
+          | stats by (host.name, jail, client_ip) count() as bans
+          | rename host.name as host_name
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host_name }} blocked {{ $labels.client_ip }} ({{ $labels.jail }})"
+          description: >-
+            The proxy on {{ $labels.host_name }} banned {{ $labels.client_ip }}
+            through the {{ $labels.jail }} jail (portablevps-proxy-limit: it kept
+            hitting the per-IP connection limit; portablevps-proxy-flood: it
+            opened far more connections than any normal client). The ban lasts
+            the host's fail2ban bantime and grows for repeat offenders. To lift
+            it early: `sudo fail2ban-client set {{ $labels.jail }} unbanip {{ $labels.client_ip }}`.

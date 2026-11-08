@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Proxy: an edge can block abusive addresses automatically.**
+  - **What:** `portablevps.proxy.tcp.autoBlock` (off by default).
+    - **Kernel:** an iptables hashlimit drops new connections to the proxy port above `newConnectionsPerSecond` (50)
+      per address, burst 200. It never applies on the mesh interface.
+    - **fail2ban, `portablevps-proxy-limit`:** bans an address that hits `tcp.maxConnectionsPerIP` 10 times in 10m.
+    - **fail2ban, `portablevps-proxy-flood`:** bans an address that opens more than 1500 connections in 5m. It reads
+      Traefik's DEBUG JSON line per connection.
+    - **Exceptions:** both jails ignore NetBird's range (`ignoreAddresses`); the host's sshd jail is untouched.
+    - **Visibility:** a new `ProxyAddressBlocked` alert reports each ban, and Role — Edge gains a "Blocked addresses"
+      log panel.
+  - **Why:** the edge alerted on floods and limit hits, but blocking an address was a manual iptables command, and a
+    client opening short connections under the per-IP concurrency limit was not slowed at all.
+  - **Testing:**
+    - The rendered jails, filters and firewall rule were inspected on a consumer edge; other hosts evaluate unchanged.
+    - `fail2ban-regex`: the flood regex matched exactly the 2903 connection lines in 24h of real edge logs (5839
+      lines) and extracts the client address, not the backend's. The limit regex extracts the address from Traefik's
+      rejection line and ignores forwarding errors.
+    - `vmalert -dryRun` passes; the build check caught an invalid escape in the first version of the alert.
+
 - **Runtime: a removed quadlet app is stopped on switch instead of left running.**
   - **What:** the on-switch quadlet restarter (`modules/runtime/podman.nix`) stops `<name>.service` and forgets its
     hash when a hash file in `/var/lib/portablevps/quadlet-hashes` has no matching `.container` any more. This runs
