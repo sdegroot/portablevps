@@ -752,6 +752,75 @@ in
       '';
     };
 
+    tcp.autoBlock = {
+      enable = lib.mkEnableOption ''
+        automatic blocking of abusive client addresses on a public TCP edge.
+        Two layers: a kernel limit on how fast one address may open new
+        connections to the proxy port (iptables hashlimit; excess SYNs are
+        dropped), and fail2ban jails that ban an address for a while when it
+        keeps hitting tcp.maxConnectionsPerIP or opens far more connections
+        than any normal client. Bans use the host's fail2ban settings (ban
+        time, increments for repeat offenders). The flood jail counts
+        Traefik's DEBUG "Handling TCP connection" lines, so it only works with
+        Traefik logging at DEBUG in JSON'';
+
+      newConnectionsPerSecond = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = 50;
+        description = ''
+          New connections per second one address may open to the proxy port
+          before further SYNs are dropped (sustained rate). null leaves only
+          the fail2ban jails.
+        '';
+      };
+
+      newConnectionsBurst = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 200;
+        description = "Burst of new connections allowed above newConnectionsPerSecond before dropping starts.";
+      };
+
+      limitHits = {
+        maxretry = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 10;
+          description = "Rejections by tcp.maxConnectionsPerIP within findtime that get an address banned.";
+        };
+        findtime = lib.mkOption {
+          type = lib.types.str;
+          default = "10m";
+          description = "Window for limitHits.maxretry.";
+        };
+      };
+
+      flood = {
+        maxretry = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1500;
+          description = ''
+            Connections from one address within findtime that get it banned.
+            Set it well above the busiest legitimate client: a crawler, or an
+            office behind one address.
+          '';
+        };
+        findtime = lib.mkOption {
+          type = lib.types.str;
+          default = "5m";
+          description = "Window for flood.maxretry.";
+        };
+      };
+
+      ignoreAddresses = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "100.64.0.0/10" ];
+        description = ''
+          Addresses these jails never ban. The default is NetBird's address
+          range, so mesh peers (operators, the fleet) are never locked out by
+          them. The host's other jails (sshd) are not affected.
+        '';
+      };
+    };
+
     testBackend = {
       enable = lib.mkEnableOption "local proxy smoke-test HTTP backend";
 
@@ -979,6 +1048,55 @@ in
     (lib.mkIf cfg.openPublicFirewall {
       networking.firewall.allowedTCPPorts = [ cfg.port ];
     })
+
+    (lib.mkIf cfg.tcp.autoBlock.enable (let
+      ab = cfg.tcp.autoBlock;
+      port = toString cfg.port;
+      # Matches only new connections to the proxy port arriving from outside
+      # the mesh; established traffic and mesh peers are never rate limited.
+      synRule = action: "ip46tables ${action} -p tcp --dport ${port} ! -i ${netbirdInterface} --syn "
+        + "-m hashlimit --hashlimit-name pvps-proxy-syn --hashlimit-mode srcip "
+        + "--hashlimit-above ${toString ab.newConnectionsPerSecond}/second --hashlimit-burst ${toString ab.newConnectionsBurst} "
+        + "--hashlimit-htable-expire 120000 -j DROP";
+      # ignoreip per jail, not globally: the host's other jails (sshd) keep
+      # banning mesh sources as before.
+      jail = maxretry: findtime: {
+        port = port;
+        inherit maxretry findtime;
+        backend = "systemd";
+        journalmatch = "_SYSTEMD_UNIT=traefik.service";
+        ignoreip = lib.concatStringsSep " " ([ "127.0.0.1/8" "::1" ] ++ ab.ignoreAddresses);
+      };
+    in {
+      assertions = [
+        {
+          assertion = config.services.fail2ban.enable;
+          message = "portablevps.proxy.tcp.autoBlock needs services.fail2ban.enable (the cloud-vps platform enables it).";
+        }
+        {
+          assertion = cfg.tcp.services != { };
+          message = "portablevps.proxy.tcp.autoBlock watches TCP routes; declare portablevps.proxy.tcp.services.";
+        }
+      ];
+      # Traefik's InFlightConnTCP middleware logs, at error level:
+      #   {"level":"error",...,"error":"max number of connections reached for <ip>",...,"message":"Connection rejected"}
+      services.fail2ban.jails.portablevps-proxy-limit = {
+        filter.Definition.failregex = ''"error":"max number of connections reached for \[?<HOST>\]?".*"message":"Connection rejected"'';
+        settings = jail ab.limitHits.maxretry ab.limitHits.findtime;
+      };
+      # Traefik's TCP proxy logs, at debug level, one line per connection:
+      #   {"level":"debug","address":"<backend>","remoteAddr":"<ip>:<port>",...,"message":"Handling TCP connection"}
+      services.fail2ban.jails.portablevps-proxy-flood = {
+        filter.Definition.failregex = ''"remoteAddr":"\[?<HOST>\]?:\d+".*"message":"Handling TCP connection"'';
+        settings = jail ab.flood.maxretry ab.flood.findtime;
+      };
+      networking.firewall.extraCommands = lib.mkIf (ab.newConnectionsPerSecond != null) ''
+        ${synRule "-I nixos-fw 1"}
+      '';
+      networking.firewall.extraStopCommands = lib.mkIf (ab.newConnectionsPerSecond != null) ''
+        ${synRule "-D nixos-fw"} 2>/dev/null || true
+      '';
+    }))
 
     (lib.mkIf config.portablevps.restoreMode {
       systemd.services.traefik.wantedBy = lib.mkForce [ ];

@@ -452,6 +452,23 @@ UI from the internet. The edge entry point carries only the public routes, so
 that request finds no route. The backend also gets the real client address
 instead of the edge's. Let only the edge reach that port in the mesh ACL.
 
+An edge can also block abusive addresses by itself:
+
+```nix
+portablevps.proxy.tcp.autoBlock.enable = true;
+```
+
+It adds two layers. The kernel drops new connections from one address above 50
+a second (burst 200) to the proxy port. fail2ban bans an address that hits
+`maxConnectionsPerIP` 10 times in 10 minutes (jail `portablevps-proxy-limit`) or
+opens more than 1500 connections in 5 minutes (jail `portablevps-proxy-flood`).
+The flood jail reads Traefik's DEBUG line per connection, so the edge must log
+at DEBUG in JSON. Bans follow the host's fail2ban settings, which on cloud hosts
+means 1h, growing to 24h for repeat offenders. NetBird addresses are never
+banned (`ignoreAddresses`), and the host's sshd jail is unaffected. The
+`ProxyAddressBlocked` alert reports each ban; lift one early with
+`fail2ban-client set <jail> unbanip <ip>`.
+
 Traefik listens on port 443 and the host firewall opens that port only on the
 NetBird interface by default. Use NetBird Reverse Proxy TLS passthrough for
 public names and NetBird Custom Zones for internal names. Set
