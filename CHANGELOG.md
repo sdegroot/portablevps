@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Security: host hardening defaults, and opt-in HSTS on public routes.**
+  - **What:** every host now:
+    - **sshd:** admits only `admin` (`AllowUsers`), with no TCP, agent or
+      stream-local forwarding; keyboard-interactive auth follows
+      `passwordAuthentication` (off on cloud hosts).
+    - **sysctls:** ignores and never sends ICMP redirects.
+    - **resolved:** turns off LLMNR and mDNS, which listened on every interface,
+      the public one included.
+
+    Everything but the sshd settings is `mkDefault`. New
+    `portablevps.proxy.hsts` (`enable`, `maxAge` = one year, `includeSubDomains`,
+    `preload`) adds a Strict-Transport-Security header to every public HTTP
+    route. A route's `extraRouterConfig.middlewares` is now appended to the
+    module's own middlewares (retry, HSTS) instead of replacing them.
+  - **Why:**
+    - **sshd:** nothing in portablevps tunnels through an admin session
+      (`nixos-rebuild` and `nix copy` use the session channel), so forwarding
+      only helped a stolen key pivot into the mesh.
+    - **HSTS:** stops an on-path attacker from downgrading a returning visitor.
+    - **middlewares:** a service with its own middleware silently lost the
+      retry one.
+  - **Testing:** Python tests, `go test` and `nix flake check`. A consumer fleet
+    of 14 servers evaluates, with the rendered sshd settings, sysctls, resolved
+    settings and router middleware lists inspected; a service's own middleware
+    now sits next to HSTS. The rollout starts with one canary host and checks
+    `pvps ssh` and a deploy there first.
+
 - **Security: an edge entry point so a layer-4 edge can no longer reach internal routes.**
   - **What:** `portablevps.proxy.edgeEntryPoint` (`enable`, `name`, `port`
     8443, `trustedIPs`) adds a second Traefik entry point on a backend. It

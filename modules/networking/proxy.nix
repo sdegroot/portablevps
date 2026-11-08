@@ -251,8 +251,25 @@ let
     then normalizePublicTarget cfg.dns.publicTarget
     else null;
 
+  hstsMiddlewareName = "portablevps-hsts";
+  serviceGetsHsts = service: cfg.hsts.enable && isPublicVisibility service.visibility;
+
   httpRouters = lib.mapAttrs
     (name: service:
+      let
+        # A health-checked (multi-backend) service gets a retry middleware: when a
+        # backend is drained mid-deploy (blue-green flip), a request dispatched to
+        # it before the health check catches up gets connection-refused; retry
+        # re-dispatches to the healthy backend so the flip is truly zero-downtime.
+        retryMiddlewares = lib.optional
+          (service.healthCheck or null != null && !serviceInMaintenance service)
+          "${name}-retry";
+        hstsMiddlewares = lib.optional (serviceGetsHsts service) hstsMiddlewareName;
+        # extraRouterConfig.middlewares is appended, not substituted, so a
+        # service's own middlewares never silently drop retry or HSTS.
+        middlewares = retryMiddlewares ++ hstsMiddlewares
+          ++ (service.extraRouterConfig.middlewares or [ ]);
+      in
       {
         rule = hostRule ([ service.domain ] ++ service.aliases);
         entryPoints = routerEntryPoints service;
@@ -263,14 +280,8 @@ let
           certResolver = acmeResolverName;
         };
       }
-      # A health-checked (multi-backend) service gets a retry middleware: when a
-      # backend is drained mid-deploy (blue-green flip), a request dispatched to
-      # it before the health check catches up gets connection-refused; retry
-      # re-dispatches to the healthy backend so the flip is truly zero-downtime.
-      // lib.optionalAttrs (service.healthCheck or null != null && !serviceInMaintenance service) {
-        middlewares = [ "${name}-retry" ];
-      }
-      // service.extraRouterConfig)
+      // lib.optionalAttrs (middlewares != [ ]) { inherit middlewares; }
+      // builtins.removeAttrs service.extraRouterConfig [ "middlewares" ])
     httpServicesConfig;
 
   httpMiddlewares = lib.listToAttrs (lib.concatLists (lib.mapAttrsToList
@@ -279,7 +290,14 @@ let
         name = "${name}-retry";
         value.retry = { attempts = 2; initialInterval = "100ms"; };
       })
-    httpServicesConfig));
+    httpServicesConfig))
+  // lib.optionalAttrs (lib.any serviceGetsHsts (lib.attrValues httpServicesConfig)) {
+    ${hstsMiddlewareName}.headers = {
+      stsSeconds = cfg.hsts.maxAge;
+      stsIncludeSubdomains = cfg.hsts.includeSubDomains;
+      stsPreload = cfg.hsts.preload;
+    };
+  };
 
   httpDenyRouters = lib.listToAttrs (lib.flatten (lib.mapAttrsToList
     (name: service:
@@ -501,6 +519,39 @@ in
       type = lib.types.bool;
       default = false;
       description = "Open the proxy port on the public host firewall.";
+    };
+
+    hsts = {
+      enable = lib.mkEnableOption ''
+        a Strict-Transport-Security header on every public HTTP route
+        (visibility netbird-edge or direct-public). Browsers then refuse plain
+        HTTP for the name for `maxAge` seconds, so an attacker on the path
+        cannot downgrade a returning visitor. A value the app sets itself is
+        overwritten'';
+
+      maxAge = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 31536000;
+        description = "max-age in seconds (default one year). Set 0 to make browsers forget it.";
+      };
+
+      includeSubDomains = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Also cover every subdomain of each public name. Only when every one of
+          them serves HTTPS: browsers will refuse plain HTTP for all of them.
+        '';
+      };
+
+      preload = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Add the `preload` token. Submitting a domain to the browsers' preload
+          list is close to permanent; leave this off unless you mean to.
+        '';
+      };
     };
 
     edgeEntryPoint = {
