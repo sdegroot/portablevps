@@ -37,6 +37,20 @@ type ServiceEnv struct {
 	// own secrets file for Secrets.Swap (e.g. {"SOPS_AGE_KEY": material}).
 	// Unused when Secrets is nil.
 	AgeEnv map[string]string
+	// Network lends the source's mesh role to the restore host for the length
+	// of a RestoreDrill. Nil skips it: on a default-deny mesh the restored app
+	// then cannot reach what its role grants (a private registry, say), and the
+	// drill fails at finalize before anything is verified.
+	Network DrillNetwork
+}
+
+// DrillNetwork gives a restore-drill host the network access of the server it
+// is restored as, and takes it back afterwards.
+type DrillNetwork interface {
+	// Lend adds the restore host to the source server's role groups. It
+	// returns the groups it actually added and a func that removes exactly
+	// those again.
+	Lend() (granted []string, revoke func() error, err error)
 }
 
 func (env ServiceEnv) sleep() func(time.Duration) {
@@ -483,6 +497,29 @@ exit "$rc"`
 	return nil
 }
 
+// appsRunningCheck waits up to two minutes for every unit apps.target wants to
+// be up: restored data is only half the proof, the service must also start on
+// it. A unit counts as up when it is active, or inactive after a successful
+// run (a oneshot helper). Anything else (activating, failed, auto-restart) is
+// retried until the deadline and then reported by name.
+const appsRunningCheck = `set -u
+for _ in $(seq 1 24); do
+  bad=""
+  for u in $(systemctl show -p Wants --value apps.target); do
+    state="$(systemctl show -p ActiveState --value "$u")"
+    result="$(systemctl show -p Result --value "$u")"
+    case "$state" in
+      active) ;;
+      inactive) [ "$result" = success ] || bad="$bad $u($state/$result)" ;;
+      *) bad="$bad $u($state/$result)" ;;
+    esac
+  done
+  [ -n "$bad" ] || exit 0
+  sleep 5
+done
+echo "not running:$bad" >&2
+exit 1`
+
 func runDrillHooks(env ServiceEnv, host, phase, marker string) error {
 	command := `set -eu
 hook_dir=/etc/portablevps/dr/` + phase + `.d
@@ -590,6 +627,33 @@ func RestoreDrill(env ServiceEnv, o DrillOpts) (marker string, err error) {
 		}
 	}
 
+	if env.Network != nil {
+		report("network", "run", "lending "+o.Server+"'s mesh role to "+o.RestoreHost)
+		granted, revoke, nerr := env.Network.Lend()
+		if nerr != nil {
+			return marker, provisionErr(70, "lending %s's mesh role to %s: %v", o.Server, o.RestoreHost, nerr)
+		}
+		if len(granted) == 0 {
+			report("network", "info", o.RestoreHost+" already has every role group of "+o.Server)
+		} else {
+			report("network", "ok", o.RestoreHost+" joined "+strings.Join(granted, ", "))
+		}
+		// Taken back on every exit path, like the secrets swap: after the drill
+		// the restore host still runs the source's configuration, and it must
+		// not keep the source's access while it waits to be cleaned up.
+		defer func() {
+			if revoke == nil || len(granted) == 0 {
+				return
+			}
+			report("network", "run", "taking "+strings.Join(granted, ", ")+" back from "+o.RestoreHost)
+			if rerr := revoke(); rerr != nil {
+				err = combineCleanupError(err, fmt.Errorf("taking %s's mesh role back from %s: %w", o.Server, o.RestoreHost, rerr))
+				return
+			}
+			report("network", "ok", "mesh role taken back")
+		}()
+	}
+
 	// Restore onto the (separate) restore host and verify the marker survived.
 	restoreMarker := ""
 	if hasPostgres {
@@ -606,6 +670,12 @@ func RestoreDrill(env ServiceEnv, o DrillOpts) (marker string, err error) {
 		return marker, provisionErr(71, "app DR verification hooks failed on %s: %v", o.RestoreHost, err)
 	}
 	report("verify", "ok", "all declared state contains marker "+marker)
+
+	report("apps", "run", "waiting for every app on "+o.RestoreHost+" to run")
+	if out, err := env.Host.Run(o.RestoreHost, appsRunningCheck); err != nil {
+		return marker, provisionErr(71, "apps did not come up on %s: %v %s", o.RestoreHost, err, strings.TrimSpace(out))
+	}
+	report("apps", "ok", "every unit under apps.target is running")
 
 	metricOut, err := env.Host.Run(o.RestoreHost, `if sudo systemctl cat portablevps-backup-restore-drill-report.service >/dev/null 2>&1; then sudo systemctl start portablevps-backup-restore-drill-report.service; echo reported; else echo unavailable; fi`)
 	if err != nil {

@@ -42,7 +42,10 @@ func (r routedSSH) SwitchedTo(_profile, host string) {
 	delete(r.byHost, host)
 }
 
-func drHostRunner(g *globalOptions, ctx *config.Context, server string, flags drFlags, sourceHost, restoreHost string) (core.HostRunner, func(), error) {
+// restoreKeyServer names the server whose admin key reaches the restore host
+// right now: normally --restore-server, but the source's own server when the
+// restore host still runs the source's configuration from an earlier drill.
+func drHostRunner(g *globalOptions, ctx *config.Context, server string, flags drFlags, sourceHost, restoreHost, restoreKeyServer string) (core.HostRunner, func(), error) {
 	defaultSSH, cleanupDefault, err := sshForServer(g, ctx, server, flags.sshPort, flags.adminKey)
 	if err != nil {
 		return nil, func() {}, err
@@ -73,8 +76,8 @@ func drHostRunner(g *globalOptions, ctx *config.Context, server string, flags dr
 		cleanups = append(cleanups, c)
 		routed.byHost[sourceHost] = ssh
 	}
-	if flags.restoreServer != "" {
-		ssh, c, err := sshForServer(g, ctx, flags.restoreServer, flags.sshPort, "")
+	if restoreKeyServer != "" {
+		ssh, c, err := sshForServer(g, ctx, restoreKeyServer, flags.sshPort, "")
 		if err != nil {
 			cleanup()
 			return nil, func() {}, err

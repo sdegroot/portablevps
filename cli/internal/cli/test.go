@@ -36,6 +36,7 @@ type drFlags struct {
 	restoreServer  string
 	sshPort        string
 	adminKey       string
+	noNetworkRole  bool
 }
 
 func newDRCmd(g *globalOptions) *cobra.Command {
@@ -87,6 +88,8 @@ func newDRCommand(g *globalOptions, use string, addServerFlag bool) *cobra.Comma
 	cmd.Flags().StringVar(&flags.restoreHost, "restore-host", "", "(remote mode) host to restore onto and verify (its data is wiped)")
 	cmd.Flags().StringVar(&flags.sshPort, "ssh-port", "22", "admin SSH port (remote mode)")
 	cmd.Flags().StringVar(&flags.adminKey, "admin-key", "", "single admin SSH private key override in remote mode (default: per-server key resolution)")
+	cmd.Flags().BoolVar(&flags.noNetworkRole, "no-network-role", false,
+		"(remote mode) do not lend the source's NetBird role groups to the restore host during the drill")
 	return cmd
 }
 
@@ -108,13 +111,31 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 	if err != nil {
 		return err
 	}
-	hostRunner, cleanup, err := drHostRunner(g, ctx, server, flags, sourceHost, restoreHost)
+	prog := output.NewProgress(cmd.OutOrStdout(), "test.dr", server, g.json)
+	network, err := drNetworkSupport(ctx, server, flags)
+	if err != nil {
+		return err
+	}
+	// A spare an earlier drill left behind still runs the source's
+	// configuration and accepts only the source's admin key. Trying its own
+	// key first would cost a failed login (fail2ban counts them).
+	restoreKeyServer := flags.restoreServer
+	if network != nil && flags.adminKey == "" {
+		runsSource, err := network.restoreRunsSource()
+		if err != nil {
+			return ExitError{Code: 70, Message: fmt.Sprintf("looking up the restore host's NetBird peer: %v", err)}
+		}
+		if runsSource {
+			restoreKeyServer = server
+			prog.Phase("prepare", "info", restoreHost+" still runs "+server+"'s configuration; reaching it with "+server+"'s admin key")
+		}
+	}
+	hostRunner, cleanup, err := drHostRunner(g, ctx, server, flags, sourceHost, restoreHost, restoreKeyServer)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	prog := output.NewProgress(cmd.OutOrStdout(), "test.dr", server, g.json)
 	env := core.ServiceEnv{
 		RepoRoot: ctx.RepoRoot,
 		Host:     hostRunner,
@@ -122,6 +143,11 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 		AgeEnv:   ageEnv,
 		Stream:   adapters.ExecRunner{},
 		Report:   func(phase, status, msg string) { prog.Phase(phase, status, msg) },
+	}
+	if network != nil {
+		env.Network = network
+	} else if flags.restoreServer != "" && !flags.noNetworkRole {
+		prog.Phase("network", "info", "no [network] in portablevps.toml; "+restoreHost+" keeps its own mesh role")
 	}
 	marker, err := core.RestoreDrill(env, core.DrillOpts{
 		Server: server, SourceHost: sourceHost, RestoreHost: restoreHost, RestoreHostServer: restoreHostServer,
@@ -134,6 +160,30 @@ func runRemoteDR(g *globalOptions, cmd *cobra.Command, ctx *config.Context, serv
 		fmt.Sprintf("restored %s onto %s and verified marker %s", sourceHost, restoreHost, marker),
 		0, "marker", marker)
 	return nil
+}
+
+// drSecretsSupport resolves the cross-host secrets wiring for a remote DR
+// drNetworkSupport builds the NetBird role lending for a remote drill. It is
+// nil, and the drill runs without it, when the operator opts out, when the
+// restore host is given as a bare --restore-host (no server identity, so no
+// peer to look up), or when portablevps.toml configures no NetBird API.
+func drNetworkSupport(ctx *config.Context, server string, flags drFlags) (*drillNetwork, error) {
+	if flags.noNetworkRole || flags.restoreServer == "" || ctx.Network.APIToken == "" {
+		return nil, nil
+	}
+	client, err := netbirdClient(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	source, err := loadServer(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	restore, err := loadServer(ctx, flags.restoreServer)
+	if err != nil {
+		return nil, err
+	}
+	return &drillNetwork{api: client, source: source, restore: restore}, nil
 }
 
 // drSecretsSupport resolves the cross-host secrets wiring for a remote DR

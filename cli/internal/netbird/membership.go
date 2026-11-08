@@ -285,14 +285,18 @@ func PlanMembership(want DesiredMembership, groups []Group, peers []PeerInfo, us
 	return plan
 }
 
-// serverFor returns the declared server a peer belongs to, matching on the
-// peer's hostname or name like FindPeer does.
+// serverFor returns the declared server a peer belongs to. The NetBird peer
+// name wins over the hostname: the name is fixed when the peer enrols, while
+// the hostname follows whatever configuration the machine runs. A restore-drill
+// spare runs the SOURCE's configuration, so matching on its hostname would hand
+// it the source's groups and take away its own. The hostname is only a
+// fallback for a peer whose name matches no declared server.
 func serverFor(p PeerInfo, servers map[string][]string) (string, bool) {
-	if _, ok := servers[p.Hostname]; ok && p.Hostname != "" {
-		return p.Hostname, true
-	}
 	if _, ok := servers[p.Name]; ok && p.Name != "" {
 		return p.Name, true
+	}
+	if _, ok := servers[p.Hostname]; ok && p.Hostname != "" {
+		return p.Hostname, true
 	}
 	return "", false
 }
