@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Runtime: a removed quadlet app is stopped on switch instead of left running.**
+  - **What:** the on-switch quadlet restarter (`modules/runtime/podman.nix`) stops `<name>.service` and forgets its
+    hash when a hash file in `/var/lib/portablevps/quadlet-hashes` has no matching `.container` any more. This runs
+    during activation, while the old generated unit is still loaded.
+  - **Why:** quadlet units are generated, so `switch-to-configuration` does not manage them. Removing an app's
+    `.container` left its container running, shown as "not-found active" after the next daemon-reload. Seen after
+    both restore drills of 2026-11-08: once switched back to its own idle configuration, the spare kept running
+    the source's `postgres` and `authentik-server`/`authentik-worker`. A server that drops an app in a role change
+    has the same problem.
+  - **Testing:**
+    - The rendered activation script passes `bash -n` and shellcheck.
+    - Live, on an idle spare: a fake orphan (a hash file plus a running unit of that name) was stopped by the deploy
+      ("quadlet orphan-drill-test.service was removed -> stop"). Four stale hash files left by the drills were cleaned
+      up, and no unit failed.
+
 - **DR: restore, drill and migrate accept a healthcheck false positive at the switch, like deploy.**
   - **What:** `ServiceEnv.switchTo` judges a non-zero `nixos-rebuild switch` from the host's own record through the
     new `verifyFailedSwitch`, which `deploy` uses as well. A podman healthcheck that failed while its container was
