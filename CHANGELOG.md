@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Monitoring: `ProxyEdgeSingleSourceFlood` gives the right blocking advice.**
+  - **What:** the annotation now says to block the address in the host firewall, not with "a deny rule in the
+    provider firewall".
+  - **Why:** Hetzner Cloud Firewalls have only allow rules, so the old advice could not be followed there.
+  - **Testing:** `vmalert -dryRun` on the log rules.
+
 - **Monitoring: alerts for attack-shaped traffic, and an edge dashboard.**
   - **What:**
     - `rules/proxy-attack.yml`: `ProxyClientErrorSurge` (over 1500 4xx in 5m on
