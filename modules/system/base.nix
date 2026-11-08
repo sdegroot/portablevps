@@ -52,6 +52,24 @@ in
       # Insurance: if the DHCP-provided upstream isn't picked up, resolved still
       # has working public resolvers so ACME / egress DNS never breaks.
       settings.Resolve.FallbackDNS = [ "1.1.1.1" "9.9.9.9" ];
+      # LAN name discovery has no use on a server, and by default resolved
+      # listens for it on every interface, the public one included. The firewall
+      # drops it, but nothing should be listening there in the first place.
+      settings.Resolve.LLMNR = lib.mkDefault "no";
+      settings.Resolve.MulticastDNS = lib.mkDefault "no";
+    };
+
+    # A server is not a router: ignore ICMP redirects, which could reroute its
+    # traffic, and never send them.
+    boot.kernel.sysctl = lib.mapAttrs (_: lib.mkDefault) {
+      "net.ipv4.conf.all.accept_redirects" = 0;
+      "net.ipv4.conf.default.accept_redirects" = 0;
+      "net.ipv4.conf.all.secure_redirects" = 0;
+      "net.ipv4.conf.default.secure_redirects" = 0;
+      "net.ipv6.conf.all.accept_redirects" = 0;
+      "net.ipv6.conf.default.accept_redirects" = 0;
+      "net.ipv4.conf.all.send_redirects" = 0;
+      "net.ipv4.conf.default.send_redirects" = 0;
     };
 
     # NixOS 26.05 changed this default to dbus-broker, but a 25.05 system does
@@ -69,7 +87,19 @@ in
       openFirewall = false;
       settings = {
         PasswordAuthentication = cfg.passwordAuthentication;
+        # Keyboard-interactive is the PAM path a password login takes, so it
+        # follows passwordAuthentication. On a key-only host it is just surface.
+        KbdInteractiveAuthentication = cfg.passwordAuthentication;
         PermitRootLogin = "no";
+        AllowUsers = [ "admin" ];
+        # Admin sessions run commands; nothing in portablevps tunnels through
+        # them (nixos-rebuild and nix copy use the plain session channel). Off,
+        # a stolen admin key cannot turn the host into a pivot into the mesh,
+        # and an agent forwarded to the host cannot be borrowed there.
+        AllowTcpForwarding = "no";
+        AllowAgentForwarding = false;
+        AllowStreamLocalForwarding = "no";
+        X11Forwarding = false;
       };
     };
 
