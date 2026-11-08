@@ -1,0 +1,107 @@
+# Edge (TCP passthrough) anomaly rules. Evaluated by vmalert-logs against VictoriaLogs.
+#
+# A Traefik that only forwards TCP by SNI has nothing request-level to measure:
+# its access log is HTTP-only and its metrics carry no per-connection counters.
+# What it does have, at DEBUG level, is one JSON line per forwarded connection:
+#   {"level":"debug","address":"<backend>:<port>","remoteAddr":"<client>:<port>",
+#    "message":"Handling TCP connection",...}
+# These rules count those lines. They are generic: they only match hosts whose
+# Traefik logs at DEBUG, which in practice is an edge proxy. On every other host
+# they find nothing and stay silent.
+#
+# Thresholds were set on 7 days of epistola edge logs (2026-11-01..08). The
+# busiest 5 minutes was 367 connections, nearly all from one crawler IP, and the
+# most forwarding errors in 5 minutes was 25. Each threshold sits well above
+# that, so a firing alert means traffic unlike anything the edge normally sees.
+groups:
+  - name: proxy-edge
+    type: vlogs
+    interval: 1m
+    rules:
+      # Rolling 5-minute connection count per host, written to VictoriaMetrics as
+      # proxy_edge_tcp_connections_5m{host_name, stats_result="connections"}.
+      # rules/proxy-edge.yml compares it with its own 7-day average.
+      - record: proxy_edge_tcp_connections_5m
+        expr: |
+          _time:5m _SYSTEMD_UNIT:traefik.service "Handling TCP connection"
+          | stats by (host.name) count() as connections
+          | rename host.name as host_name
+
+      - alert: ProxyEdgeSingleSourceFlood
+        # One client opening connections at a sustained ~3/s. The per-IP
+        # concurrency limit (tcp.maxConnectionsPerIP) caps open connections, not
+        # how fast they are opened and closed.
+        expr: |
+          _time:5m _SYSTEMD_UNIT:traefik.service "Handling TCP connection"
+          | extract_regexp "\"remoteAddr\":\"(?P<client_ip>[^\"]+):[0-9]+\"" from _msg
+          | stats by (host.name, client_ip) count() as connections
+          | rename host.name as host_name
+          | filter connections:>1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "One client is flooding the edge on {{ $labels.host_name }}"
+          description: >-
+            {{ $labels.client_ip }} opened {{ $value }} connections in the last 5m
+            through {{ $labels.host_name }} (normal peak: under 400 for the busiest
+            client). Check its targets in the edge's "Handling TCP connection" log
+            lines. Blocking it means a deny rule in the provider firewall.
+
+      - alert: ProxyEdgeConnectionLimitHit
+        # Traefik's InFlightConnTCP middleware refused a connection because one IP
+        # already holds tcp.maxConnectionsPerIP open connections. A browser never
+        # comes near that; a client that does is either broken or hostile.
+        expr: |
+          _time:5m _SYSTEMD_UNIT:traefik.service "Connection rejected" "InFlightConnTCP"
+          | stats by (host.name) count() as rejected
+          | rename host.name as host_name
+          | filter rejected:>0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Per-IP connection limit is rejecting clients on {{ $labels.host_name }}"
+          description: >-
+            {{ $value }} connections were rejected in the last 5m on
+            {{ $labels.host_name }} because their source IP already had the maximum
+            number open. The error field names the IP.
+
+      - alert: ProxyEdgeForwardingErrors
+        # Connections the edge accepted but could not carry to or from a backend
+        # (resets, timeouts, refused). A few are normal clients going away.
+        # Hundreds mean a backend is unreachable over the mesh, or a client is
+        # abusing half-open connections.
+        expr: |
+          _time:5m _SYSTEMD_UNIT:traefik.service "Error while handling TCP connection"
+          | stats by (host.name) count() as errors
+          | rename host.name as host_name
+          | filter errors:>200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge forwarding errors on {{ $labels.host_name }}"
+          description: >-
+            {{ $value }} TCP connections failed while being forwarded in the last
+            5m on {{ $labels.host_name }} (normal: under 30). The error field shows
+            whether the client or the backend side broke.
+
+      - alert: ProxyLogsSuppressed
+        # journald's per-unit rate limit (LogRateLimitBurst) is dropping Traefik's
+        # lines. On an edge that logs one line per connection this is a flood
+        # signal in its own right, and it also means the counts above undercount.
+        expr: |
+          _time:5m SYSLOG_IDENTIFIER:systemd-journald "Suppressed" "messages from traefik.service"
+          | stats by (host.name) count() as suppressions
+          | rename host.name as host_name
+          | filter suppressions:>0
+        labels:
+          severity: warning
+        annotations:
+          summary: "journald is dropping Traefik logs on {{ $labels.host_name }}"
+          description: >-
+            journald suppressed Traefik log lines {{ $value }} times in the last 5m
+            on {{ $labels.host_name }}. Traefik is logging faster than the unit's
+            rate limit allows, usually because of a connection flood. The
+            connection-count alerts undercount while this lasts.

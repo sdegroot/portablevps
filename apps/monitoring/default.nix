@@ -209,9 +209,11 @@ let
     vmalert -dryRun -rule="$out/*.yml" -loggerLevel=ERROR
   '';
 
-  vlogsAlertsDir = pkgs.runCommand "portablevps-monitoring-vlogs-rules" { } ''
+  # Same check for the log rules: vmalert's dry run parses their LogsQL too.
+  vlogsAlertsDir = pkgs.runCommand "portablevps-monitoring-vlogs-rules" { nativeBuildInputs = [ pkgs.victoriametrics ]; } ''
     mkdir -p "$out"
     cp ${./rules-vlogs}/*.yml "$out"/
+    vmalert -dryRun -rule="$out/*.yml" -loggerLevel=ERROR
   '';
 
   # Alertmanager config carries the SMTP password, so in normal mode it is a

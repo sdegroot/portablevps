@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Monitoring: anomaly alerts for an edge proxy.**
+  - **What:** new rule files `rules-vlogs/proxy-edge.yml` and `rules/proxy-edge.yml`:
+    - `ProxyEdgeSingleSourceFlood`: one client IP opens over 1000 connections in 5m.
+    - `ProxyEdgeConnectionSurge`: connections per 5m over ten times the host's
+      own 7-day average, and over 600. Fed by the new recorded series
+      `proxy_edge_tcp_connections_5m`.
+    - `ProxyEdgeConnectionLimitHit`: the per-IP limit (`tcp.maxConnectionsPerIP`)
+      refused a connection.
+    - `ProxyEdgeForwardingErrors`: over 200 failed forwards in 5m.
+    - `ProxyLogsSuppressed`: journald's rate limit is dropping Traefik's lines.
+    - `ProxyOpenConnectionsHigh`: over 1000 TCP connections held open for 5m
+      (needs `portablevps.proxy.metrics.enable`).
+
+    The log rules match Traefik's DEBUG line per forwarded TCP connection, so
+    they only see hosts that log at DEBUG, in practice an edge.
+  - **Why:** the existing proxy alerts (`ProxyHigh5xxRatio`,
+    `ProxyHighLatencyP95`) catch a broken backend, not a scan or a flood, and
+    an SNI-passthrough edge produces no HTTP metrics for them to work on.
+    Nothing watched the one host that faces the internet.
+  - **Testing:** every LogsQL expression ran against a live VictoriaLogs holding
+    a week of edge logs; the thresholds sit well above that week's peaks (367
+    connections from one IP in 5m, 25 errors). The label set of
+    `traefik_open_connections` was checked in a live VictoriaMetrics.
+    The build now runs `vmalert -dryRun` on the log rules as well, not only
+    the metrics rules, so a LogsQL syntax error fails the build instead of
+    stopping vmalert-logs.
+
 - **Security: host hardening defaults, and opt-in HSTS on public routes.**
   - **What:** every host now:
     - **sshd:** admits only `admin` (`AllowUsers`), with no TCP, agent or
