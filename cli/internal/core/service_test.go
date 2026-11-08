@@ -719,3 +719,84 @@ func TestRestoreDrillFailsWhenAppsDoNotRun(t *testing.T) {
 		t.Fatalf("role must be taken back after a failed apps check; revoked %d times", network.revokeRuns)
 	}
 }
+
+// normalSwitchFails fails only the switch to the server's normal profile, like
+// the authentik drill of 2026-11-08: the -restore switch went through, the
+// finalize switch exited 4 on a podman healthcheck that ran while
+// authentik-worker was still starting.
+type normalSwitchFails struct{ recordRunner }
+
+func (r *normalSwitchFails) Stream(dir string, env map[string]string, name string, args ...string) error {
+	_ = r.recordRunner.Stream(dir, env, name, args...)
+	for _, a := range args {
+		if strings.HasPrefix(a, "/repo#") && !strings.HasSuffix(a, "-restore") {
+			return &DeployError{Code: 1, Msg: "switch failed"}
+		}
+	}
+	return nil
+}
+
+func restoreHostWith(probeOut, settleOut string) *fakeHost {
+	outputs := onTarget()
+	for k, v := range drillHost().outputs {
+		outputs[k] = v
+	}
+	return &fakeHost{switchJournal: switched(4), outputs: outputs, probeOut: probeOut, settleOut: settleOut}
+}
+
+func TestRestoreAcceptsAHealthcheckFalsePositiveAtFinalize(t *testing.T) {
+	host := restoreHostWith("healthcheck-transient-ok unit=c2d7cad798ae-73.service cid=c2d7cad798ae\nverdict=benign units= c2d7cad798ae-73.service", "")
+	var warns []string
+	env := ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &normalSwitchFails{}, Sleep: noSleep,
+		Report: func(_, status, msg string) {
+			if status == "warn" {
+				warns = append(warns, msg)
+			}
+		}}
+	if err := Restore(env, RestoreOpts{Server: "svc", Host: "restore", Marker: "m1", Drill: true}); err != nil {
+		t.Fatalf("a healthcheck false positive at finalize must not fail the restore, got %v", err)
+	}
+	joined := strings.Join(host.runs, " | ")
+	if !strings.Contains(joined, "reset-failed c2d7cad798ae-73.service") {
+		t.Errorf("expected the stale healthcheck unit to be reset-failed, got %q", joined)
+	}
+	if strings.Contains(joined, "deploy-report") {
+		t.Errorf("a restore must not publish a deploy outcome (it would land under the source's name): %q", joined)
+	}
+	if len(warns) == 0 || !strings.Contains(warns[0], "healthcheck") {
+		t.Errorf("expected a warning naming the healthcheck false positive, got %v", warns)
+	}
+	if indexOfRun(host.runs, "verify-test-data.sh") < 0 {
+		t.Error("the restore must go on to verify the marker")
+	}
+}
+
+func TestRestoreFailsWhenFinalizeLeavesACrashLoop(t *testing.T) {
+	host := restoreHostWith("verdict=real reason=no-failed-units", "state=running\nfailed=\nrestarting=authentik-server.service")
+	err := Restore(ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &normalSwitchFails{}, Sleep: noSleep},
+		RestoreOpts{Server: "svc", Host: "restore", Marker: "m1", Drill: true})
+	if err == nil || !strings.Contains(err.Error(), "auto-restart: authentik-server.service") {
+		t.Fatalf("a crash loop after finalize must fail the restore, got %v", err)
+	}
+	if indexOfRun(host.runs, "verify-test-data.sh") >= 0 {
+		t.Error("must not verify the marker after a failed finalize")
+	}
+}
+
+func TestRestoreDrillPassesThroughAHealthcheckFalsePositive(t *testing.T) {
+	host := restoreHostWith("healthcheck-transient-ok unit=c2d7cad798ae-73.service cid=c2d7cad798ae\nverdict=benign units= c2d7cad798ae-73.service", "")
+	network := newFakeDrillNetwork(host, "authentik")
+	_, err := RestoreDrill(
+		ServiceEnv{RepoRoot: "/repo", Host: host, Stream: &normalSwitchFails{}, Sleep: noSleep, Network: network},
+		DrillOpts{Server: "svc", SourceHost: "source", RestoreHost: "restore", Marker: "dr-test"},
+	)
+	if err != nil {
+		t.Fatalf("expected the drill to pass, got %v", err)
+	}
+	if indexOfRun(host.runs, "portablevps-backup-restore-drill-report") < 0 {
+		t.Error("expected the drill metric to be published")
+	}
+	if network.revokeRuns != 1 {
+		t.Errorf("expected the role to be taken back once, got %d", network.revokeRuns)
+	}
+}

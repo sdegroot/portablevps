@@ -148,52 +148,82 @@ func judgeFailedSwitch(env DeployEnv, server, host, since string, switchErr erro
 	}
 
 	report(action, "info", fmt.Sprintf("nixos-rebuild exited with %v; checking the switch on %s itself", switchErr, host))
-	st, reachable := awaitSwitch(env.Host, host, since, sleep)
-	if !reachable {
+	j := verifyFailedSwitch(env.Host, host, since, switchErr, sleep)
+	switch {
+	case j.Unreachable:
 		report(action, "fail", "admin SSH did not come back, so the switch cannot be verified")
-		return deployErr(70, "nixos-rebuild switch failed (%v) and %s did not come back over admin SSH to verify it; "+
-			"check `journalctl -u %s` and /run/current-system on the host", switchErr, host, switchUnit)
+		return deployErr(70, "%s", j.Failure)
+	case !j.OK:
+		return fail("%s", j.Failure)
+	default:
+		return pass(j.Warning)
+	}
+}
+
+// switchJudgement is verifyFailedSwitch's verdict on a non-zero switch.
+type switchJudgement struct {
+	OK          bool   // the switch applied and the host converged
+	Warning     string // why a non-zero switch is accepted (OK only)
+	Failure     string // why it is not (!OK only)
+	Unreachable bool   // admin SSH never came back to check
+}
+
+// verifyFailedSwitch judges a non-zero `nixos-rebuild switch` from the host's
+// own record (see judgeFailedSwitch for the cases). It reports nothing and
+// publishes no deploy metric, so the restore and drill paths share it with
+// deploy: a drill host runs another server's configuration, and a deploy
+// outcome it published would land under that server's name.
+func verifyFailedSwitch(h HostRunner, host, since string, switchErr error, sleep func(time.Duration)) switchJudgement {
+	failed := func(format string, a ...any) switchJudgement {
+		return switchJudgement{Failure: fmt.Sprintf(format, a...)}
+	}
+	passed := func(warning string) switchJudgement { return switchJudgement{OK: true, Warning: warning} }
+
+	st, reachable := awaitSwitch(h, host, since, sleep)
+	if !reachable {
+		return switchJudgement{Unreachable: true, Failure: fmt.Sprintf("nixos-rebuild switch failed (%v) and %s did not come back over admin SSH to verify it; "+
+			"check `journalctl -u %s` and /run/current-system on the host", switchErr, host, switchUnit)}
 	}
 	switch {
 	case st.Target == "":
-		return fail("nixos-rebuild switch failed before activating anything: %v", switchErr)
+		return failed("nixos-rebuild switch failed before activating anything: %v", switchErr)
 	case !st.Done && st.Running:
-		return fail("the switch to %s is still running on %s; check `journalctl -u %s`", st.Target, host, switchUnit)
+		return failed("the switch to %s is still running on %s; check `journalctl -u %s`", st.Target, host, switchUnit)
 	case !st.Done:
-		return fail("the switch to %s on %s ended without an outcome (killed?); check `journalctl -u %s`", st.Target, host, switchUnit)
+		return failed("the switch to %s on %s ended without an outcome (killed?); check `journalctl -u %s`", st.Target, host, switchUnit)
 	}
-	if cur := currentSystem(env.Host, host); cur != st.Target {
-		return fail("%s runs %q, not the generation just switched to (%s); another switch (autoUpgrade?) may have run",
+	if cur := currentSystem(h, host); cur != st.Target {
+		return failed("%s runs %q, not the generation just switched to (%s); another switch (autoUpgrade?) may have run",
 			host, cur, st.Target)
 	}
 	switch st.Status {
 	case 0:
-		return pass("the SSH session dropped before nixos-rebuild could confirm (" + switchErr.Error() +
+		return passed("the SSH session dropped before nixos-rebuild could confirm (" + switchErr.Error() +
 			"), but the host finished the switch")
 	case 4:
-		v := probeFailedUnits(env.Host, host)
+		v := probeFailedUnits(h, host)
 		if v.Benign {
-			clearHealthcheckTransients(env.Host, host, v.Units)
-			return pass("switch applied; ignoring known podman healthcheck false-positive (restarted container healthy; failed unit(s): " + v.Units + ")")
+			clearHealthcheckTransients(h, host, v.Units)
+			return passed("switch applied; ignoring known podman healthcheck false-positive (restarted container healthy; failed unit(s): " + v.Units + ")")
 		}
 		if v.Reason != "no-failed-units" {
 			reason := v.Reason
 			if reason == "" {
 				reason = "the failed units could not be checked"
 			}
-			return fail("switch applied but units failed (%s): %v", reason, switchErr)
+			return failed("switch applied but units failed (%s): %v", reason, switchErr)
 		}
-		ok, why := settledHealthy(env.Host, host, sleep)
+		ok, why := settledHealthy(h, host, sleep)
 		if !ok {
-			return fail("switch applied with failed units and the host has not recovered (%s)", why)
+			return failed("switch applied with failed units and the host has not recovered (%s)", why)
 		}
-		recovered := unitsFailedDuringSwitch(env.Host, host, since)
+		recovered := unitsFailedDuringSwitch(h, host, since)
 		if recovered == "" {
 			recovered = "see the journal"
 		}
-		return pass("switch-to-configuration exited 4, but every unit has since recovered and the host stays cleanly running (failed during the switch: " + recovered + ")")
+		return passed("switch-to-configuration exited 4, but every unit has since recovered and the host stays cleanly running (failed during the switch: " + recovered + ")")
 	default:
-		return fail("switch-to-configuration on %s exited with status %d: %v", host, st.Status, switchErr)
+		return failed("switch-to-configuration on %s exited with status %d: %v", host, st.Status, switchErr)
 	}
 }
 
