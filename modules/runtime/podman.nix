@@ -82,7 +82,9 @@
   #
   # This activation step closes that gap: it hashes each rendered .container and,
   # when one changes, `try-restart`s that unit (only the changed ones bounce)
-  # and waits for its container health before committing the new hash.
+  # and waits for its container health before committing the new hash. It also
+  # stops the unit of a quadlet whose .container was removed, which would
+  # otherwise keep running as an orphan.
   # `try-restart` never STARTS a container, so restore-mode / apps.target gating
   # and first-boot ordering are respected. The FIRST run on any box only seeds the
   # hashes (no restarts), so rolling this out doesn't bounce already-running
@@ -142,6 +144,28 @@
             changed="$changed $name"
           fi
         fi
+      done
+      # A quadlet whose .container is gone leaves its generated .service
+      # running: switch-to-configuration does not manage generated units, so
+      # after the next daemon-reload it lingers as "not-found active" (an app
+      # removed from a server, or a restore-drill spare switched back to its own
+      # configuration). The hash files record which quadlets this host ran, so
+      # a hash without its .container is a removed app: stop it now, while its
+      # old unit is still loaded, and forget it.
+      for hashFile in "$stateDir"/*; do
+        [ -f "$hashFile" ] || continue
+        case "$hashFile" in *.pending) continue ;; esac
+        name="$(${pkgs.coreutils}/bin/basename "$hashFile")"
+        [ -e "/etc/containers/systemd/$name.container" ] && continue
+        if ${pkgs.systemd}/bin/systemctl is-active --quiet "$name.service"; then
+          echo "portablevps: quadlet $name.service was removed -> stop"
+          if ! ${pkgs.systemd}/bin/systemctl stop "$name.service"; then
+            echo "portablevps: stopping removed quadlet $name.service failed" >&2
+            failed=1
+            continue
+          fi
+        fi
+        ${pkgs.coreutils}/bin/rm -f "$hashFile" "$hashFile.pending"
       done
       if [ -n "$changed" ]; then
         # Regenerate the .service units from the new .container files, then bounce
