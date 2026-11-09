@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **authentik: a public API allowlist and an alert on admin changes.**
+  - **Proxy, `deniedPathExceptions`:** a new per-service option. It lists prefixes inside `deniedPathPrefixes` that stay
+    reachable, so a public route can deny `/api/` and allow only the API paths its public pages call. The deny router's
+    rule becomes `host && (denied) && !(exceptions)`.
+  - **Monitoring, `AuthentikAdminChange`:** a new vlogs alert for every authentik object change, impersonation or
+    secret view that does not come through a flow. That covers admin-console and API work; sign-up and recovery run
+    through the flow executor and do not count.
+  - **Testing:**
+    - **Proxy:** the deny rule with exceptions ran on a local Traefik 3.7.16, in front of an echo backend and in
+      front of authentik 2026.8.5. A signed-in user's interface calls passed, and blocked paths returned 418.
+      Path tricks (`//`, `..`, `%2e%2e`) also returned 418. Encoded slashes passed the rule, which a consumer closes
+      with `entryPoints.<name>.http.encodedCharacters`.
+    - **Alert:** `vmalert -dryRun` passes. On 30 days of real logs it matched exactly the 20 operator group changes,
+      and none of the 87 self-service events.
+
 - **Proxy: an edge can block abusive addresses automatically.**
   - **What:** `portablevps.proxy.tcp.autoBlock` (off by default).
     - **Kernel:** an iptables hashlimit drops new connections to the proxy port above `newConnectionsPerSecond` (50)

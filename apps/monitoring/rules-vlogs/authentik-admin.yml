@@ -1,0 +1,42 @@
+# Admin activity in authentik. Evaluated by vmalert-logs against VictoriaLogs.
+#
+# authentik logs every event it records as a "Created Event" line from the
+# server container, with the action, the client address, the acting user and,
+# for model changes, the changed object (context.model: app, model_name, name)
+# and the request path.
+#
+# What counts as an admin action here: a change to any object (model_created,
+# model_updated, model_deleted), impersonation, or viewing or rotating a secret,
+# made anywhere except a flow. Self-service runs through the flow executor
+# (/api/v3/flows/executor/...): sign-up creates a user, recovery sets a password,
+# and those are not admin actions. Blueprint applies record no events, so a deploy
+# stays quiet. On epistola (2026-10-10..11-09) this matched exactly the 20 group
+# changes an operator made over the mesh, and none of the 87 self-service events.
+#
+# The changed object's name is in the email on purpose (which group, which
+# provider): that is the point of the alert, and only operators receive it.
+groups:
+  - name: authentik-admin
+    type: vlogs
+    interval: 1m
+    rules:
+      - alert: AuthentikAdminChange
+        expr: |
+          _time:5m CONTAINER_NAME:authentik-server "Created Event"
+          | unpack_json from _msg fields (action, client_ip, user.username, context.model.app, context.model.model_name, context.model.name, context.http_request.path)
+          | filter action:~"^(model_created|model_updated|model_deleted|impersonation_started|secret_view|secret_rotate)$" -context.http_request.path:~"^/api/v3/flows/executor/"
+          | stats by (host.name, action, user.username, client_ip, context.model.app, context.model.model_name, context.model.name) count() as changes
+          | rename host.name as host_name, user.username as actor, context.model.app as model_app, context.model.model_name as model, context.model.name as object
+        labels:
+          severity: warning
+        annotations:
+          summary: "authentik {{ $labels.action }} {{ $labels.model }} by {{ $labels.actor }} on {{ $labels.host_name }}"
+          description: >-
+            {{ $labels.actor }} ({{ $labels.client_ip }}) made {{ $value }}
+            {{ $labels.action }} change(s) to {{ $labels.model_app }}.{{ $labels.model }}
+            "{{ $labels.object }}" in authentik on {{ $labels.host_name }} in the
+            last 5m. Expected when an operator works in the admin console; if
+            nobody did, treat the account as compromised: disable it and end its
+            sessions over the mesh admin route. Details are in the
+            authentik-server log ("Created Event") and in the admin console's
+            event log.
