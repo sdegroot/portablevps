@@ -133,6 +133,18 @@ let
           that should expose the same backend with selected surfaces hidden.
         '';
       };
+
+      deniedPathExceptions = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "/api/v3/flows/executor/" "/api/v3/core/users/me/" ];
+        description = ''
+          Path prefixes inside `deniedPathPrefixes` that stay reachable. This
+          turns a denied prefix into an allowlist: deny `/api/` and except the
+          few API paths the public pages use. Has no effect without
+          `deniedPathPrefixes`.
+        '';
+      };
     };
   };
 
@@ -304,7 +316,9 @@ let
       lib.optional ((service.deniedPathPrefixes or [ ]) != [ ]) {
         name = "${name}-denied-paths";
         value = {
-          rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule (service.deniedPathPrefixes or [ ])})";
+          rule = "(${hostRule ([ service.domain ] ++ service.aliases)}) && (${pathPrefixRule (service.deniedPathPrefixes or [ ])})"
+            + lib.optionalString ((service.deniedPathExceptions or [ ]) != [ ])
+              " && !(${pathPrefixRule service.deniedPathExceptions})";
           entryPoints = routerEntryPoints service;
           service = "noop@internal";
           priority = 10000;
