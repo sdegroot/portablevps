@@ -158,6 +158,18 @@ let
   # module's prototype default (demo-password) so authentik can connect.
   prototype = config.portablevps.secrets.allowPrototypeDefaults;
 
+  # The deployed version, from the image tag (":2026.8.5@sha256:..."). null when the
+  # tag is not a plain release version; the release check is then skipped.
+  imageVersion =
+    let m = builtins.match ".*:([0-9]+[.][0-9]+[.][0-9]+)(@.*)?" cfg.image;
+    in if m == null then null else builtins.head m;
+  telemetry = config.portablevps.telemetry;
+  releaseCheckResource = builtins.toJSON ([
+    { key = "host.name"; value.stringValue = config.networking.hostName; }
+    { key = "service.namespace"; value.stringValue = telemetry.serviceNamespace; }
+  ] ++ lib.optional (telemetry.serviceName != "")
+    { key = "service.name"; value.stringValue = telemetry.serviceName; });
+
   demoSecret = key:
     if key == cfg.postgres.passwordSecret then "demo-password"
     else if key == cfg.secretKeySecret then lib.concatStrings (lib.genList (_: "0") 64)
@@ -357,6 +369,21 @@ in
       '';
     };
 
+    releaseCheck.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = config.portablevps.telemetry.endpoint != "";
+      defaultText = lib.literalExpression ''config.portablevps.telemetry.endpoint != ""'';
+      description = ''
+        Check hourly whether the deployed authentik version (from the `image`
+        tag) is behind upstream, and report it to the telemetry gateway, where
+        the AuthentikSecurityFix, AuthentikPatchRelease, AuthentikFeatureRelease
+        and AuthentikReleaseCheckStale alerts read it. It reads GitHub's public
+        releases and security advisories for goauthentik/authentik
+        (unauthenticated, 2 requests an hour). Needs a plain release tag in
+        `image`.
+      '';
+    };
+
     extraSecretEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -453,6 +480,35 @@ in
         "Environment=AUTHENTIK_LISTEN__HTTP=127.0.0.1:9001"
         "Environment=AUTHENTIK_LISTEN__METRICS=127.0.0.1:9301"
       ]);
+
+    warnings = lib.optional (cfg.releaseCheck.enable && imageVersion == null)
+      "portablevps.apps.authentik.releaseCheck: the image tag of ${cfg.image} is not a release version (YYYY.M.P); the release check is off.";
+
+    systemd.services.authentik-release-check = lib.mkIf (cfg.releaseCheck.enable && imageVersion != null) {
+      description = "Report whether authentik ${imageVersion} is behind upstream releases and advisories";
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        DynamicUser = true;
+        ExecStart = lib.escapeShellArgs [
+          "${pkgs.python3}/bin/python3" "-I" "${./release-check.py}"
+          imageVersion telemetry.endpoint releaseCheckResource
+        ];
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+      };
+    };
+    systemd.timers.authentik-release-check = lib.mkIf (cfg.releaseCheck.enable && imageVersion != null) {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitActiveSec = "1h";
+        RandomizedDelaySec = "10min";
+      };
+    };
 
     # Back up authentik's file state (uploaded media, and custom templates only
     # when they are host-managed). The database is covered by the platform
