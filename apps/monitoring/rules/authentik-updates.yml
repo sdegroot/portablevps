@@ -1,0 +1,82 @@
+# Is the deployed authentik behind upstream? Fed hourly by
+# authentik-release-check.service on the authentik host (apps/authentik,
+# release-check.py), which compares the image tag's version with GitHub's
+# releases and security advisories for goauthentik/authentik.
+#
+# authentik maintains several release lines at once (2026.8, 2026.5, 2026.2) and
+# publishes a fixed version per line in each advisory. Three kinds of news:
+#   * an advisory affects the running version: upgrade now (critical for high and
+#     critical advisories, warning otherwise; repeats every alertRepeatInterval);
+#   * a newer patch on the running line, or a newer line: severity "info", which
+#     Alertmanager sends once and then weekly (route in default.nix).
+# A patch that fixes an advisory raises both AuthentikSecurityFix and
+# AuthentikPatchRelease.
+#
+# The check pushes hourly, so every rule reads last_over_time over 3h: one missed
+# run does not resolve an alert. After an upgrade the old version's series stop,
+# and the alerts resolve within those 3h. If the check stops (GitHub unreachable,
+# timer broken), AuthentikReleaseCheckStale fires instead of a silent all-clear.
+groups:
+  - name: authentik-updates
+    interval: 5m
+    rules:
+      - alert: AuthentikSecurityFix
+        expr: last_over_time(portablevps_authentik_security_advisory{severity=~"critical|high"}[3h]) == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "authentik {{ $labels.running }} on {{ $labels.host_name }} is affected by {{ $labels.ghsa }} ({{ $labels.severity }})"
+          description: >-
+            {{ $labels.summary }}. Fixed in {{ $labels.fixed_in }}; {{ $labels.host_name }}
+            runs {{ $labels.running }}. Advisory:
+            https://github.com/goauthentik/authentik/security/advisories/{{ $labels.ghsa }}.
+            Upgrade by moving portablevps.apps.authentik.image to a fixed release.
+
+      - alert: AuthentikSecurityFixMinor
+        expr: last_over_time(portablevps_authentik_security_advisory{severity!~"critical|high"}[3h]) == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "authentik {{ $labels.running }} on {{ $labels.host_name }} is affected by {{ $labels.ghsa }} ({{ $labels.severity }})"
+          description: >-
+            {{ $labels.summary }}. Fixed in {{ $labels.fixed_in }}; {{ $labels.host_name }}
+            runs {{ $labels.running }}. Advisory:
+            https://github.com/goauthentik/authentik/security/advisories/{{ $labels.ghsa }}.
+
+      - alert: AuthentikPatchRelease
+        expr: last_over_time(portablevps_authentik_update_available{kind="patch"}[3h]) == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "authentik {{ $labels.latest }} is out ({{ $labels.host_name }} runs {{ $labels.running }})"
+          description: >-
+            A newer release on the running line. Release notes:
+            https://github.com/goauthentik/authentik/releases/tag/version%2F{{ $labels.latest }}.
+            Patch releases usually carry fixes only; upgrade soon.
+
+      - alert: AuthentikFeatureRelease
+        expr: last_over_time(portablevps_authentik_update_available{kind="feature"}[3h]) == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "authentik {{ $labels.latest }} is out ({{ $labels.host_name }} runs {{ $labels.running }})"
+          description: >-
+            A newer release line. Read the upgrade notes for breaking changes before
+            upgrading, and test the blueprints against it:
+            https://github.com/goauthentik/authentik/releases/tag/version%2F{{ $labels.latest }}.
+            The running line keeps getting security fixes for a while; the
+            security alerts say when that is no longer enough.
+
+      - alert: AuthentikReleaseCheckStale
+        expr: time() - last_over_time(portablevps_authentik_release_check_timestamp_seconds[3d]) > 6 * 3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "authentik release check stale on {{ $labels.host_name }}"
+          description: >-
+            The last successful check of authentik's releases and advisories on
+            {{ $labels.host_name }} was {{ $value | humanizeDuration }} ago, so a
+            security fix would go unnoticed. See
+            `journalctl -u authentik-release-check` on the host (GitHub API
+            unreachable or rate limited, or the timer stopped).

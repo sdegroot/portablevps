@@ -238,6 +238,11 @@ let
       group_wait: 30s
       group_interval: 5m
       repeat_interval: ${cfg.alertRepeatInterval}
+      routes:
+        # severity "info": worth one email and a weekly reminder, not one every
+        # repeat_interval (for example a new upstream release you chose to wait on).
+        - matchers: ['severity="info"']
+          repeat_interval: 168h
 
     receivers:
       - name: email

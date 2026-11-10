@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **authentik: warn when the deployed version is behind upstream.**
+  - **What:** `authentik-release-check.service` runs hourly on the authentik host (`releaseCheck.enable`, on by
+    default when telemetry is configured). It compares the image tag's version with GitHub's releases and security
+    advisories for goauthentik/authentik and pushes the result to the gateway.
+    - **`AuthentikSecurityFix`** (critical; `AuthentikSecurityFixMinor` for medium and low): an advisory affects the
+      running version. It names the advisory and the fixed release.
+    - **`AuthentikPatchRelease`, `AuthentikFeatureRelease`** (severity `info`): a newer release on the running
+      line, or a newer line.
+    - **`AuthentikReleaseCheckStale`:** the check has not succeeded for 6h.
+  - **Alertmanager:** a new route sends severity `info` once and then weekly, instead of every
+    `alertRepeatInterval`.
+  - **Advisory matching:** authentik lists a fixed version per maintained line. The running version is affected
+    while it is older than its own line's fix, or older than every fix when its line is not listed (unmaintained,
+    or the advisory predates it).
+  - **Testing:** against live GitHub data.
+    - **2026.8.5:** nothing to report.
+    - **2026.8.1:** 5 high advisories, patch available.
+    - **2026.5.6:** 5 advisories, patch and feature releases available.
+    - **2025.12.3:** 23 advisories.
+    - **Release candidates:** ignored.
+    - **Config:** `vmalert -dryRun` passes, and `amtool check-config` passes on the rendered Alertmanager config.
+
 - **authentik: a public API allowlist and an alert on admin changes.**
   - **Proxy, `deniedPathExceptions`:** a new per-service option. It lists prefixes inside `deniedPathPrefixes` that stay
     reachable, so a public route can deny `/api/` and allow only the API paths its public pages call. The deny router's
