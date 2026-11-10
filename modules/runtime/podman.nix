@@ -130,6 +130,14 @@
         for envFile in $(${pkgs.gnugrep}/bin/grep -iE '^EnvironmentFile=' "$unit" | ${pkgs.gnused}/bin/sed -E 's/^[Ee]nvironment[Ff]ile=-?//'); do
           [ -f "$envFile" ] && hashInputs="$hashInputs $envFile"
         done
+        # Likewise a rendered secret mounted as a file (Volume=/run/secrets/...:dst),
+        # such as Alertmanager's config: sops-nix rewrites it at a stable path, so
+        # without this a config change never restarted the container, which kept
+        # reading the old file through its bind mount. Only /run/secrets: a file
+        # the app writes itself would restart it on every deploy.
+        for volSrc in $(${pkgs.gnugrep}/bin/grep -E '^Volume=/run/secrets/' "$unit" | ${pkgs.gnused}/bin/sed -E 's/^Volume=([^:]*):.*/\1/'); do
+          [ -f "$volSrc" ] && hashInputs="$hashInputs $volSrc"
+        done
         new="$(${pkgs.coreutils}/bin/cat $hashInputs 2>/dev/null | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
         hashFile="$stateDir/$name"
         old=""

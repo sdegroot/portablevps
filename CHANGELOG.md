@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Quadlet containers restart when a secret file mounted into them changes.**
+  - **Bug:** `restartChangedQuadlets` hashed a `.container` file and its `EnvironmentFile`s, but not a rendered
+    secret mounted with `Volume=/run/secrets/...`. sops-nix rewrites such a file at the same path, so the container
+    kept reading the old one through its bind mount. Alertmanager's config is one: the `severity="info"` route from
+    v0.7.4 was on disk after the deploy, but Alertmanager kept running the old routes until it was restarted by hand.
+  - **Fix:** regular files under `/run/secrets/` named in a `Volume=` line are now part of the hash. Only
+    `/run/secrets`, because a file the app writes itself would restart it on every deploy.
+  - **Rollout:** the first deploy with this version restarts each container that mounts such a file once, because
+    its hash gains the file. Today those are Alertmanager and Forgejo (with commit signing on, which mounts
+    `forgejo-signing-key`).
+
 - **authentik: warn when the deployed version is behind upstream.**
   - **What:** `authentik-release-check.service` runs hourly on the authentik host (`releaseCheck.enable`, on by
     default when telemetry is configured). It compares the image tag's version with GitHub's releases and security
