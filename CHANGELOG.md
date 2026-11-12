@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Old container images and system generations are now cleaned up.**
+  - **Bug:** the weekly `podman system prune -f` reclaimed 0 B on every host. Apps pin images by digest, and a
+    digest-pulled image keeps its repository name, so podman never counts it as dangling. Each pin bump left its old
+    image behind. On 2026-11-12 the website box (`hetzner-fsn-20260710a`) hit 100% disk: 116 unused website images
+    took 44 GB of its 75 GB. Nothing collected old NixOS generations either. That box had 192 of them and a 21 GB store.
+  - **Fix, images:** the Podman and Docker prunes now run daily with `--all --filter until=72h`. That removes every
+    image no container uses, except images built in the last three days. A pruned image is pulled again when a
+    container needs it. The blue-green reconcile already pulls its target explicitly.
+  - **Fix, generations:** `nix.gc` runs weekly with `--delete-older-than 14d`, and GRUB keeps at most 20 entries. The
+    current generation is always kept, so the rollback window is two weeks.
+  - **Overrides:** every value is `lib.mkDefault`. Discourse's own weekly docker prune is removed; it now uses the
+    shared one from `modules/runtime/docker.nix`.
+  - **Rollout:** the first nightly prune and weekly GC after deploy can free several GB on hosts with frequent pin
+    bumps.
+
 - **Quadlet containers restart when a secret file mounted into them changes.**
   - **Bug:** `restartChangedQuadlets` hashed a `.container` file and its `EnvironmentFile`s, but not a rendered
     secret mounted with `Volume=/run/secrets/...`. sops-nix rewrites such a file at the same path, so the container

@@ -19,9 +19,18 @@
   virtualisation.podman = {
     enable = true;
     dockerCompat = false;
+    # `--all` is what actually frees space: apps pin images by digest, and a
+    # digest-pulled image keeps its repository name, so podman never counts it
+    # as dangling. Without `--all` the prune reclaimed 0 B every week while each
+    # pin bump left its old image behind (44 GB of them filled a 75 GB website
+    # box, 2026-11-12). `--all` only removes images no container uses, and a
+    # pruned image is pulled again when a container needs it. `until=72h` keeps
+    # images built in the last three days, so an image you might roll back to is
+    # usually still local. Daily, because the website takes several bumps a day.
     autoPrune = {
-      enable = true;
-      dates = "weekly";
+      enable = lib.mkDefault true;
+      dates = lib.mkDefault "daily";
+      flags = lib.mkDefault [ "--all" "--filter" "until=72h" ];
     };
     # Put `nft` on the PATH podman hands to netavark. nixpkgs' netavark has no
     # firewall tools in its own closure — it finds them via podman's wrapper PATH
