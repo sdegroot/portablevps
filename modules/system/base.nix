@@ -82,6 +82,18 @@ in
     # 26.05, where the inhibitor can enforce the reboot boundary.
     services.dbus.implementation = "dbus";
 
+    # Every deploy and every autoUpgrade run adds a system generation, and
+    # nothing removed them: the website box had 192 generations and a 21 GB
+    # store. Collect generations older than two weeks; the current one is always
+    # kept, so a rollback window of two weeks remains. The GRUB limit keeps
+    # /boot from filling with kernels for generations that still exist.
+    nix.gc = {
+      automatic = lib.mkDefault true;
+      dates = lib.mkDefault "weekly";
+      options = lib.mkDefault "--delete-older-than 14d";
+    };
+    boot.loader.grub.configurationLimit = lib.mkDefault 20;
+
     services.openssh = {
       enable = true;
       openFirewall = false;

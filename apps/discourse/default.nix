@@ -461,13 +461,8 @@ in
 
       boot.kernel.sysctl."vm.overcommit_memory" = 1;
 
-      virtualisation.docker = {
-        enable = true;
-        autoPrune = {
-          enable = lib.mkDefault true;
-          dates = lib.mkDefault "weekly";
-        };
-      };
+      # Pruning comes from modules/runtime/docker.nix (daily, `--all`).
+      virtualisation.docker.enable = true;
 
       systemd.services.discourse = {
         description = "Discourse forum";
