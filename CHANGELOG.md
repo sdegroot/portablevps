@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Security: Traefik 3.7.19, kernel 6.18.62, PostgreSQL 18.7.**
+  - **Traefik:** nixos-26.05 ships 3.7.16. Traefik 3.7.18 (2026-11-12) fixes four high advisories. The one that
+    matters here is GHSA-cp28-5662-543f: `sanitizePath` did not resolve path-parameter dot-segments (`/api/..;x/`),
+    so a backend that resolves them could be reached past a `deniedPathPrefixes` deny. The proxy module now uses
+    upstream's static release binary for 3.7.19, pinned by the hashes in its published checksums, so no host
+    compiles Traefik. It falls back to `pkgs.traefik` by itself once nixpkgs ships ≥ 3.7.19. Override with
+    `services.traefik.package`.
+  - **nixpkgs (nixos-26.05 → 2026-11-08):** kernel 6.18.60 → 6.18.62. It takes effect after a reboot.
+  - **nixpkgs-postgres / nixpkgs-netbird (nixos-unstable → 2026-11-11):** PostgreSQL 18.6 → 18.7 (2026-11-12
+    security release).
+  - **Not affected:** OpenSSH "SSHole" (CVE-2026-123158) only affects musl builds without PAM. NixOS uses glibc and
+    PAM.
+
 - **Old container images and system generations are now cleaned up.**
   - **Bug:** the weekly `podman system prune -f` reclaimed 0 B on every host. Apps pin images by digest, and a
     digest-pulled image keeps its repository name, so podman never counts it as dangling. Each pin bump left its old

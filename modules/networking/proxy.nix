@@ -3,6 +3,47 @@
 
 let
   cfg = config.portablevps.proxy;
+  # Traefik 3.7.18 fixes GHSA-cp28-5662-543f: sanitizePath left path-parameter
+  # dot-segments (`/api/..;x/admin`) in place, so a backend that resolves them
+  # could be reached past a deniedPathPrefixes rule. It also fixes three more
+  # high advisories (GHSA-x5pf-cqh3-2gv8, GHSA-p956-6gvv-mxqp,
+  # GHSA-ccgh-9g52-6vwg). nixos-26.05 still ships 3.7.16, and a source build of
+  # a newer one is not in the binary cache, so every host would compile it.
+  # Use upstream's static release binary instead (CGO off, no dynamic
+  # linking), pinned by the hashes in its traefik_v<version>_checksums.txt.
+  # The version check retires this by itself once nixpkgs catches up.
+  traefikUpstreamVersion = "3.7.19";
+  traefikUpstreamBinaries = {
+    x86_64-linux = { arch = "amd64"; hash = "sha256-l1NKaDNaCHE30PKt7O/jfIIWrBARTcfltRDyqKEvib4="; };
+    aarch64-linux = { arch = "arm64"; hash = "sha256-bXlsQbjTyMMbsvrxv/8bX89gNnatmnc7Kf+n76Z4iBo="; };
+  };
+  traefikUpstream =
+    let bin = traefikUpstreamBinaries.${pkgs.stdenv.hostPlatform.system};
+    in pkgs.stdenvNoCC.mkDerivation {
+      pname = "traefik";
+      version = traefikUpstreamVersion;
+      src = pkgs.fetchurl {
+        url = "https://github.com/traefik/traefik/releases/download/v${traefikUpstreamVersion}/traefik_v${traefikUpstreamVersion}_linux_${bin.arch}.tar.gz";
+        inherit (bin) hash;
+      };
+      sourceRoot = ".";
+      dontConfigure = true;
+      dontBuild = true;
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 traefik $out/bin/traefik
+        runHook postInstall
+      '';
+      meta = pkgs.traefik.meta // {
+        mainProgram = "traefik";
+        sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
+      };
+    };
+  traefikPackage =
+    if lib.versionAtLeast pkgs.traefik.version traefikUpstreamVersion
+      || !(traefikUpstreamBinaries ? ${pkgs.stdenv.hostPlatform.system})
+    then pkgs.traefik
+    else traefikUpstream;
   netbirdEnabled = config.portablevps.network.enable or false;
   # This is a NetBird-first proxy: its internal routes bind the mesh interface
   # and ACME uses the operator's DNS. Where there is no mesh (a local VM), it
@@ -913,6 +954,7 @@ in
 
       services.traefik = {
         enable = true;
+        package = lib.mkDefault traefikPackage;
         environmentFiles = lib.optional cfg.acme.enable cfg.acme.environmentFile;
         staticConfigOptions = lib.mkMerge [
           {
