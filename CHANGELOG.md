@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Feature: `pvps key import`/`export` escrow the admin SSH key too.**
+  - **What:** `key import` now also stores the server's admin SSH private key
+    (`.local/ssh/servers/<server>_ed25519`) in `op://<vault>/<server>` as the `private key` field, the
+    field the keystore already reads in headless mode. It writes through the same stdin template as the
+    age key, so the key never appears in argv. It checks that the local pair matches before writing, and
+    afterwards that the key read back from 1Password derives the committed public key
+    (`keys/servers/<server>-admin.pub`), without connecting to the server. `key export` restores it to a
+    fresh laptop, with the same check. A server without a per-server admin key keeps escrowing only its
+    age key.
+  - **Why:** the keystore could read an escrowed admin key, but nothing could write one, so every admin
+    key existed only on the operator's laptop. Losing the laptop meant losing admin SSH to the fleet.
+  - **Testing:** unit tests for the field contract, the public-key comparison and the read-back check (a
+    faked `ssh-keygen`, plus a real ed25519 pair when `ssh-keygen` is on PATH). Against a live fleet of 15
+    servers: every key escrowed and verified, and a `pvps ssh --non-interactive` from a checkout with no
+    `.local` at all logged in with the 1Password copy alone.
+
 - **Fix: `server install`/`adopt --password` no longer sends an unresolved reference as the password.**
   - **What:** `--password` is resolved before any connection. An `op://`, `env://` or manager reference that
     fails to resolve, or resolves to an empty value, stops the run with exit 66 and says no login was attempted.
