@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Fix: `server install`/`adopt --password` no longer sends an unresolved reference as the password.**
+  - **What:** `--password` is resolved before any connection. An `op://`, `env://` or manager reference that
+    fails to resolve, or resolves to an empty value, stops the run with exit 66 and says no login was attempted.
+  - **Why:** the resolver fell back to the literal on failure, so when `op read` failed (an expired session, an
+    approval prompt nobody saw in a background run) sshpass sent the text `op://...` as the root password. The
+    target rejected a correct password, which cost a failed adopt and a misdiagnosis, plus login failures counted
+    against the target.
+  - **Testing:** unit tests for literal, resolved, failed, empty and unset references; end to end, an adopt with a
+    reference to a missing 1Password item against a TEST-NET address stopped with exit 66 before connecting.
+
 - **Security: Traefik 3.7.19, kernel 6.18.62, PostgreSQL 18.7.**
   - **Traefik:** nixos-26.05 ships 3.7.16. Traefik 3.7.18 (2026-11-12) fixes four high advisories. The one that
     matters here is GHSA-cp28-5662-543f: `sanitizePath` did not resolve path-parameter dot-segments (`/api/..;x/`),
