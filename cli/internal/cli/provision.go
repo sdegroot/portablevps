@@ -23,14 +23,33 @@ func confirmDestroyTarget(g *globalOptions, cmd *cobra.Command, resource string)
 	return g.confirmDestroy(resource, "host", cmd.InOrStdin(), cmd.ErrOrStderr())
 }
 
-// resolveSecretRef dereferences an op://, env:// reference (falls back to the
-// literal on failure) — used for --password.
+// resolveSecretRef dereferences an op://, env:// reference, falling back to the
+// literal on failure. Callers must check the result with isUnresolvedRef; for a
+// credential, use resolveSecretStrict instead.
 func resolveSecretRef(ctx *config.Context, value string) string {
 	r := secrets.Resolver{Runner: adapters.ExecRunner{}, Getenv: os.Getenv, OpAccount: ctx.OpAccount, Managers: secretManagers(ctx)}
 	if out, err := r.Resolve(value); err == nil {
 		return out
 	}
 	return value
+}
+
+// resolveSecretStrict resolves a secret that is about to be used as a
+// credential. Unlike resolveSecretRef, a reference that fails to resolve, or
+// that resolves to an empty value, is an error: it is never handed on as the
+// secret itself. (`server adopt --password op://...` once sent the reference
+// text as the root password when `op read` failed, so the target rejected a
+// correct password and the operator was told it was wrong.) A literal value
+// resolves to itself.
+func resolveSecretStrict(r secrets.Resolver, value string) (string, error) {
+	out, err := r.Resolve(value)
+	if err != nil {
+		return "", err
+	}
+	if out == "" {
+		return "", fmt.Errorf("%q resolves to an empty value", value)
+	}
+	return out, nil
 }
 
 // secretManagers adapts the config's registered managers to the resolver's type.
@@ -356,11 +375,24 @@ func bootstrapAdminKey(ctx *config.Context, server string, pf *provisionFlags, p
 	if pf.initialKey != "" {
 		initialKey = repoRelOrAbs(ctx.RepoRoot, pf.initialKey)
 	}
-	name, args := bootstrapCommand(pf.password != "", initialKey, sshOpts, target, remote)
+	// Resolve the password before any connection, so an unresolvable reference
+	// fails here instead of reaching the target as a wrong password.
+	password := ""
+	if pf.password != "" {
+		r := secrets.Resolver{Runner: adapters.ExecRunner{}, Getenv: os.Getenv, OpAccount: ctx.OpAccount, Managers: secretManagers(ctx)}
+		resolved, err := resolveSecretStrict(r, pf.password)
+		if err != nil {
+			prog.Phase("bootstrap", "fail", "resolving --password")
+			return ExitError{Code: 66, Message: fmt.Sprintf("resolving --password: %v (no login was attempted; "+
+				"for an op:// reference, is your 1Password session active? try `op signin`)", err)}
+		}
+		password = resolved
+	}
+	name, args := bootstrapCommand(password != "", initialKey, sshOpts, target, remote)
 	c := exec.Command(name, args...)
 	c.Env = os.Environ()
-	if pf.password != "" {
-		c.Env = append(c.Env, "SSHPASS="+resolveSecretRef(ctx, pf.password))
+	if password != "" {
+		c.Env = append(c.Env, "SSHPASS="+password)
 	}
 	c.Stdin = strings.NewReader(strings.TrimSpace(string(pub)) + "\n")
 	c.Stderr = os.Stderr
