@@ -17,7 +17,8 @@ import (
 
 // newKeyCmd escrows per-server key material to/from a password manager, so the
 // keys aren't single-copy on the operator laptop + host. 1Password today; the
-// item field layout (`age-key`) matches exactly what the keystore reads back.
+// item field layout (`age-key`, `private key`) matches exactly what the
+// keystore reads back.
 func newKeyCmd(g *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "key",
@@ -32,6 +33,58 @@ func newKeyCmd(g *globalOptions) *cobra.Command {
 // ageKeyField is the concealed field the keystore reads as op://<vault>/<server>/age-key.
 func ageKeyField(ageKey string) map[string]any {
 	return map[string]any{"id": "age-key", "label": "age-key", "type": "CONCEALED", "value": ageKey}
+}
+
+// adminKeyField is the concealed field the keystore reads as
+// op://<vault>/<server>/private key (SSHIdentity, headless mode).
+func adminKeyField(privateKey string) map[string]any {
+	return map[string]any{"id": "private-key", "label": "private key", "type": "CONCEALED", "value": privateKey}
+}
+
+// deriveSSHPublicKey prints the public key of a private key file
+// (`ssh-keygen -y`). A var so tests can fake it.
+var deriveSSHPublicKey = func(privatePath string) (string, error) {
+	return adapters.ExecRunner{}.Run("", "ssh-keygen", "-y", "-f", privatePath)
+}
+
+// verifyAdminKeyReadBack proves that an escrowed admin key, read back from
+// 1Password, is the key the server trusts: it writes the value the way the
+// keystore does (0600, one trailing newline), derives its public key and
+// compares type and key material with the committed public key. Nothing
+// connects to the server, so a bad escrow costs no failed login.
+func verifyAdminKeyReadBack(readBack, committedPub string) error {
+	f, err := os.CreateTemp("", "portablevps-verify-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if err := os.Chmod(name, 0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(strings.TrimRight(readBack, "\n") + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	derived, err := deriveSSHPublicKey(name)
+	if err != nil {
+		return fmt.Errorf("the escrowed private key is not a usable OpenSSH key: %v", err)
+	}
+	if !samePublicKey(derived, committedPub) {
+		return fmt.Errorf("the escrowed private key does not match the committed public key")
+	}
+	return nil
+}
+
+// samePublicKey compares two OpenSSH public key lines by type and key
+// material, ignoring the comment.
+func samePublicKey(a, b string) bool {
+	fa, fb := strings.Fields(a), strings.Fields(b)
+	return len(fa) >= 2 && len(fb) >= 2 && fa[0] == fb[0] && fa[1] == fb[1]
 }
 
 type adminKeypair struct {
@@ -165,11 +218,14 @@ func newKeyGenerateCmd(g *globalOptions) *cobra.Command {
 func newKeyImportCmd(g *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import [server]",
-		Short: "Escrow a server's local age key into its 1Password item",
-		Long: "Reads the server's local age key (.local/sops/servers/<server>/age-key.txt) " +
-			"and stores it (leak-free, via a stdin template) in the 1Password item " +
-			"op://<vault>/<server> as the `age-key` field, then verifies the read-back. " +
-			"Removes the single-copy risk: the key survives a lost laptop.",
+		Short: "Escrow a server's local age key and admin SSH key into its 1Password item",
+		Long: "Reads the server's local age key (.local/sops/servers/<server>/age-key.txt) and, " +
+			"when present, its admin SSH private key (.local/ssh/servers/<server>_ed25519), and " +
+			"stores them (leak-free, via a stdin template) in the 1Password item " +
+			"op://<vault>/<server> as the `age-key` and `private key` fields. It then verifies " +
+			"the read-back: the age key must match exactly, and the private key must derive the " +
+			"committed public key (keys/servers/<server>-admin.pub). Removes the single-copy " +
+			"risk: the keys survive a lost laptop.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server, ctx, err := serverArg(g, args)
@@ -189,7 +245,28 @@ func newKeyImportCmd(g *globalOptions) *cobra.Command {
 				return ExitError{Code: 66, Message: fmt.Sprintf("local age key for %s is empty", server)}
 			}
 
-			created, err := escrowAgeKey(ctx, server, ageKey)
+			// The admin SSH key is optional (a server may still use the legacy
+			// cloud-admin key), but when it exists its public half must too, or
+			// the escrow could not be verified.
+			fields := []any{ageKeyField(ageKey)}
+			adminKey, committedPub := "", ""
+			adminPath := filepath.Join(ctx.RepoRoot, perServerAdminPrivateRel(server))
+			if data, aerr := os.ReadFile(adminPath); aerr == nil {
+				adminKey = strings.TrimRight(string(data), "\n")
+				pubPath := filepath.Join(ctx.RepoRoot, perServerAdminPublicRel(server))
+				pub, perr := os.ReadFile(pubPath)
+				if perr != nil {
+					return ExitError{Code: 66, Message: fmt.Sprintf("admin key %s exists but its public key %s does not (needed to verify the escrow): %v", adminPath, pubPath, perr)}
+				}
+				committedPub = string(pub)
+				// Check the local pair before writing anything to 1Password.
+				if err := verifyAdminKeyReadBack(adminKey, committedPub); err != nil {
+					return ExitError{Code: 65, Message: fmt.Sprintf("local admin key for %s: %v", server, err)}
+				}
+				fields = append(fields, adminKeyField(adminKey))
+			}
+
+			created, err := escrowFields(ctx, server, fields)
 			if err != nil {
 				return err
 			}
@@ -202,11 +279,23 @@ func newKeyImportCmd(g *globalOptions) *cobra.Command {
 			if strings.TrimRight(got, "\n") != ageKey {
 				return ExitError{Code: 70, Message: fmt.Sprintf("escrow verify mismatch for %s: read-back differs from the local key", server)}
 			}
+			escrowed := "age-key"
+			if adminKey != "" {
+				ref := keystore.DefaultOpItem(ctx.Vault, server) + "/private key"
+				got, verr := opRead(ctx, ref)
+				if verr != nil {
+					return ExitError{Code: 70, Message: fmt.Sprintf("escrow verify (op read %s) failed: %v", ref, verr)}
+				}
+				if err := verifyAdminKeyReadBack(got, committedPub); err != nil {
+					return ExitError{Code: 70, Message: fmt.Sprintf("escrow verify for %s: %v", server, err)}
+				}
+				escrowed = "age-key and private key"
+			}
 			action := "updated"
 			if created {
 				action = "created"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s (age-key escrowed and verified)\n", action, keystore.DefaultOpItem(ctx.Vault, server))
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s escrowed and verified)\n", action, keystore.DefaultOpItem(ctx.Vault, server), escrowed)
 			return nil
 		},
 	}
@@ -217,9 +306,11 @@ func newKeyExportCmd(g *globalOptions) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "export [server]",
-		Short: "Restore a server's age key from 1Password to the local file (break-glass)",
-		Long: "Reads op://<vault>/<server>/age-key and writes it to the local file " +
-			".local/sops/servers/<server>/age-key.txt (0600) — for a fresh laptop or " +
+		Short: "Restore a server's age key and admin SSH key from 1Password to local files (break-glass)",
+		Long: "Reads op://<vault>/<server>/age-key and writes it to " +
+			".local/sops/servers/<server>/age-key.txt (0600). When the item also holds a " +
+			"`private key`, writes it to .local/ssh/servers/<server>_ed25519 (0600) after " +
+			"checking that it derives the committed public key. For a fresh laptop or " +
 			"offline break-glass. Refuses to overwrite an existing file without --force.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -250,6 +341,35 @@ func newKeyExportCmd(g *globalOptions) *cobra.Command {
 				return ExitError{Code: 70, Message: err.Error()}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s from %s\n", keyPath, ref)
+
+			// The admin SSH key, when escrowed. An item without one (a server
+			// still on the legacy cloud-admin key) is not an error.
+			adminRef := keystore.DefaultOpItem(ctx.Vault, server) + "/private key"
+			adminKey, aerr := opRead(ctx, adminRef)
+			adminKey = strings.TrimRight(adminKey, "\n")
+			if aerr != nil || adminKey == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "no private key in %s; admin SSH key not restored\n", keystore.DefaultOpItem(ctx.Vault, server))
+				return nil
+			}
+			pubPath := filepath.Join(ctx.RepoRoot, perServerAdminPublicRel(server))
+			pub, perr := os.ReadFile(pubPath)
+			if perr != nil {
+				return ExitError{Code: 66, Message: fmt.Sprintf("cannot verify the escrowed admin key without %s: %v", pubPath, perr)}
+			}
+			if err := verifyAdminKeyReadBack(adminKey, string(pub)); err != nil {
+				return ExitError{Code: 65, Message: fmt.Sprintf("%s: %v", adminRef, err)}
+			}
+			adminPath := filepath.Join(ctx.RepoRoot, perServerAdminPrivateRel(server))
+			if fileExistsCli(adminPath) && !force {
+				return ExitError{Code: 73, Message: fmt.Sprintf("%s already exists; pass --force to overwrite", adminPath)}
+			}
+			if err := os.MkdirAll(filepath.Dir(adminPath), 0o700); err != nil {
+				return ExitError{Code: 70, Message: err.Error()}
+			}
+			if err := os.WriteFile(adminPath, []byte(adminKey+"\n"), 0o600); err != nil {
+				return ExitError{Code: 70, Message: err.Error()}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s from %s\n", adminPath, adminRef)
 			return nil
 		},
 	}
@@ -257,9 +377,10 @@ func newKeyExportCmd(g *globalOptions) *cobra.Command {
 	return cmd
 }
 
-// escrowAgeKey creates or updates the server's 1Password item with the age key,
-// feeding the value through a stdin JSON template so it never appears in argv.
-func escrowAgeKey(ctx *config.Context, server, ageKey string) (created bool, err error) {
+// escrowFields creates or updates the server's 1Password item with the given
+// fields, feeding the values through a stdin JSON template so they never
+// appear in argv.
+func escrowFields(ctx *config.Context, server string, fields []any) (created bool, err error) {
 	run := adapters.ExecRunner{}
 	acc := ctx.OpAccount
 
@@ -273,7 +394,7 @@ func escrowAgeKey(ctx *config.Context, server, ageKey string) (created bool, err
 	}
 
 	if exists {
-		tmpl, _ := json.Marshal(map[string]any{"fields": []any{ageKeyField(ageKey)}})
+		tmpl, _ := json.Marshal(map[string]any{"fields": fields})
 		args := []string{"item", "edit", server, "--vault", ctx.Vault}
 		if acc != "" {
 			args = append(args, "--account", acc)
@@ -288,7 +409,7 @@ func escrowAgeKey(ctx *config.Context, server, ageKey string) (created bool, err
 	tmpl, _ := json.Marshal(map[string]any{
 		"title":    server,
 		"category": "SECURE_NOTE",
-		"fields":   []any{ageKeyField(ageKey)},
+		"fields":   fields,
 	})
 	args := []string{"item", "create", "--vault", ctx.Vault}
 	if acc != "" {
