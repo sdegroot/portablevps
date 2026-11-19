@@ -234,7 +234,7 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "codeberg.org/forgejo/forgejo:17.0.1";
+      default = "codeberg.org/forgejo/forgejo:17.0.2";
       description = "Forgejo container image.";
     };
 
