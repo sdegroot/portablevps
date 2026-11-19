@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Security updates (2026-11-19).**
+  - **PostgreSQL server 18.6 → 18.7** (default `postgres.image`, pinned by digest). 18.7 is the
+    2026-11-12 security release, with dozens of CVEs, most of them code execution by an authenticated
+    SQL user (e.g. CVE-2026-120142, CVE-2026-6460). The server runs from this image; the 2026-11-13
+    nixpkgs-postgres bump only moved the client and backup tools, so servers stayed on 18.6. A minor
+    upgrade on the same data directory; the changed pin restarts the container on switch.
+  - **Forgejo 17.0.1 → 17.0.2**: security release (SSH public-key lookup by inexact match, an
+    unverified email could be made primary, missing authorization on `/tree-list`, `/find`,
+    `/activities/feeds` and `/heatmap`, positional commit-header parsing).
+  - **Grafana 13.3.0 → 13.3.1** (6 CVEs), **VictoriaLogs 1.53.0 → 1.54.0** (web-UI XSS, hidden
+    fields overridable through the request body, Go 1.27.4), **VictoriaMetrics and vmalert
+    1.155.0 → 1.156.0**. Alertmanager stays on 0.34.2: 0.35 has breaking flag changes and no security fixes.
+  - **nixos-26.05 → 2026-11-17**: OpenSSH 10.6p2, kernel 6.18.63 (needs a reboot), expat 2.10.0,
+    Go 1.27.4, Node.js point releases. **nixos-unstable → 2026-11-17** (postgres and netbird sets).
+  - **Testing:** all 15 Epistola hosts evaluate with this branch (`--override-input portablevps`);
+    the new postgres image scanned with trivy: no fixable HIGH/CRITICAL left in PostgreSQL or Debian
+    beyond one zlib1g rebuild pending, only the Go stdlib of upstream's `gosu`, which drops privileges at
+    start and uses no TLS.
+
 - **Feature: `pvps key import`/`export` escrow the admin SSH key too.**
   - **What:** `key import` now also stores the server's admin SSH private key
     (`.local/ssh/servers/<server>_ed25519`) in `op://<vault>/<server>` as the `private key` field, the
