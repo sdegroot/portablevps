@@ -192,7 +192,7 @@ in
     image = lib.mkOption {
       type = lib.types.str;
       # Bump tag@digest together (Renovate-managed in the reference).
-      default = "ghcr.io/goauthentik/server:2026.8.5@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5";
+      default = "ghcr.io/goauthentik/server:2026.8.7@sha256:1675a017c46ba7f4f15333aeafeeb64538c581673bcbcd36af872cdf7de4e7f7";
       description = "authentik container image (pin tag@digest in production).";
     };
 

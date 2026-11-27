@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Security updates (2026-11-27).**
+  - **Traefik 3.7.19 → 3.7.20** (upstream static binary, pinned by its `checksums.txt` hashes): fixes
+    GHSA-3rh5-223h-cpwr (high: unauthenticated memory exhaustion through the Compress middleware's Brotli
+    writer, the Brotli counterpart of GHSA-x5pf-cqh3-2gv8), GHSA-42x2-976f-ph52 (provider credentials in debug
+    logs, support dumps and usage statistics) and GHSA-9657-c2gv-wjpj (trailing-dot hosts evade TLS-option
+    conflict detection).
+  - **authentik 2026.8.5 → 2026.8.7** (by index digest `1675a017…`): security backports for notification
+    webhook responses, the forward-auth allowlist, kubeconfig validation, nginx forward-auth path
+    normalisation, JWT federation user matching and the SAML inflate size limit. Patch releases on the same
+    line, no migrations to act on.
+  - **Grafana 13.3.1 → 13.3.2** (CVE-2026-107561, CVE-2026-88960).
+  - **nixos-26.05 → 2026-11-24**: kernel 6.18.65 (needs a reboot), libxml2_13 CVE-2026-76781, OpenJDK
+    security updates. The nixos-unstable sets (postgres, netbird) stay on 2026-11-17.
+
 - **Security updates (2026-11-19).**
   - **PostgreSQL server 18.6 → 18.7** (default `postgres.image`, pinned by digest). 18.7 is the
     2026-11-12 security release, with dozens of CVEs, most of them code execution by an authenticated
