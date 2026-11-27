@@ -143,7 +143,7 @@ in
       # a tag it already has, so a floating tag froze each host on whatever 18.x
       # it first pulled. A changed pin restarts the container on switch through
       # the generic quadlet restarter (modules/runtime/podman.nix).
-      default = "docker.io/library/postgres:18.6@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6";
+      default = "docker.io/library/postgres:18.7@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61";
       description = "PostgreSQL container image. Override for extension-bearing images such as pgvector.";
     };
 
