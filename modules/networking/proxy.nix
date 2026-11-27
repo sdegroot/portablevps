@@ -12,10 +12,10 @@ let
   # Use upstream's static release binary instead (CGO off, no dynamic
   # linking), pinned by the hashes in its traefik_v<version>_checksums.txt.
   # The version check retires this by itself once nixpkgs catches up.
-  traefikUpstreamVersion = "3.7.19";
+  traefikUpstreamVersion = "3.7.20";
   traefikUpstreamBinaries = {
-    x86_64-linux = { arch = "amd64"; hash = "sha256-l1NKaDNaCHE30PKt7O/jfIIWrBARTcfltRDyqKEvib4="; };
-    aarch64-linux = { arch = "arm64"; hash = "sha256-bXlsQbjTyMMbsvrxv/8bX89gNnatmnc7Kf+n76Z4iBo="; };
+    x86_64-linux = { arch = "amd64"; hash = "sha256-OJc22LEh1NQeBEKU3wO6TY/k6jdE44ricMEPvaq44Qo="; };
+    aarch64-linux = { arch = "arm64"; hash = "sha256-Ej9BY8DIMwVNPLYIcAYBGo2xP82y7owYxcanEXEPo44="; };
   };
   traefikUpstream =
     let bin = traefikUpstreamBinaries.${pkgs.stdenv.hostPlatform.system};
